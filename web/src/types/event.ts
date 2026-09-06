@@ -50,7 +50,6 @@ export interface CaptureSchemaResult {
   query_fields: SchemaColumn[];
   rules: SchemaRule[];
   examples?: {
-    aggregate_query?: string[];
     list_decoded_data_filter?: string[];
   };
 }

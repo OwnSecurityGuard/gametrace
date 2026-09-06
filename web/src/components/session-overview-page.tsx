@@ -2,12 +2,12 @@
 //
 // 把 Session 从「一次抓包记录」提升为「一次调试工作单元」的默认落地页：
 // 回答用户点进一个会话时最关心的四件事——会话什么状态、抓了多久/多少、
-// 最近产生了什么（连接 / 协议事件）、下一步去哪分析（Connections / Timeline / 数据）。
+// 最近产生了什么（连接 / 协议事件）、下一步去哪分析（Connections / 协议数据）。
 // 不做新的数据模型，仅聚合既有查询（get_session_status / list_all_sessions /
 // list_connections / list_decoded_data）。
 // 第三件事（状态）由 lib/session-phase 翻译成人话阶段：running/stopped 只说明
 // 进程在不在，用户要的是「现在到哪一步、我该不该动手」。
-import { Cable, Timeline as TimelineIcon, Table2, AlertTriangle, ArrowRight } from "lucide-react";
+import { Cable, Table2, AlertTriangle, ArrowRight } from "lucide-react";
 import { useSessionStatus, useSessions, useConnections, useDecodedData } from "@/hooks/use-mcp";
 import { RAW_DEBUG_ENABLED } from "@/lib/env";
 import { describeSessionPhase } from "@/lib/session-phase";
@@ -18,7 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { PhaseBadge, SessionPhaseTracker } from "@/components/session-phase-tracker";
 
 /** 概览页可跳转的分析视图（与 App 的 ViewTab 对齐的子集）。 */
-export type OverviewTargetTab = "connections" | "timeline" | "decoded" | "raw";
+export type OverviewTargetTab = "connections" | "decoded" | "raw";
 
 interface SessionOverviewPageProps {
   sessionId: string | null;
@@ -145,10 +145,6 @@ export function SessionOverviewPage({ sessionId, onNavigate }: SessionOverviewPa
             <Button variant="outline" size="sm" className="h-8" onClick={() => onNavigate("connections")}>
               <Cable className="h-3.5 w-3.5" />
               查看连接
-            </Button>
-            <Button variant="outline" size="sm" className="h-8" onClick={() => onNavigate("timeline")}>
-              <TimelineIcon className="h-3.5 w-3.5" />
-              时间线
             </Button>
             <Button variant="outline" size="sm" className="h-8" onClick={() => onNavigate("decoded")}>
               <Table2 className="h-3.5 w-3.5" />

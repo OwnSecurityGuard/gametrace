@@ -42,7 +42,6 @@ var authzExemptions = map[string]string{
 	"list_all_sessions":    "visibleSessionFilter 已含 owner ∪ 可见项目（证据集亦覆盖）",
 	"list_access_codes":    "仅返回调用者自身 / admin 全量的启动码",
 	"get_proxy_lease":      "租约归属由 pipeline 侧 owner 校验（lease↔project 绑定未落地，P2）",
-	"get_session_timeline": "经 openReader → getDBPath → authorizeSession（证据集覆盖）",
 	"list_proxy_leases":    "pipeline 侧 owner 作用域列表（透传 Owner/AllOwners）",
 	"create_proxy_lease":   "租约归属由 pipeline 记录为调用者（透传 Owner/AllOwners）",
 	"release_proxy_lease":  "pipeline 侧 owner 校验：非归属者释放被拒绝",

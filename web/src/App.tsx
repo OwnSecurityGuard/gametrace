@@ -5,11 +5,7 @@ import { EventTable } from "@/components/event-table";
 import { RawPacketTable } from "@/components/raw-packet-table";
 import { ConnectionsPage } from "@/components/connections-page";
 import { PluginPanel } from "@/components/plugin-panel";
-import { AnalyticsPanel } from "@/components/analytics-panel";
-import { TimelinePanel } from "@/components/timeline-panel";
 import { RunsPanel } from "@/components/runs-panel";
-import { SchemaExplorer } from "@/components/schema-explorer";
-import { TableBrowser } from "@/components/table-browser";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { StartCaptureDialog } from "@/components/start-capture-dialog";
 import { ProxyConfigDialog } from "@/components/proxy-config-dialog";
@@ -27,22 +23,19 @@ import { useAuthError, useIdentity } from "@/hooks/use-auth";
 import { toast } from "@/components/ui/toast";
 import type { ProjectInfo } from "@/types/project";
 
-type ViewTab = "home" | "overview" | "connections" | "timeline" | "analytics" | "decoded" | "runs" | "data" | "plugins" | "raw";
+type ViewTab = "home" | "overview" | "connections" | "decoded" | "runs" | "plugins" | "raw";
 
-/** 一级视图：普通用户最常用的入口（我的抓包 / 会话概览 / 连接 / 时间线 / 分析）。 */
+/** 一级视图：普通用户最常用的入口（我的抓包 / 会话概览 / 连接）。 */
 const PRIMARY_TABS: { id: ViewTab; label: string }[] = [
   { id: "home", label: "我的抓包" },
   { id: "overview", label: "概览" },
   { id: "connections", label: "连接" },
-  { id: "timeline", label: "时间线" },
-  { id: "analytics", label: "分析" },
 ];
 
-/** 高级视图：插件 / 原始包 / 数据探查，默认收进「更多」下拉，降低普通用户的认知负担。 */
+/** 高级视图：插件 / 原始包，默认收进「更多」下拉，降低普通用户的认知负担。 */
 const ADVANCED_TABS: { id: ViewTab; label: string }[] = [
   { id: "decoded", label: "协议数据" },
   { id: "runs", label: "行为" },
-  { id: "data", label: "数据探查" },
   { id: "plugins", label: "插件" },
   ...(RAW_DEBUG_ENABLED ? [{ id: "raw" as ViewTab, label: "原始包" }] : []),
 ];
@@ -569,24 +562,12 @@ export default function App() {
               <ConnectionsPage sessionId={selectedSessionId} onJumpToRun={handleJumpToRun} />
             </div>
           )}
-          {activeTab === "analytics" && <AnalyticsPanel sessionId={selectedSessionId} />}
-          {activeTab === "timeline" && <TimelinePanel sessionId={selectedSessionId} />}
           {activeTab === "runs" && (
             <RunsPanel
               linkedRunId={linkedRunId}
               linkedSessionId={linkedRunSessionId}
               tracePrefill={tracePrefill}
             />
-          )}
-          {activeTab === "data" && (
-            <div className="flex h-full flex-col">
-              <div className="min-h-0 flex-1 border-b border-border">
-                <SchemaExplorer sessionId={selectedSessionId} />
-              </div>
-              <div className="min-h-0 flex-1">
-                <TableBrowser sessionId={selectedSessionId} />
-              </div>
-            </div>
           )}
           {activeTab === "plugins" && <PluginPanel />}
           {activeTab === "raw" && (

@@ -42,11 +42,10 @@ func buildCapabilityCatalog() capabilityDoc {
 			},
 			{
 				Name:        "query",
-				Description: "解码事件 / 状态 / 聚合 / 执行链查询",
+				Description: "解码事件 / 状态 / schema / 执行链查询",
 				Tools: []string{
 					"list_decoded_data", "list_state_changes",
-					"aggregate_query", "get_capture_schema",
-					"trace_protocol_flow", "query_capture_table",
+					"get_capture_schema", "trace_protocol_flow",
 				},
 			},
 			{
@@ -88,12 +87,11 @@ func buildCapabilityCatalog() capabilityDoc {
 		},
 		TypicalFlow: []string{
 			"接入新协议: get_plugin_dev_guide -> create_plugin -> build_plugin -> start_capture(plugin=...) -> activate_plugin -> verify_plugin -> get_capture_schema -> list_decoded_data",
-			"分析已有会话: list_all_sessions -> list_decoded_data / aggregate_query -> trace_protocol_flow",
+			"分析已有会话: list_all_sessions -> list_decoded_data -> trace_protocol_flow",
 			"定位解码为空: status_plugin -> get_registry_addr -> sample_bytes_plugin -> explain_plugin",
 		},
 		Notes: []string{
 			"begin_capture_run 的 plugin_name/device/filter/port 是描述性提示，不会自动启动抓包；启动抓包必须显式调用 start_capture",
-			"query_capture_table 是内部投影/审计表的只读逃生口（allowlist 含 event_index / plugin_debug_access）",
 		},
 	}
 }

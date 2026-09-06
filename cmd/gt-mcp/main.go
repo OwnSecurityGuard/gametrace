@@ -1004,114 +1004,6 @@ func (m *mcpCapture) handleListLiveSessions(ctx context.Context, req mcp.CallToo
 	return successResult(map[string]any{"count": len(sessions), "sessions": sessions}), nil
 }
 
-func (m *mcpCapture) handleAggregateQuery(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	expression, err := req.RequireString("expression")
-	if err != nil {
-		return errorResult(err), nil
-	}
-	sessionID := req.GetString("session_id", "")
-	dbPath, err := m.getDBPath(ctx, sessionID)
-	if err != nil {
-		return errorResult(err), nil
-	}
-	slog.Info("aggregate_query requested", "expression", expression, "db_path", dbPath, "session_id", sessionID)
-	if dbPath == "" {
-		slog.Warn("aggregate_query rejected: no capture database available")
-		return errorResult(fmt.Errorf("no capture database available; start a capture first")), nil
-	}
-
-	reader, err := m.openReader(ctx, sessionID)
-	if err != nil {
-		return errorResult(err), nil
-	}
-	defer reader.Close()
-
-	metrics, err := reader.QueryMetrics(ctx, store.MetricQuery{})
-	if err != nil {
-		return errorResult(fmt.Errorf("query metrics: %w", err)), nil
-	}
-
-	program, err := expr.Compile(expression, expr.Env(map[string]any{
-		"name":   "",
-		"window": "",
-		"value":  0.0,
-		"group":  map[string]string{},
-	}))
-	if err != nil {
-		return errorResult(fmt.Errorf("compile expression: %w", err)), nil
-	}
-
-	var matched []map[string]any
-	for _, metric := range metrics {
-		env := map[string]any{
-			"name":   metric.Name,
-			"window": metric.Window.Format(time.RFC3339),
-			"value":  metric.Value,
-			"group":  metric.Group,
-		}
-		out, err := expr.Run(program, env)
-		if err != nil {
-			continue
-		}
-		if v, ok := out.(bool); ok && v {
-			matched = append(matched, map[string]any{
-				"name":   metric.Name,
-				"window": metric.Window.Format(time.RFC3339),
-				"group":  metric.Group,
-				"value":  metric.Value,
-			})
-		}
-	}
-	slog.Info("aggregate_query completed", "expression", expression, "matched", len(matched))
-	out := map[string]any{"count": len(matched), "metrics": matched}
-	// Semantic Contract v1 §13：从 manifest 快照派生可聚合字段（contract.CanAggregate），
-	// 供 Agent 编写 rules.yaml 的 value/group_by 时对齐声明。
-	if fields := aggregatableContractFields(m.getManifestSnapshot(sessionID)); len(fields) > 0 {
-		out["aggregatable_fields"] = fields
-	}
-	return successResult(out), nil
-}
-
-// aggregatableFieldView 是 aggregate_query 返回的 manifest 可聚合字段视图。
-type aggregatableFieldView struct {
-	Schema string `json:"schema"`
-	Field  string `json:"field"`
-	Alias  string `json:"alias,omitempty"`
-}
-
-// aggregatableContractFields 用 SDK 契约入口 contract.CanAggregate 列出 manifest 中
-// 声明为 aggregatable 的字段。快照缺失或解析失败时返回 nil（契约信息为可选补充）。
-func aggregatableContractFields(snapshot string) []aggregatableFieldView {
-	if snapshot == "" {
-		return nil
-	}
-	m, err := plugin.ParseManifest([]byte(snapshot))
-	if err != nil {
-		return nil
-	}
-	idx := contract.ManifestSchemaIndex(m)
-	var out []aggregatableFieldView
-	for wire, s := range idx {
-		for name, f := range s.Fields {
-			if !contract.CanAggregate(m, wire, name) {
-				continue
-			}
-			v := aggregatableFieldView{Schema: wire, Field: name}
-			if f != nil {
-				v.Alias = f.Alias
-			}
-			out = append(out, v)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Schema != out[j].Schema {
-			return out[i].Schema < out[j].Schema
-		}
-		return out[i].Field < out[j].Field
-	})
-	return out
-}
-
 func (m *mcpCapture) handleGetCaptureSchema(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sessionID := req.GetString("session_id", "")
 	dbPath, err := m.getDBPath(ctx, sessionID)
@@ -1228,7 +1120,7 @@ func (m *mcpCapture) handleGetCaptureSchema(ctx context.Context, req mcp.CallToo
 	}
 
 	// 4. 生成示例表达式
-	examples := buildExamples(dataFields, rules)
+	examples := buildExamples(dataFields)
 
 	// 5. 契约声明视图（schema/state 层，从 manifest 快照派生）
 	var manifestView map[string]any
@@ -1249,7 +1141,7 @@ func (m *mcpCapture) handleGetCaptureSchema(ctx context.Context, req mcp.CallToo
 			},
 			{
 				"name":        "aggregated_metrics",
-				"description": "聚合指标表，aggregate_query 的数据来源",
+				"description": "聚合指标表（rules.yaml 预计算写入）",
 				"columns":     metricColumns,
 			},
 		},
@@ -1445,31 +1337,8 @@ func inferType(v any) string {
 	}
 }
 
-func buildExamples(fields []dataField, rules []map[string]any) map[string][]string {
-	examples := map[string][]string{
-		"aggregate_query": {},
-	}
-
-	// 为每个规则生成一个示例
-	for _, r := range rules {
-		name, _ := r["name"].(string)
-		if name == "" {
-			continue
-		}
-		examples["aggregate_query"] = append(examples["aggregate_query"], fmt.Sprintf("name == %q", name))
-	}
-
-	// 如果有 method 字段，给出按方法过滤的示例
-	hasMethod := false
-	for _, f := range fields {
-		if f.name == "method" {
-			hasMethod = true
-			break
-		}
-	}
-	if hasMethod {
-		examples["aggregate_query"] = append(examples["aggregate_query"], `group["data.method"] == "GET"`)
-	}
+func buildExamples(fields []dataField) map[string][]string {
+	examples := map[string][]string{}
 
 	// list_decoded_data filter 示例 - 基于实际字段动态生成
 	filterExamples := []string{
@@ -1478,7 +1347,11 @@ func buildExamples(fields []dataField, rules []map[string]any) map[string][]stri
 	}
 
 	// 根据实际 data 字段生成示例
+	hasMethod := false
 	for _, f := range fields {
+		if f.name == "method" {
+			hasMethod = true
+		}
 		switch f.name {
 		case "type":
 			filterExamples = append(filterExamples, `data.type == "request"`)
@@ -2077,54 +1950,6 @@ func (m *mcpCapture) handleListStateChanges(ctx context.Context, req mcp.CallToo
 	return successResult(map[string]any{
 		"count":   len(changes),
 		"changes": changes,
-	}), nil
-}
-
-// handleQueryCaptureTable 提供对内部投影/审计表的只读出口。
-// event_index（schema indexable_fields 投影）与 plugin_debug_access（采样审计留痕）
-// 此前没有任何专用 MCP 工具暴露，AI 无法验证其是否生效；本工具以白名单方式安全开放
-// SELECT（表名来自固定允许列表，杜绝注入），limit/offset 走参数化。
-func (m *mcpCapture) handleQueryCaptureTable(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	allowed := map[string]bool{
-		"event_index":         true,
-		"plugin_debug_access": true,
-		"raw_packets":         true,
-		"events":              true,
-		"state_changes":       true,
-		"aggregated_metrics":  true,
-	}
-	sessionID := req.GetString("session_id", "")
-	table := req.GetString("table", "")
-	limit := req.GetInt("limit", 100)
-	offset := req.GetInt("offset", 0)
-	if sessionID == "" {
-		return errorResult(fmt.Errorf("session_id is required")), nil
-	}
-	if !allowed[table] {
-		return errorResult(fmt.Errorf("table %q is not in the allowlist; use one of: event_index, plugin_debug_access, raw_packets, events, state_changes, aggregated_metrics", table)), nil
-	}
-	if limit <= 0 || limit > 1000 {
-		limit = 100
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	reader, err := m.openReader(ctx, sessionID)
-	if err != nil {
-		return errorResult(err), nil
-	}
-	defer reader.Close()
-
-	query := fmt.Sprintf("SELECT * FROM %s WHERE session_id=? ORDER BY rowid LIMIT ? OFFSET ?", table)
-	rows, err := reader.RawQuery(ctx, query, sessionID, limit, offset)
-	if err != nil {
-		return errorResult(fmt.Errorf("query %s: %w", table, err)), nil
-	}
-	return successResult(map[string]any{
-		"table": table,
-		"count": len(rows),
-		"rows":  rows,
 	}), nil
 }
 
@@ -3082,20 +2907,6 @@ func main() {
 		mcp.WithString("flow_id", mcp.Description("Filter by flow ID")),
 	), capture.handleListStateChanges)
 
-	s.AddTool(mcp.NewTool("query_capture_table",
-		mcp.WithDescription("Read-only escape hatch for internal projection/audit tables that have no dedicated tool. Whitelisted tables: event_index (schema indexable_fields projection), plugin_debug_access (audit trail of sampled bytes), raw_packets, events, state_changes, aggregated_metrics. The table name is constrained to the allowlist (no SQL injection possible); limit/offset are parameterized. Use this to verify event_index projections were built, or to inspect plugin_debug_access audit rows."),
-		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID to query")),
-		mcp.WithString("table", mcp.Required(), mcp.Description("Whitelisted table: event_index | plugin_debug_access | raw_packets | events | state_changes | aggregated_metrics")),
-		mcp.WithNumber("limit", mcp.DefaultNumber(100), mcp.Description("Max rows (clamped to 1000)")),
-		mcp.WithNumber("offset", mcp.DefaultNumber(0), mcp.Description("Offset")),
-	), capture.handleQueryCaptureTable)
-
-	s.AddTool(mcp.NewTool("aggregate_query",
-		mcp.WithDescription("Query aggregated metrics/statistics using an expr expression over {name, window, value, group}. Metrics are precomputed by rules.yaml; the aggregatable source fields are declared per-schema in the plugin manifest (see get_capture_schema manifest.schemas[].fields[].aggregatable)."),
-		mcp.WithString("expression", mcp.Required(), mcp.Description("expr expression, e.g. name == 'http_req_count' && value > 0")),
-		mcp.WithString("session_id", mcp.Description("Optional session ID to query; defaults to current session")),
-	), capture.handleAggregateQuery)
-
 	// 行为（behavior）与因果链（causation chain）工具。
 	s.AddTool(mcp.NewTool("begin_capture_run",
 		mcp.WithDescription("Mark the start of a user operation or behavior WITHOUT starting capture. It records a run window and returns run_id for later correlation (end_capture_run / get_run_status / trace_protocol_flow). plugin_name/device/filter/port are DESCRIPTIVE HINTS only and do NOT auto-start capture. To actually capture, call start_capture separately; if no capture is running this tool only returns a time_window_only uncertainty telling you to call start_capture first."),
@@ -3132,14 +2943,6 @@ func main() {
 			"window_ms": map[string]any{"type": "number", "default": 500},
 		})),
 	), capture.handleTraceProtocolFlow)
-
-	// 会话级时序树（Phase 1 MVP）：整 session 的 request/response 因果树。
-	s.AddTool(mcp.NewTool("get_session_timeline",
-		mcp.WithDescription("Build the full request/response timeline tree for one capture session from TraceContext (causation_id = parent, correlation_id = conversation group). This is the 'capture once, see the whole flow' MVP view. Returns a nested tree of roots plus per-conversation aggregation."),
-		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID to build timeline for")),
-		mcp.WithNumber("limit", mcp.DefaultNumber(500), mcp.Description("Max events to load into the tree (clamped to 5000)")),
-		mcp.WithNumber("offset", mcp.DefaultNumber(0), mcp.Description("Offset into the session's events")),
-	), capture.handleGetSessionTimeline)
 
 	s.AddTool(mcp.NewTool("get_capture_schema",
 		mcp.WithDescription("Describe available fields for decoded events, state_changes projections, aggregation metrics and current rules."),

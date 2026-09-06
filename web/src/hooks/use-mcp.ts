@@ -5,7 +5,6 @@ import { useAuthToken } from "@/hooks/use-auth";
 import { withTokenParam, notifyAuthError, wasRecentlyUnauthorized } from "@/lib/auth";
 import type { ListSessionsResult } from "@/types/session";
 import type { ListDecodedDataResult, CaptureSchemaResult } from "@/types/event";
-import type { SessionTimelineResult } from "@/types/timeline";
 import type { ListRawPacketsResult } from "@/types/raw-packet";
 import type { ListPluginsResult, DecodeRawPacketsResult } from "@/types/decode";
 import type {
@@ -16,7 +15,6 @@ import type {
   StopCaptureResult,
 } from "@/types/registered-plugin";
 import type { TestPluginResult, TestPluginVars } from "@/types/plugin-test";
-import type { AggregateQueryResult } from "@/types/analytics";
 import type {
   SessionStatusResult,
   ListInterfacesResult,
@@ -35,7 +33,6 @@ import type {
   RunStatusResult,
   TraceProtocolFlowResult,
 } from "@/types/behavior";
-import type { QueryCaptureTableResult } from "@/types/table-browser";
 import type { ListConnectionsResult, GetConnectionDetailResult, ListConnectionStreamsResult, ListConnectionFramesResult } from "@/types/connection";
 import type {
   ListProxyLeasesResult,
@@ -316,45 +313,6 @@ export function usePluginEventStream() {
     };
     return () => es.close();
   }, [queryClient, token]);
-}
-
-// ===== 分析（聚合统计）=====
-
-/** aggregate_query：用 expr 表达式查询预计算聚合指标。 */
-export function useAggregateQuery(expression: string, sessionId: string | null) {
-  const expr = expression.trim();
-  return useQuery({
-    queryKey: ["aggregate", sessionId, expr],
-    queryFn: () =>
-      mcpClient.callTool<AggregateQueryResult>("aggregate_query", {
-        expression: expr,
-        session_id: sessionId ?? undefined,
-      }),
-    enabled: !!sessionId && expr.length > 0,
-    staleTime: 30_000,
-  });
-}
-
-// ===== 会话时间线（执行链 / 请求-响应因果树）=====
-
-/** get_session_timeline：构建整 session 的 request/response 因果树（TraceContext 执行链）。 */
-export function useSessionTimeline(
-  sessionId: string | null,
-  options: { limit?: number; offset?: number },
-) {
-  const { limit, offset } = options;
-  return useQuery({
-    queryKey: ["sessionTimeline", sessionId, options],
-    queryFn: () =>
-      mcpClient.callTool<SessionTimelineResult>("get_session_timeline", {
-        session_id: sessionId ?? undefined,
-        limit: limit ?? 500,
-        offset: offset ?? 0,
-      }),
-    enabled: !!sessionId,
-    staleTime: 15_000,
-    refetchInterval: sessionId ? 5000 : false,
-  });
 }
 
 // ===== 会话增强（状态 / 删除 / 网卡）=====
@@ -681,28 +639,6 @@ export function useTraceProtocolFlow() {
         flow_id: vars.flowId,
         feature_name: vars.featureName,
       }),
-  });
-}
-
-// ===== 表浏览器（只读逃生口）=====
-
-/** query_capture_table：只读查询内部投影/审计表。 */
-export function useQueryCaptureTable(
-  sessionId: string | null,
-  table: string,
-  options: { limit?: number; offset?: number },
-) {
-  return useQuery({
-    queryKey: ["captureTable", sessionId, table, options],
-    queryFn: () =>
-      mcpClient.callTool<QueryCaptureTableResult>("query_capture_table", {
-        session_id: sessionId ?? undefined,
-        table,
-        limit: options.limit ?? 100,
-        offset: options.offset ?? 0,
-      }),
-    enabled: !!sessionId && table.length > 0,
-    staleTime: 15_000,
   });
 }
 

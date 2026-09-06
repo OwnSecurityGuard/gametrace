@@ -10,16 +10,6 @@ export type {
 export type { DecodedEvent, ListDecodedDataResult, SchemaColumn, SchemaSource, SchemaRule, CaptureSchemaResult } from "./event";
 export type { TestEventLite, TestErrorLite, TestPluginResult, TestPluginVars } from "./plugin-test";
 export type {
-  AggregateMetric,
-  AggregatableField,
-  AggregateQueryResult,
-} from "./analytics";
-export type {
-  TimelineNode,
-  ConversationView,
-  SessionTimelineResult,
-} from "./timeline";
-export type {
   SessionStatusResult,
   InterfaceInfo,
   ListInterfacesResult,
@@ -56,7 +46,6 @@ export type {
   TraceTimeWindow,
   TraceProtocolFlowResult,
 } from "./behavior";
-export type { QueryCaptureTableResult } from "./table-browser";
 export type {
   CaptureContext,
   ConnectionSummary,
