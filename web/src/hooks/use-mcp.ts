@@ -793,10 +793,24 @@ export function useConnectionFrames(
 
 /** get_agent_download_options：返回下载 Agent 页面需要的服务端信息（可达 IP / registry+ingest 端口 / 平台）。 */
 export function useAgentDownloadOptions() {
+  // 把浏览器看到的 host 传给服务端：NAT/端口映射下的对外地址服务端无从推导，
+  // 只能靠部署方配 GT_PUBLIC_HOST 或调用方告知（回环地址不传，对远端探针无意义）。
+  const host =
+    typeof window !== "undefined" ? window.location.hostname : "";
+  const loopback =
+    !host ||
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]";
   return useQuery({
-    queryKey: ["agentDownloadOptions"],
-    queryFn: () => mcpClient.callTool<GetAgentDownloadOptionsResult>("get_agent_download_options"),
-    staleTime: 30_000, // 端口/平台变化不频繁，缓存 30s
+    queryKey: ["agentDownloadOptions", loopback ? "" : host],
+    queryFn: () =>
+      mcpClient.callTool<GetAgentDownloadOptionsResult>(
+        "get_agent_download_options",
+        loopback ? {} : { host },
+      ),
+    staleTime: 30_000, // 地址/平台变化不频繁，缓存 30s
   });
 }
 
@@ -894,23 +908,20 @@ export function useAccessCodes() {
   });
 }
 
-/** create_access_code：生成一个绑定当前用户的启动码（可选绑项目/插件/端口/平台/回连地址）。
+/** create_access_code：生成一个绑定当前用户的启动码（可选绑项目/平台/回连地址）。
+ *  启动码只带身份与回连，不带抓包端口/插件——抓包在「开始抓包」时下发。
  *  newOwner 非空时为邀请码：认领时为该名字创建独立身份（users 表）。 */
 export function useCreateAccessCode() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (vars: {
       projectId?: string;
-      plugin?: string;
-      port?: number;
       platform?: string;
       server?: string;
       newOwner?: string;
     }) =>
       mcpClient.callTool<CreateAccessCodeResult>("create_access_code", {
         project_id: vars.projectId ?? "",
-        plugin: vars.plugin ?? "",
-        port: vars.port ?? 0,
         platform: vars.platform ?? "",
         server: vars.server ?? "",
         new_owner: vars.newOwner ?? "",

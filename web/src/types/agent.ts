@@ -26,21 +26,23 @@ export interface ParserOption {
   online: boolean;
 }
 
-/** get_agent_download_options 返回：下载 Agent 页面需要的服务端信息 + 可下载平台矩阵（扁平结构 + ok）。 */
+/** get_agent_download_options 返回：下载 Agent 页面需要的回连地址 + 可下载平台矩阵。 */
 export interface GetAgentDownloadOptionsResult {
   ok: boolean;
-  /** 本机可被远端 Agent 访问的地址（局域网 IP 或公网地址） */
+  /** 探针应回连的 host（已按对外通告/请求回推解析，不含端口） */
   host: string;
-  /** pipeline registry 监听地址，如 127.0.0.1:9091 */
+  /** 探针回连地址 host:port（插件注册 + 控制面） */
   registry_addr: string;
-  /** 推流 ingest 监听地址（registry 端口 +1） */
+  /** 推流地址 host:port（抓包数据上报） */
   ingest_addr: string;
-  /** registry 端口（Agent 回连地址用） */
+  /** registry 端口 */
   registry_port: string;
-  /** ingest 端口（Agent 自动推流用） */
+  /** ingest 端口 */
   ingest_port: string;
+  /** 地址来源：env=部署方显式通告（可信） / request=按请求回推 / lan=服务端网卡推测 */
+  addr_source: "env" | "request" | "lan";
   /** 可下载的目标平台矩阵（按预置产物存在与否标记可用性） */
   platforms: AgentPlatform[];
-  /** 给用户的端口/地址说明文案 */
+  /** 给用户的说明文案（含未配置对外通告地址时的修复提示） */
   message: string;
 }

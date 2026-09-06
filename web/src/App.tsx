@@ -82,6 +82,8 @@ export default function App() {
   const [projectPrefill, setProjectPrefill] = useState<{ port?: number; plugin?: string; projectId?: string }>({});
   // 正在查看的项目详情（切换到 ProjectPage 而非首页）。
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  // 从「下载探针」接入闭环带入的探针 id：打开「开始抓包」时预选这台机器。
+  const [startCaptureProbeId, setStartCaptureProbeId] = useState<string | null>(null);
   // 从连接详情点击 flow_id 跳转时预填到「行为」Tab 的 flow_id
   const [tracePrefill, setTracePrefill] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -606,7 +608,10 @@ export default function App() {
       <AgentDownloadDialog
         open={agentDownloadOpen}
         onClose={() => setAgentDownloadOpen(false)}
-        onNavigateToSession={handleNavigateToSession}
+        onStartCapture={(probeId) => {
+          setStartCaptureProbeId(probeId);
+          setStartOpen(true);
+        }}
       />
       {/* 成员管理弹窗（邀请码 / 成员账号列表与撤销） */}
       <MembersAdminDialog open={membersOpen} onClose={() => setMembersOpen(false)} />
@@ -622,10 +627,14 @@ export default function App() {
       {/* 开始抓包弹窗（本机网卡 / 远程 agent 源） */}
       <StartCaptureDialog
         open={startOpen}
-        onClose={() => setStartOpen(false)}
+        onClose={() => {
+          setStartOpen(false);
+          setStartCaptureProbeId(null);
+        }}
         initialPort={projectPrefill.port}
         initialPlugin={projectPrefill.plugin}
         initialProjectId={projectPrefill.projectId}
+        initialProbeId={startCaptureProbeId ?? undefined}
         onStarted={(sessionId) => {
           setSelectedSessionId(sessionId);
           setFilter("");

@@ -7,6 +7,7 @@ const STATE_META: Record<DeviceState, { label: string; text: string }> = {
   connected: { label: "已连接", text: "text-blue-600 dark:text-blue-400" },
   capturing: { label: "正在抓包", text: "text-emerald-600 dark:text-emerald-400" },
   stopped: { label: "已停止", text: "text-muted-foreground" },
+  offline: { label: "离线", text: "text-muted-foreground" },
 };
 
 function platformLabel(platform?: string): string {
@@ -101,7 +102,7 @@ function DeviceCard({
           )}
         </div>
         <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-          <span className="font-mono">{device.code}</span>
+          <span className="font-mono">{device.hostname || device.name || device.code || device.id}</span>
           {device.port ? ` · 端口 ${device.port}` : ""}
           {device.plugin ? ` · 解析器 ${device.plugin}` : ""}
         </p>
@@ -110,7 +111,7 @@ function DeviceCard({
             <>
               <span className="font-mono tabular-nums">{device.packets?.toLocaleString() ?? 0}</span> packets ·{" "}
               <span className="font-mono tabular-nums">{device.events?.toLocaleString() ?? 0}</span> events
-              {device.decodeErrors > 0 ? (
+              {(device.decodeErrors ?? 0) > 0 ? (
                 <>
                   {" "}
                   · <span className="text-red-600 dark:text-red-400">{device.decodeErrors} 解码错误</span>

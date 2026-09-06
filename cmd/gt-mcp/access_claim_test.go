@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -52,10 +53,12 @@ func newClaimCapture(t *testing.T) (*mcpCapture, *accessCodeStore) {
 	return m, store
 }
 
+// TestAccessClaimReturnsConfig 验证 claim 只发「身份与回连」：
+// 不开会话、不带 bpf/plugin_names，回连地址按调用方请求回推（无 GT_PUBLIC_HOST 时）。
 func TestAccessClaimReturnsConfig(t *testing.T) {
 	m, store := newClaimCapture(t)
 	if err := store.Create(context.Background(), &accessCode{
-		Code: "GT-ABC1-DEF2", Owner: "alice", Port: 8080, Plugin: "http",
+		Code: "GT-ABC1-DEF2", Owner: "alice",
 		ExpiresAt: time.Now().Add(time.Hour),
 	}); err != nil {
 		t.Fatal(err)
@@ -72,26 +75,63 @@ func TestAccessClaimReturnsConfig(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg["server"] != "192.168.1.10:9091" {
+	// 端口取 pipeline 的 registry 端口，host 取调用方请求的 host（探针怎么进来就怎么回连）。
+	if cfg["server"] != "example.com:9091" {
 		t.Fatalf("server = %v", cfg["server"])
 	}
-	if cfg["session"] != "s-claim" {
-		t.Fatalf("session = %v", cfg["session"])
+	if cfg["ingest_addr"] != "example.com:9092" {
+		t.Fatalf("ingest_addr = %v", cfg["ingest_addr"])
 	}
 	if cfg["token"] != "tok_alice" {
 		t.Fatalf("token = %v", cfg["token"])
 	}
-	if cfg["bpf"] != "tcp port 8080 or udp port 8080" {
-		t.Fatalf("bpf = %v", cfg["bpf"])
+	// 抓包参数不再在接入阶段下发（由 probe_start_capture 决定）。
+	for _, k := range []string{"session", "bpf", "plugin_names"} {
+		if v, ok := cfg[k]; ok && v != "" {
+			t.Fatalf("claim must not carry capture params: %s = %v", k, v)
+		}
 	}
-
-	// 认领后标记 claimed，返回头带 session。
-	if rec.Header().Get("X-Session-Id") != "s-claim" {
-		t.Fatalf("X-Session-Id = %q", rec.Header().Get("X-Session-Id"))
+	if rec.Header().Get("X-Session-Id") != "" {
+		t.Fatalf("X-Session-Id = %q, want empty", rec.Header().Get("X-Session-Id"))
 	}
 	got, _ := store.Get(context.Background(), "GT-ABC1-DEF2")
-	if !got.Claimed || got.SessionID != "s-claim" {
+	if !got.Claimed {
 		t.Fatalf("code not marked claimed: %+v", got)
+	}
+}
+
+// TestAdvertisedAddrsPrecedence 锁住回连地址的优先级：
+// GT_PUBLIC_HOST（+ 可选端口覆盖）> 调用方请求的 Host > lanIP。
+func TestAdvertisedAddrsPrecedence(t *testing.T) {
+	m, _ := newClaimCapture(t) // 桩 pipeline 报 registry 192.168.1.10:9091
+	ctx := context.Background()
+
+	// 1) 未配置：host 取请求 Host，端口取 pipeline 内部端口。
+	reg, ing, src := m.advertisedAddrs(ctx, "203.0.113.7:18781")
+	if reg != "203.0.113.7:9091" || ing != "203.0.113.7:9092" || src != addrSourceRequest {
+		t.Fatalf("request-derived: %s %s %s", reg, ing, src)
+	}
+	// 2) 回环请求不可用（探针拿到会连它自己）→ 退回 lanIP。
+	lanIPOverride = "10.0.0.5"
+	defer func() { lanIPOverride = "" }()
+	reg, _, src = m.advertisedAddrs(ctx, "localhost:8781")
+	if reg != "10.0.0.5:9091" || src != addrSourceLAN {
+		t.Fatalf("lan fallback: %s %s", reg, src)
+	}
+	// 3) 显式通告：docker 端口映射场景（内 9091/9092，外 19091/19092）。
+	t.Setenv(envPublicHost, "gt.example.com")
+	t.Setenv(envPublicRegistryPort, "19091")
+	t.Setenv(envPublicIngestPort, "19092")
+	reg, ing, src = m.advertisedAddrs(ctx, "localhost:8781")
+	if reg != "gt.example.com:19091" || ing != "gt.example.com:19092" || src != addrSourceEnv {
+		t.Fatalf("public env: %s %s %s", reg, ing, src)
+	}
+	// 4) 只配 host：端口沿用 pipeline 内部端口（裸机/同端口部署）。
+	os.Unsetenv(envPublicRegistryPort)
+	os.Unsetenv(envPublicIngestPort)
+	reg, ing, _ = m.advertisedAddrs(ctx, "")
+	if reg != "gt.example.com:9091" || ing != "gt.example.com:9092" {
+		t.Fatalf("host-only: %s %s", reg, ing)
 	}
 }
 

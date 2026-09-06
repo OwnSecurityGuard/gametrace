@@ -103,6 +103,12 @@ services:
       GT_MCP_ADDR: ${GT_MCP_ADDR:-:8781}
       # CORS 允许的 Origin（逗号分隔）；留空不返回 CORS 头（同源用法不受影响）
       GT_MCP_ALLOWED_ORIGINS: ${GT_MCP_ALLOWED_ORIGINS:-}
+      # 对外通告地址（远端探针回连用）：Docker / NAT / 公网部署下容器内地址不可达，
+      # 必须显式通告。GT_PUBLIC_HOST 留空则服务端按"浏览器怎么访问到我们"回推
+      # （同网段/直连可用，跨 NAT/容器会连不上，建议填公网域名或宿主机可达 IP）。
+      GT_PUBLIC_HOST: ${GT_PUBLIC_HOST:-}
+      GT_PUBLIC_REGISTRY_PORT: ${GT_PUBLIC_REGISTRY_PORT:-19091}
+      GT_PUBLIC_INGEST_PORT: ${GT_PUBLIC_INGEST_PORT:-19092}
       # 存储后端：与 pipeline 保持一致（同一 PG 库）
       GT_DB_DRIVER: postgres
       GT_DB_DSN: postgres://${GT_PG_USER:-gametrace}:${GT_PG_PASSWORD:-gt_dev_pass}@postgres:5432/${GT_PG_DB:-gametrace}?sslmode=disable

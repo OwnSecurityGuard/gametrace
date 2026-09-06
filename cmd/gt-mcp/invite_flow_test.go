@@ -117,9 +117,9 @@ func TestInviteFlowCreatesIndependentIdentity(t *testing.T) {
 		t.Fatal("invite must not hand out the inviter's token")
 	}
 
-	// 会话归属新身份。
-	if fc.startReq == nil || fc.startReq.GetOwner() != "carol" {
-		t.Fatalf("capture owner = %v, want carol", fc.startReq)
+	// 认领只发身份与回连，不再开会话（会话在「开始抓包」时才建）。
+	if fc.startReq != nil {
+		t.Fatalf("claim must not open a capture session: %+v", fc.startReq)
 	}
 
 	// users 表有 carol（created_by=bob），新 token 精确匹配（锁住 auth.DBResolver 的 SQL 契约）。

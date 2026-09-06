@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Copy,
   Check,
@@ -9,11 +8,7 @@ import {
   MonitorSmartphone,
   Clock,
 } from "lucide-react";
-import {
-  useAgentDownloadOptions,
-  useCreateAccessCode,
-  useProjects,
-} from "@/hooks/use-mcp";
+import { useAgentDownloadOptions, useCreateAccessCode } from "@/hooks/use-mcp";
 import { DeviceStatusList } from "@/components/device-status";
 import { toast } from "@/components/ui/toast";
 import type { CreateAccessCodeResult } from "@/types/access-code";
@@ -34,27 +29,24 @@ function formatExpiry(ts: string): string {
 }
 
 /**
- * 「我的接入」面板（纯设备接入）：普通用户选平台 + 端口（可选绑项目）→
- * 生成 GT-XXXX 启动码 → 复制一条接入命令，在目标机执行即可自动注册设备、
- * 领取配置并回连抓包，全程无需手填 token/回连地址/会话。
+ * 「我的接入」面板（纯设备接入）：普通用户选平台 → 生成 GT-XXXX 启动码 →
+ * 复制一条接入命令，在目标机执行即可自动注册设备、领取回连配置并接入，
+ * 全程无需手填 token/回连地址。抓包端口与解码插件不在接入时决定 ——
+ * 设备在「我的设备」里显示在线后，用「开始抓包」选它并指定。
  * 成员管理（邀请码/账号列表）已拆分至 members-admin-dialog。
  */
 export function AccessCodePanel() {
   const { data, isLoading } = useAgentDownloadOptions();
-  const { data: projectsData } = useProjects();
   const createCode = useCreateAccessCode();
 
   const opts = (data ?? null) as null | NonNullable<typeof data>;
   const platforms = opts?.platforms ?? [];
   const available = platforms.filter((p) => p.available);
-  const projects = projectsData?.projects ?? [];
 
   const det = detectPlatform();
   const [os, setOs] = useState<string>(det.os);
   // 同 OS 下智能选取当前机器的 CPU 架构；用户切换 OS 时尽量保留该架构。
   const [arch, setArch] = useState<string>(det.arch);
-  const [port, setPort] = useState("8080");
-  const [projectId, setProjectId] = useState("");
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<CreateAccessCodeResult | null>(null);
   const [copiedField, setCopiedField] = useState<"code" | "cmd" | null>(null);
@@ -74,25 +66,11 @@ export function AccessCodePanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading, available.length]);
 
-  // 选中项目时预填其默认端口，降低重复输入。
-  const selectedProject = projects.find((p) => p.id === projectId);
-  useEffect(() => {
-    if (selectedProject?.default_port && port === "8080") {
-      setPort(String(selectedProject.default_port));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
-
   const selectedPlatform =
     platforms.find((p) => p.os === os && p.arch === arch) ??
     platforms.find((p) => p.os === os);
 
   async function handleGenerate() {
-    const p = Number(port.trim());
-    if (!Number.isInteger(p) || p <= 0 || p > 65535) {
-      toast.error("请填写有效的抓包端口", "1-65535 之间");
-      return;
-    }
     if (!selectedPlatform) {
       toast.error("请选择目标操作系统", "当前没有可用的预置平台");
       return;
@@ -100,14 +78,10 @@ export function AccessCodePanel() {
     setBusy(true);
     try {
       const res = await createCode.mutateAsync({
-        port: p,
-        // 绑定项目后以其默认插件收口（后端按 plugin 挂解码插件到会话）。
-        projectId: projectId || undefined,
-        plugin: selectedProject?.default_plugin || undefined,
         platform: selectedPlatform.available ? `${selectedPlatform.os}/${selectedPlatform.arch}` : `${os}/amd64`,
       });
       setCreated(res);
-      toast.success("启动码已生成", "复制下方命令并在目标机执行即可免参数抓包");
+      toast.success("启动码已生成", "复制下方命令并在目标机执行即可接入");
     } catch (e) {
       toast.error("生成失败", e instanceof Error ? e.message : String(e));
     } finally {
@@ -157,12 +131,12 @@ export function AccessCodePanel() {
         </div>
       </div>
 
-      {/* 1. 选择平台 + 端口 */}
+      {/* 1. 选择平台（接入只解决"这台机器是谁、回连到哪"） */}
       <div className="space-y-3">
         <div>
           <label className="flex items-center gap-1.5 text-sm font-medium">
             <MonitorSmartphone className="h-3.5 w-3.5 text-muted-foreground" />
-            目标操作系统（在哪个电脑上抓包）
+            目标操作系统（要接入哪台电脑）
           </label>
           <div className="mt-1.5 grid grid-cols-2 gap-2">
             {platforms.map((p) => (
@@ -196,38 +170,10 @@ export function AccessCodePanel() {
           <p className="mt-1 text-xs text-muted-foreground">
             只展示已预置的平台；缺失产物请先在服务端执行 make build-agents。
           </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            启动码只负责接入这台机器；抓包端口与解码插件在「开始抓包」时指定。
+          </p>
         </div>
-
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
-            <label className="text-sm font-medium">抓包端口（必填）</label>
-            <Input
-              value={port}
-              onChange={(e) => setPort(e.target.value)}
-              inputMode="numeric"
-              placeholder="8080"
-              className="mt-1.5 font-mono"
-            />
-          </div>
-          <div>
-            <label className="text-sm font-medium">绑定项目（可选）</label>
-            <select
-              className="mt-1.5 h-9 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
-            >
-              <option value="">不绑定项目</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          绑定项目后自动套用其默认解码插件；不绑定则仅抓原始包。
-        </p>
       </div>
 
       {/* 2. 生成启动码 */}

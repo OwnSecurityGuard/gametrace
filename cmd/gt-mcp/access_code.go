@@ -19,7 +19,6 @@ import (
 
 	"gametrace/pkg/auth"
 	"gametrace/pkg/authz"
-	pb "gametrace/pkg/internalipc/proto"
 )
 
 const accessCodeSchema = `
@@ -95,9 +94,10 @@ func (s *accessCodeStore) Get(ctx context.Context, code string) (*accessCode, er
 	return scanAccessCode(row)
 }
 
-func (s *accessCodeStore) MarkClaimed(ctx context.Context, code, sessionID string) error {
+// MarkClaimed 标记启动码已被认领（一次性）。认领不再开会话，故不记 session。
+func (s *accessCodeStore) MarkClaimed(ctx context.Context, code string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE access_codes SET claimed=1, session_id=? WHERE code=?`, sessionID, code)
+		`UPDATE access_codes SET claimed=1 WHERE code=?`, code)
 	return err
 }
 
@@ -162,9 +162,12 @@ func newAccessCode() string {
 	return "GT-" + parts[0] + "-" + parts[1]
 }
 
-// handleCreateAccessCode 生成启动码（可选绑项目/插件/端口/平台/回连地址）。
+// handleCreateAccessCode 生成启动码（可选绑项目/平台/回连地址）。
 // 启动码泄露即可换取 owner 的长期 token，属高敏感动作（方案 D7）：
 // 只能为本人创建；绑定项目时要求对该项目有 ActionProjectRead。
+//
+// 启动码只解决「这台机器是谁、回连到哪」：不再带抓包端口与解码插件——
+// 那是「开始抓包」时才确定的事，由 Web 下发给已接入的探针。
 //
 // 邀请模式（new_owner 非空）：claim 时为 new_owner 创建**独立身份**（users 表），
 // 而不是把调用者身份借给目标机 —— 新用户凭码即可获得自己的 token（2026-09-05 邀请制）。
@@ -175,8 +178,6 @@ func (m *mcpCapture) handleCreateAccessCode(ctx context.Context, req mcp.CallToo
 		return errorResult(fmt.Errorf("forbidden: cannot create access code for others")), nil
 	}
 	code := newAccessCode()
-	port := handleProjectArgPort(req)
-	plugin := req.GetString("plugin", "")
 	platform := req.GetString("platform", "")
 	projectID := req.GetString("project_id", "")
 	server := strings.TrimSpace(req.GetString("server", ""))
@@ -215,8 +216,6 @@ func (m *mcpCapture) handleCreateAccessCode(ctx context.Context, req mcp.CallToo
 		Owner:     owner,
 		ProjectID: projectID,
 		NewOwner:  newOwner,
-		Plugin:    plugin,
-		Port:      port,
 		Server:    server,
 		Platform:  platform,
 		CreatedAt: time.Now(),
@@ -228,7 +227,7 @@ func (m *mcpCapture) handleCreateAccessCode(ctx context.Context, req mcp.CallToo
 	slog.Info("access code created", "owner", owner, "code", code, "invite_for", newOwner)
 	return successResult(map[string]any{
 		"code": code, "owner": owner, "project_id": projectID, "new_owner": newOwner,
-		"plugin": plugin, "port": port, "platform": platform, "expires_at": rec.ExpiresAt.Format(time.RFC3339),
+		"platform": platform, "expires_at": rec.ExpiresAt.Format(time.RFC3339),
 		"invite": newOwner != "",
 	}), nil
 }
@@ -273,10 +272,12 @@ func loadTokensByOwner() map[string]string {
 	return m
 }
 
-// handleAccessClaim 是 agent 首启时调用的未鉴权端点：携带启动码返回完整配置
-// （server/registry/ingest/token/session/plugin 等），复用手动 download 的开会话
-// 与组 sidecar 配置逻辑，但不打包 zip，改 JSON 返回。它只凭 code 存在性+未过期
-// 即可工作；码是一次性+24h 限时，泄露面被限制在有效期内。
+// handleAccessClaim 是 agent 首启时调用的未鉴权端点：携带启动码换回「身份与回连」
+// 配置（server/registry/ingest/token），由接入脚本写成 sidecar config.embedded.json。
+// 它只凭 code 存在性+未过期即可工作；码是一次性+24h 限时，泄露面被限制在有效期内。
+//
+// 这里**不开会话、不带抓包参数**（端口/BPF/插件）：探针接入后只是"在线待命"，
+// 抓包由 Web 通过 probe_start_capture 下发——下载/接入阶段不再需要猜端口与插件。
 func (m *mcpCapture) handleAccessClaim(w http.ResponseWriter, r *http.Request) {
 	code := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("code")))
 	if code == "" {
@@ -294,11 +295,6 @@ func (m *mcpCapture) handleAccessClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 复用 download 的开会话逻辑：从该 code 的 recipe 开 agent 接收会话。
-	if m.pipelineClient == nil {
-		http.Error(w, "pipeline is not reachable", http.StatusServiceUnavailable)
-		return
-	}
 	owner := rec.Owner
 	token := m.ownerSecret(owner)
 
@@ -321,79 +317,27 @@ func (m *mcpCapture) handleAccessClaim(w http.ResponseWriter, r *http.Request) {
 		slog.Info("invite claimed: new identity created", "new_owner", owner, "created_by", rec.Owner, "code", code)
 	}
 
-	grpcReq := &pb.StartCaptureRequest{Plugin: rec.Plugin, Agent: true, Owner: owner}
-	if rec.ProjectID != "" {
-		grpcReq.ProjectId = rec.ProjectID
-	}
-	// 插件解析候选：认领者自己所属项目的插件 + 码创建者（设备码绑定的项目插件
-	// 由创建者设置，认领者作为项目成员/新成员要能解析到它）。
-	grpcReq.PluginOwners = m.pluginOwnersFor(ctx, owner)
-	if rec.Owner != "" && rec.Owner != owner {
-		grpcReq.PluginOwners = append(grpcReq.PluginOwners, rec.Owner)
-	}
-	gctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	resp, err := m.pipelineClient.StartCapture(gctx, grpcReq)
-	if err != nil {
-		http.Error(w, "open receive session failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	sessionID := resp.GetSessionId()
-	// 回连地址与凭证：registry 取默认或 code 覆盖值；token 在上方按模式取定
-	//（借身份 = code 创建者的静态凭证；邀请 = 为 new_owner 新发的独立凭证）。
-	registry, ingest := m.registryIngest(ctx)
+	// 回连地址与凭证：对外通告地址优先（GT_PUBLIC_HOST），否则按探针本次请求的
+	// Host 回推——探针是怎么访问到 /access/claim 的，就怎么回连。
+	// 不返回 session/bpf/plugin_names：抓包参数由 Web 下发抓包时给。
+	registry, ingest, _ := m.advertisedAddrs(ctx, r.Host)
 	if rec.Server != "" {
 		registry = rec.Server
 	}
 	cfg := map[string]any{
-		"server":       registry,
-		"ingest_addr":  ingest,
-		"token":        token,
-		"session":      sessionID,
-		"bpf":          accessCodeBPF(rec.Port),
-		"plugin_names": accessCodePlugins(rec.Plugin),
+		"server":        registry,
+		"registry_addr": registry,
+		"ingest_addr":   ingest,
+		"token":         token,
 	}
 
-	if err := m.accessCodes.MarkClaimed(ctx, code, sessionID); err != nil {
+	if err := m.accessCodes.MarkClaimed(ctx, code); err != nil {
 		slog.Warn("mark access code claimed failed", "code", code, "error", err)
-	}
-	// 同步会话 metadata（供前端派生在线/离线与项目归属）。
-	meta := sessionMetadata{
-		Owner:     owner,
-		SessionID: sessionID,
-		StartedAt: time.Now().Format(time.RFC3339),
-		Status:    "running",
-		Port:      rec.Port,
-		Plugin:    rec.Plugin,
-		Source:    "agent",
-		DBPath:    resp.GetDbPath(),
-		ProjectID: rec.ProjectID,
-	}
-	if m.sessionMgr != nil {
-		if err := m.sessionMgr.writeSessionMetadata(sessionID, meta); err != nil {
-			slog.Warn("write session metadata in claim failed", "error", err)
-		}
-		m.sessionMgr.writeCurrent(meta)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Session-Id", sessionID)
 	_ = json.NewEncoder(w).Encode(cfg)
-	slog.Info("access code claimed", "owner", owner, "code", code, "session", sessionID)
-}
-
-func accessCodeBPF(port int) string {
-	if port <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("tcp port %d or udp port %d", port, port)
-}
-
-func accessCodePlugins(plugin string) []string {
-	if plugin == "" {
-		return []string{}
-	}
-	return []string{plugin}
+	slog.Info("access code claimed", "owner", owner, "code", code, "registry", registry, "ingest", ingest)
 }
 
 // handleListUsers 列出成员账号（仅 global admin；不回 token —— 凭证只在创建时展示一次）。

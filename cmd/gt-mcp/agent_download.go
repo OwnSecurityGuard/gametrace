@@ -31,7 +31,7 @@ import (
 // registryIngest 读取 pipeline 实际监听的 registry 地址并推导 ingest（registry 端口 +1，
 // 与 gt-agent deriveAddrs 约定一致）。pipeline 不可达时回退默认端口段 :9091/:9092。
 func (m *mcpCapture) registryIngest(ctx context.Context) (registry, ingest string) {
-	registry = ":9091"
+	registry = ":" + defaultRegistryPort
 	if m.pipelineClient != nil {
 		if resp, err := m.pipelineClient.GetRegistryAddr(ctx, &pb.GetRegistryAddrRequest{}); err == nil && resp.GetRegistryAddr() != "" {
 			registry = resp.GetRegistryAddr()
@@ -41,6 +41,89 @@ func (m *mcpCapture) registryIngest(ctx context.Context) (registry, ingest strin
 		ingest = net.JoinHostPort(host, nextPort(port))
 	}
 	return registry, ingest
+}
+
+// defaultRegistryPort 是 pipeline 不可达时假定的 registry 端口（与 gt-agent 默认值一致）。
+const defaultRegistryPort = "9091"
+
+// 对外通告地址的环境变量（远端探针回连用）。
+//
+// 为什么必须可配：docker / NAT / 反代部署下，服务端自己看到的监听地址（:9091）
+// 与探针真正能连到的地址（宿主机 IP:19091）不是同一个，且服务端无从推导端口映射
+// 关系。部署方显式通告是唯一可靠来源；未配置时只能按"请求是怎么进来的"猜，
+// 猜不出来退回 lanIP()（容器里会拿到 172.x 这类不可达地址，仅作最后兜底）。
+const (
+	envPublicHost         = "GT_PUBLIC_HOST"
+	envPublicRegistryPort = "GT_PUBLIC_REGISTRY_PORT"
+	envPublicIngestPort   = "GT_PUBLIC_INGEST_PORT"
+)
+
+// addrSource 标识回连地址的来源，供前端判断可信度并提示（只有 env 是部署方承诺的）。
+type addrSource string
+
+const (
+	addrSourceEnv     addrSource = "env"     // GT_PUBLIC_HOST 显式配置
+	addrSourceRequest addrSource = "request" // 按调用方请求的 Host 回推
+	addrSourceLAN     addrSource = "lan"     // 服务端网卡启发式（容器内通常不可达）
+)
+
+// advertisedAddrs 解析探针应回连的 registry / ingest 地址。
+//
+// 优先级：
+//  1. GT_PUBLIC_HOST（+ GT_PUBLIC_REGISTRY_PORT / GT_PUBLIC_INGEST_PORT）：部署方显式通告；
+//  2. reqHost：调用方（浏览器 / 探针）请求的 Host——它怎么访问到我们，就怎么通告；
+//  3. lanIP()：最后兜底。
+//
+// 端口：显式配置优先；只配了 registry 端口时 ingest 取 registry+1；都没配取
+// pipeline 内部端口（裸机部署时内外一致，正确）。
+func (m *mcpCapture) advertisedAddrs(ctx context.Context, reqHost string) (registry, ingest string, src addrSource) {
+	internalReg, internalIng := m.registryIngest(ctx)
+	fallbackHost, regPort := splitHostPort(internalReg)
+	_, ingPort := splitHostPort(internalIng)
+
+	host := strings.TrimSpace(os.Getenv(envPublicHost))
+	src = addrSourceEnv
+	if host == "" {
+		host = requestHostname(reqHost)
+		src = addrSourceRequest
+	}
+	if host == "" {
+		host = lanIP()
+		src = addrSourceLAN
+	}
+	if host == "" {
+		host = fallbackHost
+	}
+
+	pubRegPort := strings.TrimSpace(os.Getenv(envPublicRegistryPort))
+	if pubRegPort == "" {
+		pubRegPort = regPort
+	}
+	pubIngPort := strings.TrimSpace(os.Getenv(envPublicIngestPort))
+	if pubIngPort == "" {
+		// 只显式配了 registry 端口时，按"ingest = registry+1"的既有约定推导；
+		// 两者都没配就用 pipeline 内部端口（可能是互不相邻的端口段）。
+		if strings.TrimSpace(os.Getenv(envPublicRegistryPort)) != "" {
+			pubIngPort = nextPort(pubRegPort)
+		} else {
+			pubIngPort = ingPort
+		}
+	}
+	return net.JoinHostPort(host, pubRegPort), net.JoinHostPort(host, pubIngPort), src
+}
+
+// requestHostname 从 HTTP 请求的 Host（host[:port]）取可通告的 hostname；
+// 回环/空值一律返回空——探针在别的机器上，拿到 localhost 会连到它自己。
+func requestHostname(reqHost string) string {
+	h, _, err := net.SplitHostPort(strings.TrimSpace(reqHost))
+	if err != nil {
+		h = strings.Trim(strings.TrimSpace(reqHost), "[]")
+	}
+	h = strings.TrimSpace(h)
+	if h == "" || h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "0.0.0.0" || h == "[::1]" {
+		return ""
+	}
+	return h
 }
 
 // splitHostPort 拆 host:port；缺 host 时补回环，缺 port 时返回空 port。
@@ -142,21 +225,27 @@ func (m *mcpCapture) availableAgentPlatforms() []prebuiltAgentPlatform {
 }
 
 // handleGetAgentDownloadOptions 返回下载 Agent 页面需要的服务端信息：
-// 本机可达 IP、registry/ingest 地址与端口，以及可下载的目标平台矩阵。
-// 平台可用性以「预置产物是否存在」为准，绝不回落到服务端平台（消除旧方案
-// "服务端 Linux → 用户拿到 Linux 二进制" 的缺陷）。
+// 探针回连地址（registry/ingest，含对外端口）与可下载的目标平台矩阵。
+//
+// host 参数（可选）：调用方所在网络看到的服务器 host（前端传 window.location.hostname）。
+// 服务端无法感知 NAT/端口映射，只能靠调用方告知或部署方配 GT_PUBLIC_HOST。
 func (m *mcpCapture) handleGetAgentDownloadOptions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	registry, ingest := m.registryIngest(ctx)
-	_, registryPort := splitHostPort(registry)
+	registry, ingest, src := m.advertisedAddrs(ctx, req.GetString("host", ""))
+	host, registryPort := splitHostPort(registry)
 	_, ingestPort := splitHostPort(ingest)
+	msg := "选择目标操作系统下载 Agent。解压后双击运行 gt-agent(.exe) 即可接入；抓包端口与解码插件稍后在「开始抓包」里指定，由平台下发给探针。"
+	if src != addrSourceEnv {
+		msg += " 注意：服务端未配置 GT_PUBLIC_HOST，回连地址是按调用方请求回推的——Docker/公网部署请在服务端设置 GT_PUBLIC_HOST（必要时配 GT_PUBLIC_REGISTRY_PORT / GT_PUBLIC_INGEST_PORT），否则远端探针可能连不上。"
+	}
 	out := map[string]any{
-		"host":          lanIP(),
+		"host":          host,
 		"registry_addr": registry,
 		"ingest_addr":   ingest,
 		"registry_port": registryPort,
 		"ingest_port":   ingestPort,
+		"addr_source":   string(src),
 		"platforms":     m.availableAgentPlatforms(),
-		"message":       "选择目标机器的操作系统下载 Agent。产物按「平台 + 运行时 sidecar 配置」打包为 zip：解压后双击运行 gt-agent(.exe) 即可免参数抓包上报。回连地址端口用 registry 端口（" + registryPort + "）；Agent 会自动把推流口取为 ingest 端口（" + ingestPort + "）。host 需为远端 Agent 可达的网段地址。",
+		"message":       msg,
 	}
 	return successResult(out), nil
 }
@@ -208,14 +297,16 @@ func buildAgentZip(binPath string, cfgJSON []byte) ([]byte, error) {
 
 // handleAgentDownload 是下载 Agent 的 HTTP 端点：
 //
-//	GET /download/agent?platform=<os>/<arch>&port=&plugin=&server=
+//	GET /download/agent?platform=<os>/<arch>[&server=host:port]
 //	Authorization: Bearer <token>
 //
-// 平台取「预置产物」下发（见 availableAgentPlatforms），不再服务端即时编译；
-// 会话在下载时创建，session_id 通过响应头 X-Session-Id 回传，供前端自动选中。
+// 只下发「平台产物 + 回连配置」：抓包端口、解码插件都不在下载时确定——
+// 探针接入后由 Web 通过 probe_start_capture 下发（想改就改，不必重下探针）。
+// 同理这里不开会话：会话是「开始抓包」时创建的。
+//
 // serveAgentBinaryByPlatform 按平台下发预置二进制 zip（占位 config.embedded.json），
-// 用于启动码接入：会话已由 GET /access/claim 建立，此处只给二进制，配置由调用方脚本
-// 把 claim 返回值写入 config.embedded.json。返回 true 表示已写出响应。
+// 用于启动码接入：配置由 /access/claim 返回、由接入脚本写成 config.embedded.json。
+// 返回 true 表示已写出响应。
 func (m *mcpCapture) serveAgentBinaryByPlatform(w http.ResponseWriter, platform string) bool {
 	binDir, _ := m.agentBinDir()
 	var binPath string
@@ -262,27 +353,28 @@ func (m *mcpCapture) handleAgentDownload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	port, err := strconv.Atoi(strings.TrimSpace(q.Get("port")))
-	if err != nil || port <= 0 || port > 65535 {
-		http.Error(w, "port must be a valid TCP/UDP port", http.StatusBadRequest)
-		return
-	}
-	plugin := strings.TrimSpace(q.Get("plugin"))
-	server := strings.TrimSpace(q.Get("server"))
-	if server == "" {
-		http.Error(w, "server (host:port) is required; use the registry port exposed on this page", http.StatusBadRequest)
-		return
-	}
-	if _, _, err := net.SplitHostPort(server); err != nil {
-		http.Error(w, "server must be host:port, e.g. 192.168.1.10:9091", http.StatusBadRequest)
-		return
-	}
 	platform := strings.TrimSpace(q.Get("platform"))
 	if platform == "" {
 		http.Error(w, "platform (os/arch) is required, e.g. windows/amd64", http.StatusBadRequest)
 		return
 	}
 	token := serviceBearerToken(r, q)
+
+	// 回连地址：默认对外通告地址（GT_PUBLIC_HOST 显式配置 > 本请求的 Host 回推）。
+	registry, ingest, _ := m.advertisedAddrs(r.Context(), r.Host)
+	if server := strings.TrimSpace(q.Get("server")); server != "" {
+		// 运维兜底：地址通告错了但又不想重新部署时，用 ?server= 现场覆盖。
+		host, port := splitHostPort(server)
+		if port == "" {
+			port = defaultRegistryPort
+		}
+		registry = net.JoinHostPort(host, port)
+		ingest = net.JoinHostPort(host, nextPort(port))
+	}
+	if ingest == "" {
+		http.Error(w, "cannot resolve ingest address; set GT_PUBLIC_HOST or pass server=host:port", http.StatusInternalServerError)
+		return
+	}
 
 	// 定位目标平台预置产物；缺失即报错，绝不上报服务端自身平台。
 	binDir, _ := m.agentBinDir()
@@ -303,59 +395,19 @@ func (m *mcpCapture) handleAgentDownload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if m.pipelineClient == nil {
-		http.Error(w, "pipeline is not reachable; cannot open a receive session", http.StatusServiceUnavailable)
-		return
-	}
-
-	// 1) 在服务端为该用户打开一个 agent 接收会话（包落库后可查询），并把解码插件绑定到会话。
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	grpcReq := &pb.StartCaptureRequest{Plugin: plugin, Agent: true}
-	if p, ok := auth.PrincipalFrom(r.Context()); ok {
-		grpcReq.Owner = p.Owner
-		grpcReq.AllOwners = p.IsAdmin
-	}
-	resp, err := m.pipelineClient.StartCapture(ctx, grpcReq)
-	if err != nil {
-		http.Error(w, "open receive session failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-	sessionID := resp.GetSessionId()
-	meta := sessionMetadata{
-		Owner:     owner,
-		SessionID: sessionID,
-		StartedAt: time.Now().Format(time.RFC3339),
-		Status:    "running",
-		Port:      port,
-		Plugin:    plugin,
-		Source:    "agent",
-		DBPath:    resp.GetDbPath(),
-	}
-	if err := m.sessionMgr.writeSessionMetadata(sessionID, meta); err != nil {
-		slog.Warn("write session metadata failed during agent download", "session_id", sessionID, "error", err)
-	}
-	m.sessionMgr.writeCurrent(meta)
-
-	// 2) 端口换算成 BPF，组装 sidecar 配置。
-	bpf := fmt.Sprintf("tcp port %d or udp port %d", port, port)
-	cfg := map[string]any{
-		"server":       server,
-		"token":        token,
-		"session":      sessionID,
-		"bpf":          bpf,
-		"plugin_names": []string{},
-	}
-	if plugin != "" {
-		cfg["plugin_names"] = []string{plugin}
-	}
-	cfgJSON, err := json.Marshal(cfg)
+	// sidecar 配置只带「身份与回连」：server/registry/ingest/token。
+	// 不写 session/bpf/plugin_names——抓包参数由平台在下发抓包时给，探针免参数开机即待命。
+	cfgJSON, err := json.Marshal(map[string]any{
+		"server":        registry,
+		"registry_addr": registry,
+		"ingest_addr":   ingest,
+		"token":         token,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// 3) 打包 zip（通用二进制 + sidecar 配置）并下发；session_id 走响应头回传。
 	zipData, err := buildAgentZip(binPath, cfgJSON)
 	if err != nil {
 		http.Error(w, "package agent zip failed: "+err.Error(), http.StatusInternalServerError)
@@ -365,11 +417,11 @@ func (m *mcpCapture) handleAgentDownload(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+zipName+`"`)
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Session-Id", sessionID) // 供前端自动选中刚创建的会话
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(zipData); err != nil {
-		slog.Warn("stream agent zip failed", "owner", owner, "session_id", sessionID, "error", err)
+		slog.Warn("stream agent zip failed", "owner", owner, "error", err)
 		return
 	}
-	slog.Info("agent downloaded", "owner", owner, "platform", platform, "port", port, "plugin", plugin, "server", server, "session_id", sessionID)
+	slog.Info("agent downloaded", "owner", owner, "platform", platform,
+		"registry", registry, "ingest", ingest)
 }

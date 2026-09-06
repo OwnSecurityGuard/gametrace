@@ -28,6 +28,8 @@ interface StartCaptureDialogProps {
   initialPlugin?: string;
   /** 从项目一键抓包时绑定的项目 id；抓包会话归属到该项目 */
   initialProjectId?: string;
+  /** 从「下载探针」接入后带入的探针 id，打开时自动切到「探针机器」源并预选它 */
+  initialProbeId?: string;
 }
 
 /** 探针选择卡片的可抓包判定：在线且不在抓包中（idle/stopped/failed 可选）。 */
@@ -92,6 +94,7 @@ export function StartCaptureDialog({
   initialPort,
   initialPlugin,
   initialProjectId,
+  initialProbeId,
 }: StartCaptureDialogProps) {
   const [source, setSource] = useState<"nic" | "agent">("nic");
   const [probeId, setProbeId] = useState("");
@@ -138,8 +141,13 @@ export function StartCaptureDialog({
       if (initialPort && initialPort > 0) setPort(String(initialPort));
       if (initialPlugin) setPlugin(initialPlugin);
       setProjectId(initialProjectId ?? "");
+      // 从「下载探针」接入闭环带入探针 id：自动切到探针机器源并预选，免手动找。
+      if (initialProbeId) {
+        setSource("agent");
+        setProbeId(initialProbeId);
+      }
     }
-    // 仅在每次打开时读取一次预填（把 initialPort/initialPlugin 当作当次快照）。
+    // 仅在每次打开时读取一次预填（把 initialPort/initialPlugin/initialProbeId 当作当次快照）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 

@@ -2993,7 +2993,8 @@ func main() {
 	), capture.handleGetRegistryAddr)
 
 	s.AddTool(mcp.NewTool("get_agent_download_options",
-		mcp.WithDescription("Return the info the 'Download Agent' page needs: the server's reachable host, registry/ingest ports, and the server platform. Users in other environments use this to fill in the back-connect address when downloading a pre-configured agent binary (port + decoder plugin are baked in; no runtime params needed)."),
+		mcp.WithDescription("Return the info the '接入设备' page needs: the back-connect address a remote probe should use (registry/ingest, with externally reachable ports) and the downloadable platform matrix. Port and decoder plugin are NOT chosen here — the probe connects first and capture is started later via probe_start_capture. If the server has no GT_PUBLIC_HOST configured, pass host (e.g. window.location.hostname) so the address can be inferred from how the caller reached the server."),
+		mcp.WithString("host", mcp.Description("Optional: host/IP the caller used to reach this server (used to infer the back-connect address when GT_PUBLIC_HOST is unset)")),
 	), capture.handleGetAgentDownloadOptions)
 
 	s.AddTool(mcp.NewTool("get_capabilities",
@@ -3229,8 +3230,8 @@ func main() {
 	// 启动码接入：生成/列出 GT-XXXX 码，成员在目标机输入即可自动注册并回连抓包。
 	// 邀请模式：带 new_owner 时，claim 为新用户创建独立身份（而不是借用码创建者的身份）。
 	s.AddTool(mcp.NewTool("create_access_code",
-		mcp.WithDescription("Generate an access code (GT-XXXX-XXXX) bound to the current user. A member enters this code when first starting gt-agent to auto-register and connect. Optional: project_id, plugin, port, platform, server. Invite mode: set new_owner to create a fresh independent identity for that user on claim (user must not already exist)."),
-		mcp.WithString("project_id"), mcp.WithString("plugin"), mcp.WithNumber("port"),
+		mcp.WithDescription("Generate an access code (GT-XXXX-XXXX) bound to the current user. A member enters this code when first starting gt-agent to auto-register and connect. The code only carries identity + back-connect address — capture port/plugin are decided later at probe_start_capture. Optional: project_id, platform, server. Invite mode: set new_owner to create a fresh independent identity for that user on claim (user must not already exist)."),
+		mcp.WithString("project_id"),
 		mcp.WithString("platform"), mcp.WithString("server"),
 		mcp.WithString("new_owner", mcp.Description("Invite mode: user name to create on claim (letters/digits/._-)")),
 	), capture.handleCreateAccessCode)

@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import { Input } from "@/components/ui/input";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import {
@@ -9,10 +8,11 @@ import {
   X,
   Monitor,
   Check,
-  ExternalLink,
+  Play,
   Loader2,
+  AlertTriangle,
 } from "lucide-react";
-import { useAgentDownloadOptions, useRegisteredPlugins, useSessionStatus } from "@/hooks/use-mcp";
+import { useAgentDownloadOptions, useListProbes } from "@/hooks/use-mcp";
 import { AccessCodePanel } from "@/components/access-code-panel";
 import { authHeaders } from "@/lib/auth";
 import { toast } from "@/components/ui/toast";
@@ -21,8 +21,8 @@ import type { AgentPlatform } from "@/types/agent";
 interface AgentDownloadDialogProps {
   open: boolean;
   onClose: () => void;
-  /** 下载会话建立后跳转到该会话（自动选中 + 打开实时数据） */
-  onNavigateToSession: (sessionId: string) => void;
+  /** 探针接入后「开始抓包」：交给外层打开开始抓包弹窗并预选这台机器。 */
+  onStartCapture?: (probeId: string) => void;
 }
 
 /** 从 UA 尽力推断用户的操作系统/架构，用于默认推荐下载平台。 */
@@ -43,59 +43,33 @@ function detectPlatform(): { os: string; arch: string } {
 
 /**
  * 远程 Agent 下载对话框（Web First · 多平台）：
- * 为不在同一网络环境的成员生成「免参数」的抓包 agent。用户只需选目标平台 +
- * 抓包端口 + 解码插件，回连地址/端口/token/会话都打包进 zip（通用二进制 +
- * 运行时 sidecar 配置）。下载后进入「等待连接 → 已连接抓包」的生命周期，
- * 并提供到实时数据的入口。平台取自服务端预置产物，不再依赖服务端平台。
+ * 只需选目标平台 —— 回连地址/token 打包进 zip，抓包端口与解码插件**不在下载时决定**，
+ * 探针接入后由「开始抓包」在 Web 上下发（改端口/换插件都不必重下探针）。
+ * 平台取自服务端预置产物，不再依赖服务端平台。
  */
-export function AgentDownloadDialog({ open, onClose, onNavigateToSession }: AgentDownloadDialogProps) {
+export function AgentDownloadDialog({ open, onClose, onStartCapture }: AgentDownloadDialogProps) {
   const { data, isLoading } = useAgentDownloadOptions();
-  const { data: pluginsData } = useRegisteredPlugins();
-  const plugins = pluginsData?.plugins ?? [];
 
   const opts = (data ?? null) as null | NonNullable<typeof data>;
   const platforms = opts?.platforms ?? [];
   const available = platforms.filter((p) => p.available);
 
-  // 阶段：configure（填写配置 + 下载）→ awaiting（等待 Agent 连接 / 抓包中）
+  // 阶段：configure（选平台 + 下载）→ awaiting（等待探针接入）
   const [phase, setPhase] = useState<"configure" | "awaiting">("configure");
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  // 接入模式：quick=启动码主路径（推荐） / advanced=原「下载 zip + sidecar 配置」
+  // 接入模式：quick=启动码主路径（推荐） / advanced=下载 zip + sidecar 配置
   const [mode, setMode] = useState<"quick" | "advanced">("quick");
-
   const [os, setOs] = useState("windows");
   const [arch, setArch] = useState("amd64");
-  const [port, setPort] = useState("8080");
-  const [plugin, setPlugin] = useState("");
-  const [server, setServer] = useState("");
   const [busy, setBusy] = useState(false);
+  // 下载前已存在的探针 id：用于认出"这次新接入的那台机器"。
+  const knownProbeIds = useRef<Set<string>>(new Set());
 
-  // 默认回连 IP：优先取浏览器当前访问的服务端 hostname；但 localhost/127.0.0.1/::1
-  // 对远端探针不可达（探针拿到会回连它自己），此时退回服务端探测的 LAN IP（opts.host）。
-  // 两者都拿不到时留空，由用户手填（下载按钮不因此禁用）。
-  const browserHost =
-    typeof window !== "undefined" ? window.location.hostname : "";
-  const isLoopbackHost = (h: string) =>
-    !h ||
-    h === "localhost" ||
-    h === "127.0.0.1" ||
-    h === "::1" ||
-    h === "[::1]" ||
-    h.endsWith(".localhost");
-  const deployHost = [browserHost, opts?.host ?? ""].find((h) => !isLoopbackHost(h)) ?? "";
-
-  // 打开/拿到平台时：预填回连地址，并按用户 UA 推荐首个可用平台。
+  // 打开/拿到平台时：按用户 UA 推荐首个可用平台。
   useEffect(() => {
     if (!open) return;
     setBusy(false);
     setPhase("configure");
-    setSessionId(null);
     setMode("quick");
-    if (deployHost && opts?.registry_port) {
-      setServer(`${deployHost}:${opts.registry_port}`);
-    } else {
-      setServer("");
-    }
     if (available.length > 0) {
       const det = detectPlatform();
       const match = available.find((p) => p.os === det.os && p.arch === det.arch) ?? available[0];
@@ -105,72 +79,37 @@ export function AgentDownloadDialog({ open, onClose, onNavigateToSession }: Agen
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, opts?.registry_port, deployHost]);
+  }, [open, opts?.registry_port]);
 
-  // awaiting 阶段轮询会话实时状态，驱动「等待 → 已连接/抓包中」。
-  const { data: status } = useSessionStatus(phase === "awaiting" ? sessionId : null);
-  const live = useMemo(() => {
-    if (!status) return { packets: 0, events: 0 };
-    return {
-      packets: status.packets_in ?? status.raw_count ?? status.raw_packets ?? 0,
-      events: status.event_count ?? status.events ?? 0,
-    };
-  }, [status]);
-  const attached = live.packets > 0;
+  // awaiting 阶段轮询探针列表，驱动「等待接入 → 已接入」。
+  const { data: probesData } = useListProbes();
+  const probes = probesData?.probes ?? [];
+  const onlineProbes = useMemo(
+    () =>
+      probes
+        .filter((p) => p.connection_state === "online")
+        .sort((a, b) => (a.last_seen_at < b.last_seen_at ? 1 : -1)),
+    [probes],
+  );
+  // 优先取这次新接入的探针；没有新面孔就取最近活跃的那台。
+  const attachedProbe =
+    onlineProbes.find((p) => !knownProbeIds.current.has(p.probe_id)) ?? onlineProbes[0];
 
   const selectedPlatform = platforms.find((p) => p.os === os && p.arch === arch);
 
-  function defaultServer(): string {
-    if (deployHost && opts?.registry_port) return `${deployHost}:${opts.registry_port}`;
-    return "";
-  }
-
-  /**
-   * 宽容解析回连地址：容忍全角冒号（中文 IME）、http(s):// 前缀、尾随斜杠/路径、
-   * 首尾空白。返回规范化的 host:port；无法解析返回 null（调用方据此报错并回显原值）。
-   */
-  function parseServer(raw: string): string | null {
-    let v = raw.trim();
-    if (!v) return null;
-    v = v.replace(/：/g, ":").replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "").replace(/[\\/]+.*$/, "");
-    const m = /^(\[[0-9a-fA-F:]+\]|[^:\s]+):(\d{1,5})$/.exec(v);
-    if (!m) return null;
-    const p = Number(m[2]);
-    if (!(p >= 1 && p <= 65535)) return null;
-    return `${m[1]}:${p}`;
-  }
-
   async function handleDownload() {
-    const p = Number(port.trim());
-    if (!Number.isInteger(p) || p <= 0 || p > 65535) {
-      toast.error("请填写有效的端口", "1-65535 之间");
-      return;
-    }
     if (!selectedPlatform) {
       toast.error("请选择操作系统", "当前没有任何可下载的平台产物");
       return;
     }
-    const rawAddr = server.trim() || defaultServer();
-    const addr = parseServer(rawAddr);
-    if (!addr) {
-      toast.error(
-        "回连地址格式无效",
-        `需要 host:port（如 192.168.1.10:9091），实际收到「${rawAddr.trim() || "（空）"}」`,
-      );
-      return;
-    }
-    setServer(addr);
-    if (!opts?.registry_port) {
+    if (!opts?.registry_addr) {
       toast.error("服务端信息未就绪", "请稍后重试");
       return;
     }
-
     setBusy(true);
     try {
-      // token 走请求头（authHeaders 带 Authorization: Bearer），不再进 URL。
-      const url = `/download/agent?port=${encodeURIComponent(p)}&server=${encodeURIComponent(
-        addr,
-      )}&plugin=${encodeURIComponent(plugin)}&platform=${encodeURIComponent(
+      // 只传平台：回连地址由服务端解析（GT_PUBLIC_HOST 或请求回推），token 走请求头。
+      const url = `/download/agent?platform=${encodeURIComponent(
         `${selectedPlatform.os}/${selectedPlatform.arch}`,
       )}`;
       const resp = await fetch(url, { headers: authHeaders() });
@@ -179,7 +118,6 @@ export function AgentDownloadDialog({ open, onClose, onNavigateToSession }: Agen
         toast.error("探针下载失败", txt.slice(0, 200));
         return;
       }
-      const newSessionId = resp.headers.get("X-Session-Id") ?? "";
       const blob = await resp.blob();
       const objUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -191,13 +129,9 @@ export function AgentDownloadDialog({ open, onClose, onNavigateToSession }: Agen
       a.remove();
       URL.revokeObjectURL(objUrl);
 
-      if (newSessionId) {
-        setSessionId(newSessionId);
-        setPhase("awaiting");
-        toast.success("探针已下载", `抓包端口 ${p}，等待探针连接`);
-        return;
-      }
-      toast.success("探针下载已触发");
+      knownProbeIds.current = new Set(probes.map((p) => p.probe_id));
+      setPhase("awaiting");
+      toast.success("探针已下载", "解压运行后即可在「开始抓包」里选到这台机器");
     } catch (e) {
       toast.error("下载失败", e instanceof Error ? e.message : String(e));
     } finally {
@@ -210,14 +144,14 @@ export function AgentDownloadDialog({ open, onClose, onNavigateToSession }: Agen
     mode === "quick"
       ? "我的接入"
       : phase === "awaiting"
-        ? "等待探针连接"
+        ? "等待探针接入"
         : "下载抓包探针";
   const dialogDesc =
     mode === "quick"
-      ? "生成一次性启动码，在目标机执行复制到的命令即可免参数注册并回连抓包。"
+      ? "生成一次性启动码，在目标机执行复制到的命令即可接入这台机器。"
       : phase === "awaiting"
-        ? "在目标电脑解压并双击运行探针，GameTrace 会自动回连并开始抓包。"
-        : "选择目标操作系统与抓包端口后下载，回连地址、token 与会话都已打入 zip，运行即可免参数抓包上报。";
+        ? "在目标电脑解压并双击运行探针，接入后回到「开始抓包」选这台机器。"
+        : "只需选择目标操作系统：回连地址与凭证已打包进 zip。抓包端口与解码插件在「开始抓包」时指定。";
 
   return (
     <Dialog
@@ -233,17 +167,16 @@ export function AgentDownloadDialog({ open, onClose, onNavigateToSession }: Agen
               <Download className="h-4 w-4" />
               下载另一个探针
             </Button>
-            <Button
-              variant="outline"
-              onClick={() => onClose()}
-              className="ml-auto"
-            >
+            <Button variant="outline" onClick={() => onClose()} className="ml-auto">
               <X className="h-4 w-4" />
               关闭
             </Button>
-            <Button onClick={() => onNavigateToSession(sessionId ?? "")} disabled={!sessionId}>
-              <ExternalLink className="h-4 w-4" />
-              查看实时数据
+            <Button
+              onClick={() => attachedProbe && onStartCapture?.(attachedProbe.probe_id)}
+              disabled={!attachedProbe}
+            >
+              <Play className="h-4 w-4" />
+              开始抓包
             </Button>
           </>
         ) : inAdvanced ? (
@@ -252,7 +185,7 @@ export function AgentDownloadDialog({ open, onClose, onNavigateToSession }: Agen
               <X className="h-4 w-4" />
               关闭
             </Button>
-            <Button onClick={handleDownload} disabled={busy || isLoading || !opts?.registry_port}>
+            <Button onClick={handleDownload} disabled={busy || isLoading || !opts?.registry_addr}>
               <Download className="h-4 w-4" />
               {busy ? "打包下载中…" : "下载探针"}
             </Button>
@@ -296,7 +229,10 @@ export function AgentDownloadDialog({ open, onClose, onNavigateToSession }: Agen
       {mode === "quick" ? (
         <AccessCodePanel />
       ) : phase === "awaiting" ? (
-        <AwaitingAgentPanel attached={attached} packets={live.packets} events={live.events} />
+        <AwaitingAgentPanel
+          attached={!!attachedProbe}
+          probeName={attachedProbe?.name || attachedProbe?.hostname}
+        />
       ) : (
         <div className="space-y-3">
           {/* 目标平台 */}
@@ -325,81 +261,35 @@ export function AgentDownloadDialog({ open, onClose, onNavigateToSession }: Agen
                 {selectedPlatform.label} 尚未预置，请在服务端运行 make build-agents 生成。
               </p>
             )}
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              抓包端口与解码插件不在这里选 —— 探针接入后，在「开始抓包」里选这台机器并指定。
+            </p>
           </div>
 
-          {/* 服务端已部署信息 */}
+          {/* 服务端回连地址（只读）：来自 GT_PUBLIC_HOST 或请求回推，不开放手填 */}
           <div className="rounded-md border border-border bg-muted/40 px-3 py-2">
             <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
               <Server className="h-3.5 w-3.5" />
-              当前服务部署信息
+              探针回连地址（已写入下载包）
             </label>
-            {isLoading || !opts?.registry_port ? (
+            {isLoading || !opts?.registry_addr ? (
               <p className="mt-1 text-xs text-muted-foreground">正在读取服务端信息…</p>
             ) : (
               <div className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs font-mono text-foreground">
-                <span className="text-muted-foreground">可达 IP</span>
-                <span>{deployHost}</span>
-                <span className="text-muted-foreground">registry 端口</span>
-                <span>{opts.registry_port}（探针回连）</span>
-                <span className="text-muted-foreground">ingest 端口</span>
-                <span>{opts.ingest_port}（推送抓包数据）</span>
+                <span className="text-muted-foreground">回连</span>
+                <span>{opts.registry_addr}</span>
+                <span className="text-muted-foreground">推流</span>
+                <span>{opts.ingest_addr}</span>
               </div>
             )}
+            {opts && opts.addr_source !== "env" && (
+              <p className="mt-1.5 flex gap-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                服务端未配置 GT_PUBLIC_HOST，地址是按当前访问方式推测的。Docker / 公网部署请在服务端设置
+                GT_PUBLIC_HOST（必要时配 GT_PUBLIC_REGISTRY_PORT / GT_PUBLIC_INGEST_PORT），否则远端探针可能连不上。
+              </p>
+            )}
             {opts?.message && <p className="mt-1.5 text-[11px] text-muted-foreground">{opts.message}</p>}
-          </div>
-
-          <div>
-            <label className="text-sm font-medium">抓包端口（必填）</label>
-            <Input
-              value={port}
-              onChange={(e) => setPort(e.target.value)}
-              aria-label="抓包端口"
-              inputMode="numeric"
-              placeholder="8080"
-              className="mt-1.5 font-mono"
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              探针将抓取该电脑上对该端口的 TCP/UDP 流量（自动生成 BPF 过滤）并推送到服务端会话。
-            </p>
-          </div>
-
-          <div>
-            <label className="text-sm font-medium">解码插件</label>
-            <select
-              className="mt-1.5 h-9 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-              value={plugin}
-              onChange={(e) => setPlugin(e.target.value)}
-            >
-              <option value="">不指定（仅抓原始包）</option>
-              {plugins.map((p) => (
-                <option key={p.instance_id} value={p.name}>
-                  {p.name}（{p.protocol}）
-                </option>
-              ))}
-            </select>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {plugins.length === 0
-                ? "当前没有已注册的插件，可留空仅抓包；或先启动插件使其注册到 Pipeline。"
-                : "留空则只抓包存储原始包；指定插件后服务端会为接收会话绑定该解码插件。"}
-            </p>
-          </div>
-
-          <div>
-            <label className="flex items-center gap-1.5 text-sm font-medium">
-              <Radio className="h-3.5 w-3.5 text-muted-foreground" />
-              探针回连地址（host:port）
-            </label>
-            <Input
-              value={server}
-              onChange={(e) => setServer(e.target.value)}
-              aria-label="探针回连地址"
-              placeholder={defaultServer() || "192.168.1.10:9091"}
-              spellCheck={false}
-              className="mt-1.5 font-mono"
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              端口必须是上面的 registry 端口；IP 需为远端探针可达的地址（默认已填入当前服务部署 IP）。
-            </p>
           </div>
         </div>
       )}
@@ -439,19 +329,11 @@ function PlatformOption({
   );
 }
 
-function AwaitingAgentPanel({
-  attached,
-  packets,
-  events,
-}: {
-  attached: boolean;
-  packets: number;
-  events: number;
-}) {
+function AwaitingAgentPanel({ attached, probeName }: { attached: boolean; probeName?: string }) {
   const steps = [
     {
       label: "探针已生成并下载",
-      detail: "已在服务端创建接收会话，zip 已保存到浏览器下载目录",
+      detail: "zip 已保存到浏览器下载目录",
       done: true,
     },
     {
@@ -460,10 +342,10 @@ function AwaitingAgentPanel({
       done: true,
     },
     {
-      label: attached ? "探针已连接 · 抓包中" : "等待探针连接…",
+      label: attached ? "探针已接入" : "等待探针接入…",
       detail: attached
-        ? `已收到 ${packets.toLocaleString()} packets · 已解析 ${events.toLocaleString()} events`
-        : "探针正在回连服务端，连接建立后会自动开始抓包（无需任何参数）",
+        ? `${probeName ?? "探针"} 已在线，可在「开始抓包」里选它并指定端口与解析器`
+        : "探针会回连服务端并注册为在线探针（无需任何参数）",
       done: attached,
     },
   ];
@@ -490,15 +372,9 @@ function AwaitingAgentPanel({
       </ol>
 
       {attached ? (
-        <div className="grid grid-cols-2 gap-2 rounded-md border border-border bg-muted/40 p-3">
-          <div>
-            <p className="text-xs text-muted-foreground">Packets</p>
-            <p className="text-lg font-semibold tabular-nums">{packets.toLocaleString()}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Events</p>
-            <p className="text-lg font-semibold tabular-nums">{events.toLocaleString()}</p>
-          </div>
+        <div className="flex items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300">
+          <Radio className="h-3.5 w-3.5 shrink-0" />
+          {probeName ?? "探针"} 已在线，点「开始抓包」指定端口与解析器。
         </div>
       ) : (
         <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">

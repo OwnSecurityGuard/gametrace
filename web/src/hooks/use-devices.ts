@@ -1,67 +1,71 @@
 import { useMemo } from "react";
-import { useAccessCodes, useSessions } from "@/hooks/use-mcp";
+import { useAccessCodes, useListProbes } from "@/hooks/use-mcp";
 import type { DeviceView } from "@/types/device";
 import type { AccessCode } from "@/types/access-code";
-import type { SessionInfo } from "@/types/session";
+import type { ProbeInfo } from "@/types/probe";
 
 /**
- * 从启动码 + 会话派生「我的设备」列表（最新接入在前）。
+ * 派生「我的设备」列表。
  *
- * 状态推导规则（不引入 Device Service）：
- * - 未认领 → waiting（等待接入）
- * - 已认领 + 会话 running + packets>0 → capturing（正在抓包）
- * - 已认领 + 会话 running + packets==0 → connected（已连接，尚未收到流量）
- * - 已认领 + 会话已停止 → stopped
- * - 已认领但会话尚未出现在列表 → connected（连接已建立，会话同步中）
+ * 设备 = 已接入的探针（list_probes）+ 尚未认领的启动码（等待接入）。
+ * 认领之后不存在"码维度的会话"：启动码只负责把机器接进来，接入后这台机器就是一台探针，
+ * 抓包由「开始抓包」下发，所以设备状态直接取探针的三维度状态（不引入 Device Service）。
  */
-function deriveDevices(codes: AccessCode[], sessions: SessionInfo[]): DeviceView[] {
-  const bySession = new Map<string, SessionInfo>();
-  for (const s of sessions) {
-    if (s.session_id) bySession.set(s.session_id, s);
-  }
-
-  const sorted = [...codes].sort((a, b) => {
-    const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
-    const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
-    return tb - ta;
+function deriveDevices(codes: AccessCode[], probes: ProbeInfo[]): DeviceView[] {
+  const devices: DeviceView[] = probes.map((p) => {
+    const capturing = p.capture_state === "running" || p.capture_state === "starting";
+    return {
+      kind: "probe",
+      id: p.probe_id,
+      probeId: p.probe_id,
+      name: p.name || p.hostname || p.probe_id,
+      hostname: p.hostname,
+      platform: [p.os, p.arch].filter(Boolean).join("/") || undefined,
+      state: p.connection_state === "online" ? (capturing ? "capturing" : "connected") : "offline",
+      sessionId: p.last_session_id || undefined,
+      packets: p.packets_captured ?? 0,
+      lastSeen: p.last_seen_at || undefined,
+      createdAt: p.created_at,
+    };
   });
 
-  return sorted.map((c) => {
-    const session = c.session_id ? bySession.get(c.session_id) : undefined;
-    const running = session?.status === "running";
-    const stopped = !!session && !running;
-    const packets = session?.raw_packets ?? 0;
-    const events = session?.events ?? 0;
-    const decodeErrors = session?.decode_errors ?? 0;
-
-    let state: DeviceView["state"];
-    if (!c.claimed) state = "waiting";
-    else if (stopped) state = "stopped";
-    else if (running && packets > 0) state = "capturing";
-    else state = "connected";
-
-    return {
-      code: c.code,
+  // 未认领且未过期的码 = 等待接入的设备（已认领的码对应的机器已出现在 probes 里）。
+  const now = Date.now();
+  for (const c of codes) {
+    if (c.claimed) continue;
+    if (c.expires_at && new Date(c.expires_at).getTime() < now) continue;
+    devices.push({
+      kind: "code",
+      id: c.code,
+      name: c.code,
       platform: c.platform || undefined,
-      projectId: c.project_id,
-      port: c.port ?? undefined,
-      plugin: c.plugin || undefined,
-      state,
-      sessionId: c.session_id || session?.session_id,
-      packets,
-      events,
-      decodeErrors,
-      lastSeen: running ? session?.started_at : session?.stopped_at,
-      claimed: !!c.claimed,
+      state: "waiting",
+      packets: 0,
       createdAt: c.created_at,
-    };
+    });
+  }
+
+  // 抓包中/在线的排前面，其余按最近活动倒序；等待接入的码垫底。
+  const rank: Record<DeviceView["state"], number> = {
+    capturing: 0,
+    connected: 1,
+    offline: 2,
+    stopped: 3,
+    waiting: 4,
+  };
+  return devices.sort((a, b) => {
+    const d = rank[a.state] - rank[b.state];
+    if (d !== 0) return d;
+    const ta = a.lastSeen ? new Date(a.lastSeen).getTime() : 0;
+    const tb = b.lastSeen ? new Date(b.lastSeen).getTime() : 0;
+    return tb - ta;
   });
 }
 
 export function useMyDevices(): DeviceView[] {
+  const { data: probesData } = useListProbes();
   const { data: codesData } = useAccessCodes();
-  const { data: sessionsData } = useSessions();
+  const probes = probesData?.probes ?? [];
   const codes = codesData?.codes ?? [];
-  const sessions = sessionsData?.sessions ?? [];
-  return useMemo(() => deriveDevices(codes, sessions), [codes, sessions]);
+  return useMemo(() => deriveDevices(codes, probes), [codes, probes]);
 }

@@ -40,11 +40,11 @@ func TestAccessCodeRoundTrip(t *testing.T) {
 	if got.Owner != "alice" || got.Port != 8080 || got.Claimed {
 		t.Fatalf("roundtrip mismatch: %+v", got)
 	}
-	if err := s.MarkClaimed(context.Background(), c.Code, "sess-1"); err != nil {
+	if err := s.MarkClaimed(context.Background(), c.Code); err != nil {
 		t.Fatal(err)
 	}
 	got2, _ := s.Get(context.Background(), c.Code)
-	if !got2.Claimed || got2.SessionID != "sess-1" {
+	if !got2.Claimed {
 		t.Fatalf("claim not persisted: %+v", got2)
 	}
 }
