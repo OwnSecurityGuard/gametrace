@@ -5,6 +5,10 @@ export interface DecodedEvent {
   session_id: string;
   protocol: string;
   raw_len: number;
+  /** pair 语义规则写入的配对键：同一组请求/响应共享同一个值（未配对时为空）。 */
+  correlation_id?: string;
+  /** 响应侧特有：指向触发它的请求事件 id。 */
+  causation_id?: string;
   data: Record<string, unknown>;
   /** 代理抓包特有：捕获上下文（Captured By / Connection / Stream / Source）。 */
   capture?: import("./connection").CaptureContext;

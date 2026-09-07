@@ -14,6 +14,7 @@ import {
   RotateCw,
   ArrowRight,
   ArrowLeft,
+  Link2,
 } from "lucide-react";
 import type { DecodedEvent } from "@/types/event";
 import type { CaptureContext } from "@/types/connection";
@@ -22,6 +23,8 @@ import { unpackJsonStrings } from "@/lib/utils";
 interface EventTableProps {
   sessionId: string | null;
   filter: string;
+  /** 供配对定位写回筛选表达式（App 状态，同步到 FilterBar）。 */
+  onFilterChange?: (filter: string) => void;
 }
 
 const PAGE_SIZE = 20;
@@ -29,9 +32,9 @@ const PAGE_SIZE = 20;
 // ─── 元数据提取 ─────────────────────────────────────────────
 
 interface EventMeta {
-  direction: string;   // "client_to_server" | "server_to_client" | ""
+  direction: string;   // "client_to_server" | "server_to_client" | ""（端口推断的传输层事实）
   msgName: string;     // e.g. "on_client_delta"
-  isPush: boolean;     // push 消息标记
+  semantic: string[];  // SDK annotate 规则标签：request | response | notification | error
   blocks?: number;     // Blocks 数量（如有）
 }
 
@@ -39,11 +42,13 @@ interface EventMeta {
 function extractMeta(data: Record<string, unknown>): EventMeta {
   const meta = data._meta as Record<string, unknown> | undefined;
   if (!meta || typeof meta !== "object") {
-    return { direction: "", msgName: "", isPush: false };
+    return { direction: "", msgName: "", semantic: [] };
   }
   const direction = String(meta.direction ?? "");
   const msgName = String(meta.msg_name ?? "");
-  const isPush = Boolean(meta.is_push);
+  const semantic = Array.isArray(meta.semantic)
+    ? meta.semantic.map((s) => String(s)).filter(Boolean)
+    : [];
 
   // 尝试提取 Blocks 数量（Godot 协议特有）
   let blocks: number | undefined;
@@ -56,7 +61,7 @@ function extractMeta(data: Record<string, unknown>): EventMeta {
     blocks = data.count;
   }
 
-  return { direction, msgName, isPush, blocks };
+  return { direction, msgName, semantic, blocks };
 }
 
 // ─── 格式化工具 ─────────────────────────────────────────────
@@ -136,19 +141,40 @@ function DirectionBadge({ direction }: { direction: string }) {
   }
 }
 
-// ─── 消息名 + Push 标记 ──────────────────────────────────────
+// ─── 语义标签（annotate 规则产出） ───────────────────────────
 
-function MessageCell({ msgName, isPush }: { msgName: string; isPush: boolean }) {
+const SEMANTIC_STYLES: Record<string, string> = {
+  request: "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+  response: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  notification: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  error: "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300",
+};
+
+function SemanticBadge({ label }: { label: string }) {
+  return (
+    <span
+      className={`shrink-0 rounded px-1 py-px text-[10px] font-medium ${
+        SEMANTIC_STYLES[label] ?? "bg-muted text-muted-foreground"
+      }`}
+    >
+      {label}
+    </span>
+  );
+}
+
+// ─── 消息名 + SDK 语义标签 ───────────────────────────────────
+// ponytail: 协议语义只显示 SDK 规则产出（annotate/pair）；插件私有字段（如
+// http-decoder 的 _meta.is_push）不上 UI——要展示就改成声明 annotate 规则。
+
+function MessageCell({ msgName, semantic }: { msgName: string; semantic: string[] }) {
   return (
     <div className="flex items-center gap-1.5 min-w-0">
       <span className="font-mono text-xs font-semibold truncate" title={msgName}>
         {msgName || "(unknown)"}
       </span>
-      {isPush && (
-        <span className="shrink-0 rounded bg-primary/10 text-primary px-1 py-px text-[10px] font-medium uppercase">
-          push
-        </span>
-      )}
+      {semantic.map((s) => (
+        <SemanticBadge key={s} label={s} />
+      ))}
     </div>
   );
 }
@@ -250,16 +276,87 @@ function CaptureCell({ capture }: { capture: CaptureContext }) {
   );
 }
 
-// ─── 展开行：完整 JSON ────────────────────────────────────────
+// ─── 展开行：配对关系 + 完整 JSON ────────────────────────────
 
 const COLSPAN = 6; // Timestamp | Dir | Msg | Capture | Summary | Size
 
-function ExpandedRow({ data }: { data: Record<string, unknown> }) {
+/** 配对面板：展示 pair 语义规则配出的对侧消息（响应 causation_id → 请求），可跳转定位。 */
+function PairPanel({
+  event,
+  partners,
+  onJumpToPartner,
+  onLocatePair,
+}: {
+  event: DecodedEvent;
+  partners: DecodedEvent[];
+  onJumpToPartner: (id: string) => void;
+  onLocatePair: (event: DecodedEvent) => void;
+}) {
+  if (partners.length === 0 && !event.causation_id) return null;
+
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-border bg-background px-3 py-2">
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
+        <Link2 className="h-3.5 w-3.5" />
+        协议配对
+      </span>
+      {partners.length > 0 ? (
+        partners.map((p) => {
+          const pMeta = extractMeta(p.data);
+          const isResponse = p.causation_id === event.id;
+          return (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => onJumpToPartner(p.id)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs hover:bg-muted transition-colors"
+              title={`跳转到配对消息 ${pMeta.msgName || p.id}`}
+            >
+              <ArrowRight className="h-3 w-3 text-muted-foreground" />
+              <span className="font-mono font-semibold">{pMeta.msgName || "(unknown)"}</span>
+              <span className="text-muted-foreground">({isResponse ? "响应" : "请求"})</span>
+              <span className="font-mono text-muted-foreground">{formatTimestamp(p.timestamp)}</span>
+            </button>
+          );
+        })
+      ) : (
+        <span className="text-xs text-muted-foreground">
+          配对消息不在当前页
+          <button
+            type="button"
+            onClick={() => onLocatePair(event)}
+            className="ml-2 inline-flex items-center rounded border border-border px-1.5 py-0.5 text-[11px] text-primary hover:bg-muted transition-colors"
+          >
+            筛选定位
+          </button>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ExpandedRow({
+  event,
+  partners,
+  onJumpToPartner,
+  onLocatePair,
+}: {
+  event: DecodedEvent;
+  partners: DecodedEvent[];
+  onJumpToPartner: (id: string) => void;
+  onLocatePair: (event: DecodedEvent) => void;
+}) {
   return (
     <TableRow className="gt-fade-in">
       <TableCell colSpan={COLSPAN} className="bg-muted/30 p-4">
+        <PairPanel
+          event={event}
+          partners={partners}
+          onJumpToPartner={onJumpToPartner}
+          onLocatePair={onLocatePair}
+        />
         <div className="gt-json-view">
-          <HighlightedJson data={data} />
+          <HighlightedJson data={event.data} />
         </div>
       </TableCell>
     </TableRow>
@@ -270,12 +367,20 @@ function ExpandedRow({ data }: { data: Record<string, unknown> }) {
 
 const EventRow = memo(function EventRow({
   event,
+  partners,
   isExpanded,
+  isHighlighted,
   onToggle,
+  onJumpToPartner,
+  onLocatePair,
 }: {
   event: DecodedEvent;
+  partners: DecodedEvent[];
   isExpanded: boolean;
+  isHighlighted: boolean;
   onToggle: (id: string) => void;
+  onJumpToPartner: (id: string) => void;
+  onLocatePair: (event: DecodedEvent) => void;
 }) {
   const meta = useMemo(() => extractMeta(event.data), [event.data]);
   const summary = useMemo(() => summarizePayload(event.data, meta), [event.data, meta]);
@@ -283,7 +388,8 @@ const EventRow = memo(function EventRow({
   return (
     <Fragment key={event.id}>
       <TableRow
-        className="cursor-pointer hover:bg-muted/50 transition-colors"
+        id={`event-row-${event.id}`}
+        className={`cursor-pointer hover:bg-muted/50 transition-colors ${isHighlighted ? "bg-primary/10" : ""}`}
         onClick={() => onToggle(event.id)}
         aria-expanded={isExpanded}
       >
@@ -299,7 +405,12 @@ const EventRow = memo(function EventRow({
 
         {/* 消息名 */}
         <TableCell className="min-w-[140px] max-w-[220px]">
-          <MessageCell msgName={meta.msgName} isPush={meta.isPush} />
+          <MessageCell msgName={meta.msgName} semantic={meta.semantic} />
+          {partners.length > 0 && !isExpanded && (
+            <span className="ml-1.5 inline-flex items-center text-muted-foreground/70" title="已配对请求/响应">
+              <Link2 className="h-3 w-3" />
+            </span>
+          )}
         </TableCell>
 
         {/* 捕获上下文（代理抓包特有） */}
@@ -320,16 +431,24 @@ const EventRow = memo(function EventRow({
         </TableCell>
       </TableRow>
 
-      {isExpanded && <ExpandedRow data={event.data} />}
+      {isExpanded && (
+        <ExpandedRow
+          event={event}
+          partners={partners}
+          onJumpToPartner={onJumpToPartner}
+          onLocatePair={onLocatePair}
+        />
+      )}
     </Fragment>
   );
 });
 
 // ─── 主表格组件 ───────────────────────────────────────────────
 
-export function EventTable({ sessionId, filter }: EventTableProps) {
+export function EventTable({ sessionId, filter, onFilterChange }: EventTableProps) {
   const [page, setPage] = useState<number>(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
 
   useEffect(() => {
     setPage(0);
@@ -354,6 +473,47 @@ export function EventTable({ sessionId, filter }: EventTableProps) {
   const events = useMemo(() => data?.events ?? [], [data]);
   const totalMatched = data?.total_matched ?? 0;
   const totalPages = Math.ceil(totalMatched / PAGE_SIZE);
+
+  /**
+   * 配对索引：事件 id → 当前页内的配对伙伴。
+   * 配对信号是 causation_id（响应 → 请求事件 id，SDK pair 规则写入），
+   * 不用 correlation_id —— 后者可能是插件 decode 侧写的流键（全流共享），不是配对关系。
+   */
+  const partnersMap = useMemo(() => {
+    const byId = new Map(events.map((e) => [e.id, e]));
+    const m = new Map<string, DecodedEvent[]>();
+    const push = (key: string, val: DecodedEvent) => {
+      const arr = m.get(key);
+      if (arr) arr.push(val);
+      else m.set(key, [val]);
+    };
+    for (const ev of events) {
+      if (!ev.causation_id) continue;
+      const req = byId.get(ev.causation_id);
+      if (!req) continue;
+      push(req.id, ev);
+      push(ev.id, req);
+    }
+    return m;
+  }, [events]);
+
+  /** 跳转到当前页内的配对消息：展开并短暂高亮。 */
+  function handleJumpToPartner(id: string) {
+    setExpandedId(id);
+    setTimeout(() => {
+      document.getElementById(`event-row-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 0);
+    setHighlightId(id);
+    setTimeout(() => setHighlightId(null), 2000);
+  }
+
+  /** 配对消息不在当前页：用 causation 关系写筛选表达式定位（App 的 FilterBar 同步更新）。 */
+  function handleLocatePair(ev: DecodedEvent) {
+    if (!onFilterChange) return;
+    setExpandedId(null);
+    // 响应方：按请求事件 id 找；请求方：找 causation_id 指向自己的响应。
+    onFilterChange(ev.causation_id ? `id == "${ev.causation_id}"` : `causation_id == "${ev.id}"`);
+  }
 
   function handleToggleExpand(eventId: string) {
     setExpandedId((prev) => (prev === eventId ? null : eventId));
@@ -441,8 +601,12 @@ export function EventTable({ sessionId, filter }: EventTableProps) {
             <EventRow
               key={event.id}
               event={event}
+              partners={partnersMap.get(event.id) ?? []}
               isExpanded={expandedId === event.id}
+              isHighlighted={highlightId === event.id}
               onToggle={handleToggleExpand}
+              onJumpToPartner={handleJumpToPartner}
+              onLocatePair={handleLocatePair}
             />
           ))}
         </TableBody>

@@ -1037,6 +1037,8 @@ func (m *mcpCapture) handleGetCaptureSchema(ctx context.Context, req mcp.CallToo
 		{"name": "msg_name", "type": "string", "description": "business message name"},
 		{"name": "msg_id", "type": "number", "description": "per-flow auto-increment message id"},
 		{"name": "is_push", "type": "number", "description": "1 if server push, 0 otherwise"},
+		{"name": "correlation_id", "type": "string", "description": "request/response pairing key from plugin semantic pair rules (same value on both sides)"},
+		{"name": "causation_id", "type": "string", "description": "event id of the preceding request this event responds to (response side only)"},
 		{"name": "src", "type": "string", "description": "source addr (ip:port)"},
 		{"name": "dst", "type": "string", "description": "destination addr (ip:port)"},
 		{"name": "tcp_flags", "type": "string", "description": "TCP control flags (FIN|RST|...), non-empty means tcp_close event"},
@@ -1532,12 +1534,14 @@ func decodedEventMap(ev *event.Event, captureIdx map[string]captureContextJSON, 
 		rawLen = rawLenMap[ev.Context.RawPacketID]
 	}
 	eventMap := map[string]any{
-		"id":         string(ev.Identity.ID),
-		"timestamp":  ev.Identity.Timestamp.Format(time.RFC3339),
-		"session_id": ev.Identity.SessionID,
-		"protocol":   string(ev.Identity.Type),
-		"raw_len":    rawLen,
-		"data":       dataContent,
+		"id":             string(ev.Identity.ID),
+		"timestamp":      ev.Identity.Timestamp.Format(time.RFC3339),
+		"session_id":     ev.Identity.SessionID,
+		"protocol":       string(ev.Identity.Type),
+		"raw_len":        rawLen,
+		"correlation_id": ev.Trace.CorrelationID,
+		"causation_id":   string(ev.Trace.CausationID),
+		"data":           dataContent,
 	}
 	if cc, ok := captureIdx[string(ev.Identity.ID)]; ok {
 		eventMap["capture"] = cc
@@ -2042,12 +2046,14 @@ func (m *mcpCapture) handleTestPlugin(ctx context.Context, req mcp.CallToolReque
 // queryEnv returns the expr environment for decoded event queries.
 func queryEnv() map[string]any {
 	return map[string]any{
-		"id":         "",
-		"timestamp":  "",
-		"session_id": "",
-		"protocol":   "",
-		"raw_len":    0,
-		"data":       map[string]any{},
+		"id":             "",
+		"timestamp":      "",
+		"session_id":     "",
+		"protocol":       "",
+		"raw_len":        0,
+		"correlation_id": "",
+		"causation_id":   "",
+		"data":           map[string]any{},
 	}
 }
 

@@ -554,7 +554,7 @@ export default function App() {
           )}
           {activeTab === "decoded" && (
             <div className="h-full overflow-auto p-4 gt-scroll">
-              <EventTable sessionId={selectedSessionId} filter={filter} />
+              <EventTable sessionId={selectedSessionId} filter={filter} onFilterChange={setFilter} />
             </div>
           )}
           {activeTab === "connections" && (
