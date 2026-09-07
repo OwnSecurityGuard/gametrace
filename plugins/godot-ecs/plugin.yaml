@@ -97,6 +97,39 @@ schemas:
     fields:
       msg_type: { type: string, queryable: true, description: 原始 t 字段值 }
       raw:      { type: string, optional: true, description: 原始 JSON 文本（截断至 4KB） }
+# === 语义规则（Protocol Semantic Rule，spec：插件声明、平台执行）===
+# GJSON path 基于 decoder 产出的事件 payload：业务字段在顶层，
+# 方向/消息名在 _meta（宿主保留 _meta 不剔除）。
+semantic_rules:
+  # ping ↔ pong：客户端 ts 回显配对（RTT 链路）。同规则、ts 相等、
+  # 各占一个 side 时配对，宿主为双方写同一个 CorrelationID，后到者写 CausationID。
+  - id: godot_ecs.pair_ping_pong
+    when:
+      - path: _meta.msg_name
+        op: in
+        value: [ping, pong]
+    effect:
+      type: pair
+      key: ts
+      sides:
+        - { path: _meta.msg_name, op: eq, value: ping }
+        - { path: _meta.msg_name, op: eq, value: pong }
+  # annotate：消息角色标注（request/response/notification）
+  - id: godot_ecs.annotate_ping
+    when: [ { path: _meta.msg_name, op: eq, value: ping } ]
+    effect: { type: annotate, semantic: request }
+  - id: godot_ecs.annotate_pong
+    when: [ { path: _meta.msg_name, op: eq, value: pong } ]
+    effect: { type: annotate, semantic: response }
+  - id: godot_ecs.annotate_pos
+    when: [ { path: _meta.msg_name, op: eq, value: pos } ]
+    effect: { type: annotate, semantic: notification }
+  - id: godot_ecs.annotate_welcome
+    when: [ { path: _meta.msg_name, op: eq, value: welcome } ]
+    effect: { type: annotate, semantic: notification }
+  - id: godot_ecs.annotate_state
+    when: [ { path: _meta.msg_name, op: eq, value: state } ]
+    effect: { type: annotate, semantic: notification }
 meta:
   author: workbuddy
   description: >-
