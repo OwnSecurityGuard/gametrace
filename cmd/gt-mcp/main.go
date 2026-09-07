@@ -27,7 +27,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"gopkg.in/yaml.v3"
 
 	"gametrace/docs"
 	"gametrace/pkg/auth"
@@ -1097,28 +1096,6 @@ func (m *mcpCapture) handleGetCaptureSchema(ctx context.Context, req mcp.CallToo
 		{"name": "group", "type": "map[string]string", "description": "group tags, access by group['data.method']"},
 	}
 
-	// 3. 读取 rules.yaml，返回扁平化规则信息
-	var rules []map[string]any
-	rulesPath := filepath.Join(sessionDir, "rules.yaml")
-	if rulesData, err := os.ReadFile(rulesPath); err == nil {
-		var f config.File
-		if err := yaml.Unmarshal(rulesData, &f); err == nil {
-			for _, r := range f.Rules {
-				rules = append(rules, map[string]any{
-					"name":     r.Name,
-					"filter":   r.Filter,
-					"type":     r.Aggregate.Type,
-					"window":   r.Aggregate.Window,
-					"group_by": r.Aggregate.GroupBy,
-					"value":    r.Aggregate.Value,
-					"output":   r.Aggregate.Output,
-				})
-			}
-		} else {
-			slog.Warn("parse rules.yaml failed", "path", rulesPath, "error", err)
-		}
-	}
-
 	// 4. 生成示例表达式
 	examples := buildExamples(dataFields)
 
@@ -1141,12 +1118,11 @@ func (m *mcpCapture) handleGetCaptureSchema(ctx context.Context, req mcp.CallToo
 			},
 			{
 				"name":        "aggregated_metrics",
-				"description": "聚合指标表（rules.yaml 预计算写入）",
+				"description": "聚合指标表（自有规则引擎已移除，当前不再写入；保留仅为兼容旧数据）",
 				"columns":     metricColumns,
 			},
 		},
 		"query_fields": queryFields,
-		"rules":        rules,
 		"examples":     examples,
 		"field_source": fieldSource,
 	}
@@ -1154,7 +1130,7 @@ func (m *mcpCapture) handleGetCaptureSchema(ctx context.Context, req mcp.CallToo
 		result["manifest"] = manifestView
 	}
 
-	slog.Info("get_capture_schema completed", "session_dir", sessionDir, "field_source", fieldSource, "decoded_columns", len(decodedColumns), "rules", len(rules))
+	slog.Info("get_capture_schema completed", "session_dir", sessionDir, "field_source", fieldSource, "decoded_columns", len(decodedColumns))
 	return successResult(result), nil
 }
 

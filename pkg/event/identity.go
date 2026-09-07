@@ -50,6 +50,11 @@ type Identity struct {
 	// 普通抓包事件为空；回放产生的所有事件填同一 ReplayID，
 	// 供 compare_sessions(真实 vs 回放) 使用。
 	ReplayID string
+
+	// ParentID 标记 extract 子事件的父事件 ID（SDK 语义规则 effect=extract 产出）。
+	// 区分于 Trace.CausationID（直接前驱业务链路）：extract 子事件是同一个网络事件
+	// 内部的结构化子成分，不是另一条独立消息的响应。普通抓包事件为空。
+	ParentID EventID
 }
 
 // 错误定义

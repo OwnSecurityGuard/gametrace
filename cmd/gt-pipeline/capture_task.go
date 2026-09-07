@@ -10,7 +10,6 @@ import (
 	"time"
 
 	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
-	"gametrace/pkg/analyze"
 	"gametrace/pkg/capture"
 	"gametrace/pkg/capture/agent"
 	"gametrace/pkg/capture/mobile"
@@ -20,9 +19,6 @@ import (
 	"gametrace/pkg/internalipc"
 	"gametrace/pkg/internalipc/capturecontrol"
 	"gametrace/pkg/plugin"
-	protocolconfig "gametrace/pkg/protocol/config"
-	protocolcorrelation "gametrace/pkg/protocol/correlation"
-	protocolresolver "gametrace/pkg/protocol/resolver"
 	"gametrace/pkg/schema"
 	"gametrace/pkg/state"
 	"gametrace/pkg/store"
@@ -62,13 +58,7 @@ type captureTask struct {
 	// owner 是会话发起者的属主（来自 StartSession RPC 的 auth 上下文；
 	// 未接入认证时为空串 = 匿名/本地语义），用于 owner 作用域的插件路由。
 	owner  string
-	rules  []*analyze.CompiledRule
 	logger *slog.Logger // 带 session_id 等上下文字段的 logger
-
-	// Protocol Behavior Resolver（可选）：protocolCfg 非空时在 Start 时构建。
-	protocolCfg      *protocolconfig.File
-	protocolResolver *protocolresolver.ProtocolResolver
-	corrStore        *protocolcorrelation.Store
 
 	// 生命周期（atomic，无锁）
 	state atomic.Int32 // capture.State 的 int32 值
@@ -159,16 +149,6 @@ func (t *captureTask) Start() error {
 	if !t.state.CompareAndSwap(int32(capture.StateCreated), int32(capture.StateRunning)) {
 		return internalipc.ErrAlreadyStarted
 	}
-	if t.protocolCfg != nil {
-		r, err := protocolresolver.New(t.protocolCfg)
-		if err != nil {
-			t.state.Store(int32(capture.StateClosed))
-			return fmt.Errorf("build protocol resolver: %w", err)
-		}
-		t.protocolResolver = r
-		t.corrStore = protocolcorrelation.New(0)
-		t.logger.Info("protocol resolver enabled")
-	}
 	go t.run()
 	return nil
 }
@@ -210,11 +190,8 @@ func (t *captureTask) run() {
 	defer close(t.done) // 最后执行，确保 finalize 已完成
 
 	// 声明 flush 闭包捕获的局部变量（source 是 local variable，不放 struct）
-	// engine 需提前声明（flush 闭包引用），稍后在 dispatcher 创建后赋值。
-	// 早退路径（无 tcp 插件/dispatcher 错误）下 engine 为 nil，flush 需 nil guard。
 	var (
 		source      capture.Source
-		engine      *analyze.Engine
 		baseline    *state.BaselineManager
 		raws        []event.Packet
 		events      []*event.Event
@@ -239,14 +216,7 @@ func (t *captureTask) run() {
 
 	// flush 是闭包，捕获 source 和局部计数器，每次调用后更新 t.statsSnap。
 	flush := func(fctx context.Context, final bool) {
-		if engine != nil {
-			if final {
-				metrics = append(metrics, engine.FlushAll()...)
-			} else {
-				metrics = append(metrics, engine.Flush()...)
-			}
-		}
-	if len(raws) > 0 {
+		if len(raws) > 0 {
 		if err := t.sqliteStore.AppendRawPackets(fctx, raws); err != nil {
 			// 写入失败必须保留缓冲等下轮重试：旧写法失败也清空，
 			// 一次磁盘抖动就永久丢掉整个窗口的原始包。
@@ -415,8 +385,6 @@ func (t *captureTask) run() {
 				continue
 			}
 			t.logger.Debug("decoded packet v2", "event_id", ev.Identity.ID, "event_type", ev.Identity.Type, "session", ev.Identity.SessionID)
-			// Protocol Behavior Resolver：把 JSON 解释为通信语义（identity/role/correlation/delivery/error）。
-			t.enrichProtocol(ev)
 			events = append(events, ev)
 
 			// State 层投影：从 _state_changes 提取并做 before/after 基线富化
@@ -426,13 +394,6 @@ func (t *captureTask) run() {
 			} else {
 				enrichedSCs = append(enrichedSCs, scChanges...)
 			}
-
-			ms, err := engine.Process(t.ctx, ev)
-			if err != nil {
-				t.logger.Error("analyze event", "event_id", ev.Identity.ID, "error", err)
-				continue
-			}
-			metrics = append(metrics, ms...)
 		}
 	}
 
@@ -573,8 +534,6 @@ func (t *captureTask) run() {
 			disp.Store(d)
 			decoderClient = found
 			t.logger.Info("decoder attached via hot-reload", "plugin", t.getPlugin())
-			// Semantic Contract v1 §13：规则聚合字段 ↔ manifest aggregatable/groupable 对齐（仅告警）。
-			t.checkAggregationContract(found)
 
 			// 补解码：解码器刚接入，把积压（无解码器期间 / 解码队列满时缓存）
 			// 的包按序回灌。这里只做一次非阻塞回灌，后续由主循环每包/每 tick
@@ -586,7 +545,6 @@ func (t *captureTask) run() {
 			}
 		}
 	}
-	engine = analyze.NewEngine(t.rules, t.logger)
 	baseline = state.NewBaselineManager(nil)
 
 	sources, err := openCaptureSources(t.ctx, t.iface, t.port, t.pcapFile, t.liveCfg, t.mobileCfg, t.agentHub, t.sessionID, t.agentOnly)

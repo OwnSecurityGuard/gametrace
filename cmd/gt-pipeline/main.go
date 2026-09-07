@@ -18,7 +18,6 @@ import (
 	"database/sql"
 
 	pluginpb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
-	"gametrace/pkg/analyze"
 	"gametrace/pkg/auth"
 	"gametrace/pkg/capture/agent"
 	"gametrace/pkg/capture/agent/proto"
@@ -29,7 +28,6 @@ import (
 	"gametrace/pkg/logging"
 	"gametrace/pkg/plugin"
 	"gametrace/pkg/probe"
-	protocolconfig "gametrace/pkg/protocol/config"
 	"gametrace/pkg/store"
 	"gametrace/pkg/version"
 
@@ -45,8 +43,6 @@ func main() {
 	// CWD 既有数据探测（存在 control.sqlite/sessions/runs 时沿用 CWD，避免破坏
 	// 老用户数据发现）> ~/.gametrace。GT_HOME 显式设置时始终优先于 ~/.gametrace。
 	workDir := flag.String("workdir", ".", "working directory（显式传参优先；否则 GT_HOME > gametrace.yaml workdir > CWD 既有数据沿用 > ~/.gametrace）")
-	rulesPath := flag.String("rules", "", "rules.yaml path")
-	protocolPath := flag.String("protocol", "", "protocol.yaml path (Protocol Behavior Resolver)")
 	controlPath := flag.String("control", "", "control.sqlite path (default: <workdir>/control.sqlite)")
 	// 默认走 TCP 端口（:9091 注册, :9888 控制），兼容 Windows / 跨机器。
 	controlAddr := flag.String("control-addr", ":9888", "CaptureControl gRPC 监听地址（默认 :9888）")
@@ -159,25 +155,6 @@ func main() {
 		slog.Info("reconciled stale running sessions from previous run", "count", reconciled)
 	}
 
-	var rules []*analyze.CompiledRule
-	if *rulesPath != "" {
-		rules, err = config.LoadRules(*rulesPath)
-		if err != nil {
-			slog.Error("load rules", "error", err)
-			os.Exit(1)
-		}
-	}
-
-	// Protocol Behavior Resolver：可选。未配置 --protocol 时默认为空，事件不做语义富化。
-	var protocolCfg *protocolconfig.File
-	if *protocolPath != "" {
-		protocolCfg, err = protocolconfig.Load(*protocolPath)
-		if err != nil {
-			slog.Error("load protocol config", "error", err)
-			os.Exit(1)
-		}
-	}
-
 	// authResolver：env bootstrap（GT_AUTH_TOKENS）+ users 表（自助注册/邀请用户）
 	// 组合的 Bearer 鉴权，供 PluginRegistry 与 AgentIngest 两个 gRPC server 共用。
 	// 两者皆空时为匿名模式（拦截器放行、不注入 Principal），本地单机用法行为不变。
@@ -237,7 +214,7 @@ func main() {
 		}
 	}()
 
-	engine := newPipelineService(absWorkDir, controlStore, registry, rules, protocolCfg, *registryAddr, *dbDriver, *dbDSN)
+	engine := newPipelineService(absWorkDir, controlStore, registry, *registryAddr, *dbDriver, *dbDSN)
 	// 代理抓包租约：gt-singbox-agent 不再随 pipeline 常驻拉起，
 	// 由 CreateProxyLease 按用户/设备租约独立启动（见 proxy_lease.go）。
 	engine.agentBin = *agentBin

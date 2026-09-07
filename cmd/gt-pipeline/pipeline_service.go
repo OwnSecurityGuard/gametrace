@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"gametrace/pkg/analyze"
 	"gametrace/pkg/auth"
 	"gametrace/pkg/capture"
 	"gametrace/pkg/capture/agent"
@@ -19,7 +18,6 @@ import (
 	"gametrace/pkg/plugin"
 	"gametrace/pkg/probe"
 	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
-	protocolconfig "gametrace/pkg/protocol/config"
 	"gametrace/pkg/schema"
 	"gametrace/pkg/store"
 )
@@ -29,8 +27,6 @@ import (
 type pipelineService struct {
 	controlStore store.ControlStoreBackend
 	registry     *plugin.RegistryServer
-	rules        []*analyze.CompiledRule
-	protocolCfg  *protocolconfig.File // 可选：Protocol Behavior Resolver 配置
 	workDir      string
 	logger       *slog.Logger // 进程级 logger，带 component=pipeline_service
 
@@ -76,13 +72,11 @@ type pipelineService struct {
 }
 
 // newPipelineService 构造 pipelineService，不启动任何会话。
-func newPipelineService(workDir string, controlStore store.ControlStoreBackend, registry *plugin.RegistryServer, rules []*analyze.CompiledRule, protocolCfg *protocolconfig.File, registryAddr, dbDriver, dbDSN string) *pipelineService {
+func newPipelineService(workDir string, controlStore store.ControlStoreBackend, registry *plugin.RegistryServer, registryAddr, dbDriver, dbDSN string) *pipelineService {
 	return &pipelineService{
 		workDir:      workDir,
 		controlStore: controlStore,
 		registry:     registry,
-		rules:        rules,
-		protocolCfg:  protocolCfg,
 		logger:       logging.With("component", "pipeline_service"),
 		registryAddr: registryAddr,
 		dbDriver:     dbDriver,
@@ -255,8 +249,6 @@ func (s *pipelineService) StartSession(ctx context.Context, req capturecontrol.S
 		reresolve:    make(chan struct{}, 1),
 		registry:     s.registry,
 		owner:        auth.OwnerFrom(ctx),
-		rules:        s.rules,
-		protocolCfg:  s.protocolCfg,
 		logger:       s.logger.With("session_id", sessionID),
 		ctx:          sessionCtx,
 		cancel:       cancel,

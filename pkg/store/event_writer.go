@@ -26,9 +26,9 @@ func (s *SQLiteStore) AppendEvents(ctx context.Context, events []*event.Event) e
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO events (
 			id, session_id, type, schema_id, source, timestamp,
-			causation_id, correlation_id, origin_id, context, payload, created_at,
+			causation_id, correlation_id, origin_id, parent_id, context, payload, created_at,
 			scenario_id, replay_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare stmt: %w", err)
@@ -54,7 +54,7 @@ func (s *SQLiteStore) AppendEvents(ctx context.Context, events []*event.Event) e
 		timestamp := e.Identity.Timestamp.UnixNano()
 
 		// 处理可选的 Trace 字段
-		var causationID, correlationID, originID sql.NullString
+		var causationID, correlationID, originID, parentID sql.NullString
 		if e.Trace.CausationID != "" {
 			causationID = sql.NullString{String: string(e.Trace.CausationID), Valid: true}
 		}
@@ -63,6 +63,9 @@ func (s *SQLiteStore) AppendEvents(ctx context.Context, events []*event.Event) e
 		}
 		if e.Trace.OriginID != "" {
 			originID = sql.NullString{String: string(e.Trace.OriginID), Valid: true}
+		}
+		if e.Identity.ParentID != "" {
+			parentID = sql.NullString{String: string(e.Identity.ParentID), Valid: true}
 		}
 		var scenarioID, replayID sql.NullString
 		if e.Identity.ScenarioID != "" {
@@ -82,6 +85,7 @@ func (s *SQLiteStore) AppendEvents(ctx context.Context, events []*event.Event) e
 			causationID,
 			correlationID,
 			originID,
+			parentID,
 			contextBytes,
 			payloadBytes,
 			now,

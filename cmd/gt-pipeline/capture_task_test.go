@@ -45,7 +45,6 @@ func newTestCaptureTask(t *testing.T) *captureTask {
 		pcapFile:    filepath.Join(workDir, "nonexistent.pcap"),
 		start:       time.Now(),
 		registry:    mgr,
-		rules:       nil,
 		logger:      slog.Default(),
 		ctx:         ctx,
 		cancel:      cancel,

@@ -38,7 +38,7 @@ func (s *SQLiteStore) QueryEventPage(ctx context.Context, q EventPageQuery, limi
 	}
 
 	pageQuery := `SELECT id, session_id, type, schema_id, source, timestamp,
-	       causation_id, correlation_id, origin_id, context, payload` + s.eventSelectSuffix() + `
+	       causation_id, correlation_id, origin_id, parent_id, context, payload` + s.eventSelectSuffix() + `
 FROM events ` + where + `
 ORDER BY timestamp DESC LIMIT ? OFFSET ?`
 	pageArgs := append(append([]any{}, args...), limit, offset)
@@ -73,7 +73,7 @@ func (s *SQLiteStore) StreamEventsDesc(ctx context.Context, q EventPageQuery, ba
 	}
 	where, args := eventPageWhere(q)
 	streamQuery := `SELECT id, session_id, type, schema_id, source, timestamp,
-	       causation_id, correlation_id, origin_id, context, payload` + s.eventSelectSuffix() + `
+	       causation_id, correlation_id, origin_id, parent_id, context, payload` + s.eventSelectSuffix() + `
 FROM events ` + where + `
 ORDER BY timestamp DESC`
 

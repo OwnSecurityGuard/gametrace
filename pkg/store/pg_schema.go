@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS events (
     causation_id TEXT,
     correlation_id TEXT,
     origin_id   TEXT,
+    parent_id   TEXT,
     context     BYTEA NOT NULL,
     payload     BYTEA NOT NULL,
     created_at  BIGINT NOT NULL,

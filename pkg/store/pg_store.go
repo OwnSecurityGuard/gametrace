@@ -46,7 +46,7 @@ func (s *PGStore) eventSelectSuffix() string { return ", scenario_id, replay_id"
 
 // eventColsPG 是 events 表固定列清单（与 scanEvent 列顺序一致）。
 const eventColsPG = `id, session_id, type, schema_id, source, timestamp,
-		causation_id, correlation_id, origin_id, context, payload`
+		causation_id, correlation_id, origin_id, parent_id, context, payload`
 
 // pgArgs 累积 PostgreSQL 位置参数（$1、$2 …），避免手写编号出错。
 type pgArgs struct{ args []any }
@@ -147,12 +147,13 @@ func (s *PGStore) AppendEvents(ctx context.Context, events []*event.Event) error
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO events(id, session_id, type, schema_id, source, timestamp,
-			causation_id, correlation_id, origin_id, context, payload, created_at, scenario_id, replay_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+			causation_id, correlation_id, origin_id, parent_id, context, payload, created_at, scenario_id, replay_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		ON CONFLICT(id) DO UPDATE SET
 			session_id = EXCLUDED.session_id, type = EXCLUDED.type, schema_id = EXCLUDED.schema_id,
 			source = EXCLUDED.source, timestamp = EXCLUDED.timestamp, causation_id = EXCLUDED.causation_id,
-			correlation_id = EXCLUDED.correlation_id, origin_id = EXCLUDED.origin_id, context = EXCLUDED.context,
+			correlation_id = EXCLUDED.correlation_id, origin_id = EXCLUDED.origin_id, parent_id = EXCLUDED.parent_id,
+			context = EXCLUDED.context,
 			payload = EXCLUDED.payload, created_at = EXCLUDED.created_at, scenario_id = EXCLUDED.scenario_id,
 			replay_id = EXCLUDED.replay_id`)
 	if err != nil {
@@ -172,7 +173,7 @@ func (s *PGStore) AppendEvents(ctx context.Context, events []*event.Event) error
 		}
 		timestamp := e.Identity.Timestamp.UnixNano()
 
-		var causationID, correlationID, originID, scenarioID, replayID sql.NullString
+		var causationID, correlationID, originID, parentID, scenarioID, replayID sql.NullString
 		if e.Trace.CausationID != "" {
 			causationID = sql.NullString{String: string(e.Trace.CausationID), Valid: true}
 		}
@@ -181,6 +182,9 @@ func (s *PGStore) AppendEvents(ctx context.Context, events []*event.Event) error
 		}
 		if e.Trace.OriginID != "" {
 			originID = sql.NullString{String: string(e.Trace.OriginID), Valid: true}
+		}
+		if e.Identity.ParentID != "" {
+			parentID = sql.NullString{String: string(e.Identity.ParentID), Valid: true}
 		}
 		if e.Identity.ScenarioID != "" {
 			scenarioID = sql.NullString{String: e.Identity.ScenarioID, Valid: true}
@@ -192,6 +196,7 @@ func (s *PGStore) AppendEvents(ctx context.Context, events []*event.Event) error
 		if _, err := stmt.ExecContext(ctx,
 			string(e.Identity.ID), e.Identity.SessionID, string(e.Identity.Type), e.Identity.SchemaID,
 			string(e.Identity.Source), timestamp, causationID, correlationID, originID,
+			parentID,
 			contextBytes, payloadBytes, now, scenarioID, replayID,
 		); err != nil {
 			return fmt.Errorf("insert event[%d]: %w", i, err)

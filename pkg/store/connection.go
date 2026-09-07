@@ -296,7 +296,7 @@ func (s *SQLiteStore) QueryConnectionDetail(ctx context.Context, sessionID, conn
 func (s *SQLiteStore) QueryConnectionEvents(ctx context.Context, sessionID, connID string, limit, offset int) ([]*event.Event, error) {
 	query := `
 		SELECT e.id, e.session_id, e.type, e.schema_id, e.source, e.timestamp,
-		       e.causation_id, e.correlation_id, e.origin_id, e.context, e.payload` + s.eventSelectSuffix() + `
+		       e.causation_id, e.correlation_id, e.origin_id, e.parent_id, e.context, e.payload` + s.eventSelectSuffix() + `
 		FROM events e
 		JOIN event_index ei ON ei.event_id = e.id
 		WHERE ei.session_id = ? AND ei.conn_id = ?
