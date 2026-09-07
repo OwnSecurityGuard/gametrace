@@ -38,23 +38,23 @@ func TestCheckManifestVersion(t *testing.T) {
 	}{
 		{
 			name:    "matching v2",
-			apiVer:  "gta.decoder/v2",
+			apiVer:  "gt.decoder/v2",
 			wantErr: false,
 		},
 		{
 			name:    "matching v2 with minor",
-			apiVer:  "gta.decoder/v2.1",
+			apiVer:  "gt.decoder/v2.1",
 			wantErr: false,
 		},
 		{
 			name:    "major mismatch v1 vs v2",
-			apiVer:  "gta.decoder/v1",
+			apiVer:  "gt.decoder/v1",
 			wantErr: true,
 			errSub:  "version mismatch",
 		},
 		{
 			name:    "major mismatch v3 vs v2",
-			apiVer:  "gta.decoder/v3",
+			apiVer:  "gt.decoder/v3",
 			wantErr: true,
 			errSub:  "version mismatch",
 		},
@@ -72,7 +72,7 @@ func TestCheckManifestVersion(t *testing.T) {
 		},
 		{
 			name:    "invalid format empty version",
-			apiVer:  "gta.decoder/",
+			apiVer:  "gt.decoder/",
 			wantErr: true,
 			errSub:  "api_version",
 		},

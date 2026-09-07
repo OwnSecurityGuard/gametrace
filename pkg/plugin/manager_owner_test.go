@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 
 	"gametrace/pkg/auth"
 )
@@ -18,7 +18,7 @@ func ownerCtx(owner string) context.Context {
 	return auth.WithPrincipal(context.Background(), &auth.Principal{Owner: owner})
 }
 
-const sharedManifest = `api_version: gta.decoder/v2
+const sharedManifest = `api_version: gt.decoder/v2
 name: shared-decoder
 protocol: test_proto
 type: decoder

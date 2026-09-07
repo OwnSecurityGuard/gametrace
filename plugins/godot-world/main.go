@@ -1,16 +1,16 @@
 package main
 
 import (
-	"github.com/OwnSecurityGuard/gta-plugin-sdk"
-	"github.com/OwnSecurityGuard/gta-plugin-sdk/event"
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 )
 
 func main() {
 	sdk.RunRegisterLoop(decodePacket)
 }
 
-// decodePacket implements sdk.DecodeFuncV2 (gta.decoder/v2).
+// decodePacket implements sdk.DecodeFuncV2 (gt.decoder/v2).
 // req.Payload is a complete link-layer frame on pcap paths; we strip it with
 // framing.ExtractL7, reassemble the per-flow TCP stream, parse WebSocket frames,
 // then decode each Godot SceneMultiplayer packet.

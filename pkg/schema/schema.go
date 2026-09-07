@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	sdkschema "github.com/OwnSecurityGuard/gta-plugin-sdk/schema"
+	sdkschema "github.com/OwnSecurityGuard/gt-plugin-sdk/schema"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────

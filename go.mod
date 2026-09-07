@@ -4,13 +4,12 @@ go 1.25.5
 
 require (
 	github.com/Microsoft/go-winio v0.6.2
-	github.com/OwnSecurityGuard/gta-plugin-sdk v0.5.0
+	github.com/OwnSecurityGuard/gt-plugin-sdk v0.7.1
 	github.com/expr-lang/expr v1.17.0
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/mark3labs/mcp-go v0.56.0
-	github.com/tidwall/gjson v1.19.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	golang.org/x/sys v0.46.0
 	google.golang.org/grpc v1.71.0
@@ -20,7 +19,7 @@ require (
 )
 
 // 契约单向流动：SDK 定义，gametrace 消费。
-// 已切换为已发布的远程模块 gta-plugin-sdk v0.5.0（无 replace），
+// 已切换为已发布的远程模块 gt-plugin-sdk v0.7.1（无 replace），
 // 任何人 clone 后可直接构建。本地开发调试 SDK 时再临时加 replace。
 
 require (
@@ -34,6 +33,7 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
+	github.com/tidwall/gjson v1.19.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect

@@ -3,7 +3,7 @@ package schema
 import (
 	"testing"
 
-	sdkschema "github.com/OwnSecurityGuard/gta-plugin-sdk/schema"
+	sdkschema "github.com/OwnSecurityGuard/gt-plugin-sdk/schema"
 )
 
 func TestSchemaLookup(t *testing.T) {

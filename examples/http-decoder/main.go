@@ -8,7 +8,7 @@
 package main
 
 import (
-	"github.com/OwnSecurityGuard/gta-plugin-sdk"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk"
 )
 
 func main() {

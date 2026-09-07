@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 )
 
 // TestOfflineSession replays the captured session frames (dump_frames.py

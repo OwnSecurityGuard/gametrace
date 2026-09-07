@@ -11,10 +11,10 @@ import (
 	"github.com/google/gopacket/layers"
 	"google.golang.org/grpc/metadata"
 
-	sdk "github.com/OwnSecurityGuard/gta-plugin-sdk"
-	"github.com/OwnSecurityGuard/gta-plugin-sdk/contract"
-	"github.com/OwnSecurityGuard/gta-plugin-sdk/event"
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/contract"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 )
 
 // ---------------------------------------------------------------------------
@@ -329,7 +329,9 @@ func TestDecodedEventsConformToManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse plugin.yaml: %v", err)
 	}
-	if err := contract.CheckManifest(data); err != nil {
+	// v0.7.0 起 contract.CheckManifest 已移除；Check 现含 schema 声明层
+	// （v0.7.1 回归），形态校验由 ValidateManifest 承担，均覆盖于下方。
+	if err := sdk.ValidateManifest(m); err != nil {
 		t.Fatalf("manifest violates contract: %v", err)
 	}
 

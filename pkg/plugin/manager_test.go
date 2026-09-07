@@ -11,7 +11,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 )
 
 // fakeDecoderServer 是一个最小化的 Decoder gRPC 服务桩，仅用于让 RegistryServer.Register
@@ -44,7 +44,7 @@ func startFakeDecoder(t *testing.T) (string, func()) {
 	return sock, stop
 }
 
-const testManifest = `api_version: gta.decoder/v2
+const testManifest = `api_version: gt.decoder/v2
 name: test-decoder
 protocol: test_proto
 type: decoder
@@ -57,7 +57,7 @@ hints:
 // schema 声明非法（未知类型）必须被 PluginChecker.Check 拦下，
 // 且发生在拨号验证之前（无需真实 decoder socket 即可断言）。
 func TestRegister_RejectsBadSemanticDeclaration(t *testing.T) {
-	bad := `api_version: gta.decoder/v2
+	bad := `api_version: gt.decoder/v2
 name: bad-schema-decoder
 protocol: test_proto
 type: decoder
@@ -87,7 +87,7 @@ schemas:
 // 语义层不拦截（grpc.Dial 为惰性连接，socket 不存在不影响注册结果），
 // 注册成功并返回 instance_id。
 func TestRegister_AcceptsSemanticDeclaration(t *testing.T) {
-	good := `api_version: gta.decoder/v2
+	good := `api_version: gt.decoder/v2
 name: good-schema-decoder
 protocol: test_proto
 type: decoder
@@ -203,7 +203,7 @@ func TestRegistryServer_RegisterInvalidManifest(t *testing.T) {
 // TestRegistryServer_RegisterVersionMismatch 验证 major 版本不匹配时注册被拒绝。
 func TestRegistryServer_RegisterVersionMismatch(t *testing.T) {
 	s := NewRegistryServer(10)
-	mani := "api_version: gta.decoder/v1\nname: x\nprotocol: p\ntype: decoder\n"
+	mani := "api_version: gt.decoder/v1\nname: x\nprotocol: p\ntype: decoder\n"
 	_, err := s.Register(context.Background(), &pb.RegisterRequest{
 		SocketPath: "/nonexistent.sock",
 		Manifest:   []byte(mani),
@@ -223,8 +223,8 @@ func TestRegistryServer_FindByName(t *testing.T) {
 	defer stopB()
 
 	const (
-		maniA = "api_version: gta.decoder/v2\nname: a-decoder\nprotocol: tcp\ntype: decoder\n"
-		maniB = "api_version: gta.decoder/v2\nname: b-decoder\nprotocol: tcp\ntype: decoder\n"
+		maniA = "api_version: gt.decoder/v2\nname: a-decoder\nprotocol: tcp\ntype: decoder\n"
+		maniB = "api_version: gt.decoder/v2\nname: b-decoder\nprotocol: tcp\ntype: decoder\n"
 	)
 
 	s := NewRegistryServer(10)

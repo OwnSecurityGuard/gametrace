@@ -3,8 +3,8 @@ package plugin
 import (
 	"gametrace/pkg/schema"
 
-	sdk "github.com/OwnSecurityGuard/gta-plugin-sdk"
-	sdkschema "github.com/OwnSecurityGuard/gta-plugin-sdk/schema"
+	sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
+	sdkschema "github.com/OwnSecurityGuard/gt-plugin-sdk/schema"
 )
 
 // schema 包名与宿主 pkg/schema 冲突，schema 声明类型在此用局部别名引用。
@@ -13,7 +13,7 @@ type (
 	schemaType = sdkschema.Type
 )
 
-// Manifest 及其附属类型的定义已迁入 SDK（github.com/OwnSecurityGuard/gta-plugin-sdk）。
+// Manifest 及其附属类型的定义已迁入 SDK（github.com/OwnSecurityGuard/gt-plugin-sdk）。
 //
 // 迁移前 gametrace 与 SDK 各持有一份逐字段相同的定义，两边独立演进必然漂移：
 // 插件按 SDK 的结构产出 plugin.yaml，宿主按自己那份解析，字段一旦不同步就是
@@ -38,7 +38,7 @@ func ParseManifest(data []byte) (*Manifest, error) {
 
 // ValidateManifest 校验 manifest 必填字段与格式约束。
 //
-// 只校验形态（api_version 匹配 gta.decoder/v<digit>、name 为 kebab-case 等），
+// 只校验形态（api_version 匹配 gt.decoder/v<digit>、name 为 kebab-case 等），
 // 不判定版本兼容性——major 是否与宿主一致由 CheckManifestVersion 负责。
 func ValidateManifest(m *Manifest) error {
 	return sdk.ValidateManifest(m)

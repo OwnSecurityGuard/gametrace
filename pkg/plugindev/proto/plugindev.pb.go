@@ -105,7 +105,7 @@ type ScaffoldResponse struct {
 	Name      string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	OutputDir string                 `protobuf:"bytes,2,opt,name=output_dir,json=outputDir,proto3" json:"output_dir,omitempty"`
 	Created   []string               `protobuf:"bytes,3,rep,name=created,proto3" json:"created,omitempty"`
-	// sdk_version 是脚手架固定引用的 gta-plugin-sdk 版本（与开发指南/SDK 同版本发布）。
+	// sdk_version 是脚手架固定引用的 gt-plugin-sdk 版本（与开发指南/SDK 同版本发布）。
 	SdkVersion string `protobuf:"bytes,4,opt,name=sdk_version,json=sdkVersion,proto3" json:"sdk_version,omitempty"`
 	// framing_available 标记当前 SDK 版本是否包含 framing 包。为 false 时生成的
 	// main.go 不会 import framing，并显式标注「framing 不可用」，避免引用缺失的导入。

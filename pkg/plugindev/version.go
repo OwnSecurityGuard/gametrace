@@ -1,6 +1,6 @@
 package plugindev
 
-// SDKVersion 是脚手架固定引用的 gta-plugin-sdk 版本。
+// SDKVersion 是脚手架固定引用的 gt-plugin-sdk 版本。
 //
 // 这是「开发指南（SDK Agents.md）/ 脚手架 / SDK」三者同版本发布的单一事实来源：
 //   - go.mod.tmpl 通过 {{.SDKVersion}} 渲染 require 版本；

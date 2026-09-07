@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 )
 
 // regShared 按指定 owner 注册一个共享名插件（非隧道，注册即在线）。
@@ -62,7 +62,7 @@ func TestFindByNameAmong(t *testing.T) {
 	// 系统插件键是裸名；上面的 owner 键都在它前面。用不同的名字注册系统插件验证可见性。
 	if _, err := s.Register(context.Background(), &pb.RegisterRequest{
 		SocketPath: "unix:/nonexistent/decoder.sock",
-		Manifest: []byte(`api_version: gta.decoder/v2
+		Manifest: []byte(`api_version: gt.decoder/v2
 name: sys-decoder
 protocol: test_proto
 type: decoder

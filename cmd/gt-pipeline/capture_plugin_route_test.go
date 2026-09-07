@@ -9,7 +9,7 @@ import (
 
 	"gametrace/pkg/plugin"
 
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 	"google.golang.org/grpc"
 )
 
@@ -47,7 +47,7 @@ func registerFakePlugin(t *testing.T, s *plugin.RegistryServer, name, sock strin
 	t.Helper()
 	// api_version 必须是 v2：manager 的 CheckManifestVersion 要求 major 与
 	// ProtocolVersion 一致，写 v1 会在 Register 阶段直接被拒。
-	manifest := "api_version: gta.decoder/v2\nname: " + name + "\nprotocol: tcp\ntype: decoder\n"
+	manifest := "api_version: gt.decoder/v2\nname: " + name + "\nprotocol: tcp\ntype: decoder\n"
 	if _, err := s.Register(context.Background(), &pb.RegisterRequest{
 		SocketPath: sock,
 		Manifest:   []byte(manifest),

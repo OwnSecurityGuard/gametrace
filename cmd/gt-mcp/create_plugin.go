@@ -62,7 +62,7 @@ func (m *mcpCapture) handleCreatePlugin(ctx context.Context, req mcp.CallToolReq
 		"name":              resp.Name,
 		"output_dir":        resp.OutputDir, // 实际生成路径（已解析为绝对路径）
 		"created":           resp.Created,
-		"sdk_version":       resp.SdkVersion, // 实际引用的 gta-plugin-sdk 版本
+		"sdk_version":       resp.SdkVersion, // 实际引用的 gt-plugin-sdk 版本
 		"framing_available": resp.FramingAvailable,
 	}), nil
 }

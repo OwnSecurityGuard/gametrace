@@ -5,7 +5,7 @@ import (
 	"net"
 	"testing"
 
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 	"gametrace/pkg/auth"
 
 	"google.golang.org/grpc"
@@ -71,7 +71,7 @@ func regWithToken(t *testing.T, c pb.PluginRegistryClient, sock, name, token str
 	}
 	_, err := c.Register(ctx, &pb.RegisterRequest{
 		SocketPath: sock,
-		Manifest:   []byte("api_version: gta.decoder/v2\nname: " + name + "\nprotocol: test_proto\ntype: decoder\nhints:\n  - tcp\n"),
+		Manifest:   []byte("api_version: gt.decoder/v2\nname: " + name + "\nprotocol: test_proto\ntype: decoder\nhints:\n  - tcp\n"),
 	})
 	return err
 }

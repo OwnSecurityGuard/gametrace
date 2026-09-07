@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 	"gametrace/pkg/capture"
 	"gametrace/pkg/capture/agent"
 	"gametrace/pkg/capture/mobile"
@@ -59,6 +59,10 @@ type captureTask struct {
 	// 未接入认证时为空串 = 匿名/本地语义），用于 owner 作用域的插件路由。
 	owner  string
 	logger *slog.Logger // 带 session_id 等上下文字段的 logger
+
+	// sem 执行当前插件声明的语义规则（annotate/pair/extract，SDK Protocol
+	// Semantic Rule）。规则随解码器重建（注册/热切换）重新载入，见 run。
+	sem *semanticEngine
 
 	// 生命周期（atomic，无锁）
 	state atomic.Int32 // capture.State 的 int32 值
@@ -385,7 +389,12 @@ func (t *captureTask) run() {
 				continue
 			}
 			t.logger.Debug("decoded packet v2", "event_id", ev.Identity.ID, "event_type", ev.Identity.Type, "session", ev.Identity.SessionID)
+
+			// 语义规则（SDK）：插件声明、平台执行——annotate 打语义标签、
+			// pair 配对请求/响应、extract 拆出子事件。插件未声明时 no-op。
+			children := t.sem.enrichSemantics(ev)
 			events = append(events, ev)
+			events = append(events, children...)
 
 			// State 层投影：从 _state_changes 提取并做 before/after 基线富化
 			scChanges, err := baseline.Apply(ev, t.sessionID)
@@ -534,6 +543,8 @@ func (t *captureTask) run() {
 			disp.Store(d)
 			decoderClient = found
 			t.logger.Info("decoder attached via hot-reload", "plugin", t.getPlugin())
+			// 语义规则随插件一起换：重新载入 manifest.semantic_rules。
+			t.sem.refreshRules(t.owner, t.getPlugin())
 
 			// 补解码：解码器刚接入，把积压（无解码器期间 / 解码队列满时缓存）
 			// 的包按序回灌。这里只做一次非阻塞回灌，后续由主循环每包/每 tick
@@ -546,6 +557,11 @@ func (t *captureTask) run() {
 		}
 	}
 	baseline = state.NewBaselineManager(nil)
+
+	// 语义规则执行器：规则来自插件 manifest.semantic_rules，随解码器载入；
+	// 热切换解码器时重新载入（见 hot-reload 分支）。
+	t.sem = newSemanticEngine(t.logger, t.registry)
+	t.sem.refreshRules(t.owner, t.getPlugin())
 
 	sources, err := openCaptureSources(t.ctx, t.iface, t.port, t.pcapFile, t.liveCfg, t.mobileCfg, t.agentHub, t.sessionID, t.agentOnly)
 	if err != nil {

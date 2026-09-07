@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 	"gametrace/pkg/auth"
 	"gametrace/pkg/capture/agent"
 	"gametrace/pkg/internalipc/capturecontrol"
@@ -87,7 +87,7 @@ func TestPipelineService_StartSessionEmptySource(t *testing.T) {
 func TestPipelineService_GetPluginManifestAdmin(t *testing.T) {
 	s, _, _ := newTestPipelineService(t)
 
-	manifest := `api_version: gta.decoder/v2
+	manifest := `api_version: gt.decoder/v2
 name: alice-plugin
 protocol: test_proto
 type: decoder

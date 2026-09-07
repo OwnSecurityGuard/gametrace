@@ -7,9 +7,9 @@ import (
 	"math"
 	"time"
 
-	sdk "github.com/OwnSecurityGuard/gta-plugin-sdk"
-	sdkcontract "github.com/OwnSecurityGuard/gta-plugin-sdk/contract"
-	sdkevent "github.com/OwnSecurityGuard/gta-plugin-sdk/event"
+	sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
+	sdkcontract "github.com/OwnSecurityGuard/gt-plugin-sdk/contract"
+	sdkevent "github.com/OwnSecurityGuard/gt-plugin-sdk/event"
 
 	"gametrace/pkg/auth"
 	"gametrace/pkg/decode"

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 	"gametrace/pkg/event"
 
 	"google.golang.org/grpc"

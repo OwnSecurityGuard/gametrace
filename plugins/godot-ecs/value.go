@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/OwnSecurityGuard/gta-plugin-sdk/event"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
 )
 
 // num 标记一个"必须保持浮点"的数值。

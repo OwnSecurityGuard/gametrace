@@ -3,7 +3,7 @@ package plugin
 // 隧道服务端：把一条插件拨出的 Connect 双向流（TunnelFrame 帧）
 // 适配成 pb.DecoderClient，供 pkg/decode.Dispatcher 透明使用。
 //
-// 帧协议与 SDK（gta-plugin-sdk/tunnel.go 插件侧）逐字节对齐：
+// 帧协议与 SDK（gt-plugin-sdk/tunnel.go 插件侧）逐字节对齐：
 //
 //	服务端侧                                     插件侧
 //	Dispatcher ──DecodeV2()──▶ tunnelClient      tunnelServer ──▶ decodeFuncV2
@@ -23,7 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"

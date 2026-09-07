@@ -16,7 +16,7 @@ var createPluginTemplates embed.FS
 // RenderCreatePluginTemplates renders the create_plugin skeleton templates with
 // the provided data. Expects a map with keys: Name, Protocol, ProtocolVersion
 // (optional), Hints (optional []string). The generated project depends only on
-// the published github.com/OwnSecurityGuard/gta-plugin-sdk module — no
+// the published github.com/OwnSecurityGuard/gt-plugin-sdk module — no
 // source-relative replace directives — so it builds anywhere the SDK module is
 // reachable. Returns template filename -> rendered content.
 func RenderCreatePluginTemplates(data map[string]any) (map[string]string, error) {

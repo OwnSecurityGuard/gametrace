@@ -1,8 +1,9 @@
 // Package quality implements plugin.verify's statistical half (design §5).
 //
-// The SDK's contract checker owns single-message protocol self-consistency
-// (input_id echo, done lifecycle, payload non-empty) — it can run offline in a
-// plugin's own unit tests. This package owns the batch statistical quality:
+// Single-message protocol self-consistency (done lifecycle, payload non-empty)
+// is enforced here since SDK v0.7.0 removed the runtime-layer checker; the
+// remaining SDK contract layers (semantic rule declaration + evaluation) still
+// run via contract.PluginChecker. This package owns the batch statistical
 // given a whole decode corpus it produces the gt-side QualityStats and merges
 // them with the SDK violations into a single plugindev.VerifyResult + verdict.
 //
@@ -15,8 +16,7 @@ import (
 	"math"
 	"regexp"
 
-	sdkcontract "github.com/OwnSecurityGuard/gta-plugin-sdk/contract"
-	sdkpb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	sdkcontract "github.com/OwnSecurityGuard/gt-plugin-sdk/contract"
 
 	"gametrace/pkg/plugindev"
 )
@@ -61,38 +61,42 @@ func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
 		return res
 	}
 
-	// 1) SDK contract violations — single-message protocol self-consistency.
+	// 1) 单消息协议自洽检查。SDK v0.7.0 移除了运行时层 CheckDecodeResponse，
+	// 其有效语义在此保留：非终止响应必须携带 event_type / schema_id / 非空 payload。
+	// （旧版 input_id 回显检查在本语料构造下恒真，无需保留。）
 	viol := map[string]*plugindev.Violation{}
 	var order []string
 	for _, io := range corpus {
-		req := &sdkpb.DecodeRequest{InputId: io.InputID}
-		resp := &sdkpb.DecodeResponseV2{
-			InputId:        io.InputID,
-			Done:           io.Done,
-			EventType:      io.EventType,
-			SchemaId:       io.SchemaID,
-			PayloadMsgpack: make([]byte, io.PayloadLen),
+		if io.Done {
+			continue
 		}
-		if err := sdkcontract.CheckDecodeResponse(req, resp); err != nil {
-			v, ok := err.(sdkcontract.Violation)
-			if !ok {
-				continue
-			}
-			if _, seen := viol[v.RuleID]; !seen {
-				viol[v.RuleID] = &plugindev.Violation{RuleID: v.RuleID}
-				order = append(order, v.RuleID)
-			}
-			e := viol[v.RuleID]
-			e.Count++
-			if e.Sample == "" {
-				e.Sample = v.Message
-			}
-			if spec, ok := sdkcontract.Default().RuleByID(v.RuleID); ok {
-				e.Topic = spec.Topic
-				e.Severity = string(spec.Severity)
-				e.Statement = spec.Statement
-				e.DocRef = spec.DocRef
-			}
+		var ruleID, msg string
+		switch {
+		case io.EventType == "":
+			ruleID, msg = "payload-non-empty", "non-final response requires event_type"
+		case io.SchemaID == "":
+			ruleID, msg = "payload-non-empty", "non-final response requires schema_id"
+		case io.PayloadLen == 0:
+			ruleID, msg = "payload-non-empty", "non-final response requires non-empty payload_msgpack"
+		default:
+			continue
+		}
+		if _, seen := viol[ruleID]; !seen {
+			viol[ruleID] = &plugindev.Violation{RuleID: ruleID, Severity: "error"}
+			order = append(order, ruleID)
+		}
+		e := viol[ruleID]
+		e.Count++
+		if e.Sample == "" {
+			e.Sample = msg
+		}
+		// 该规则属宿主运行时层，SDK contract.yaml 不再收录其 spec（v0.7.0 起
+		// 运行时检查移出 SDK），spec 命中时仅补充文档引用等元数据。
+		if spec, ok := sdkcontract.Default().RuleByID(ruleID); ok {
+			e.Topic = spec.Topic
+			e.Severity = string(spec.Severity)
+			e.Statement = spec.Statement
+			e.DocRef = spec.DocRef
 		}
 	}
 	for _, id := range order {

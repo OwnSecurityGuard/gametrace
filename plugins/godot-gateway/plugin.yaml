@@ -1,4 +1,4 @@
-api_version: gta.decoder/v2
+api_version: gt.decoder/v2
 name: godot-gateway
 protocol: godot-gateway
 protocol_version: "1"

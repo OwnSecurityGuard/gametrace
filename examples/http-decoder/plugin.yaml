@@ -5,7 +5,7 @@
 # 语义字段与 pkg/protocol 的 protocol.yaml（message.definitions / push / error）
 # 保持一致，供前端验证 message id / role / seq correlation / push / error 五类格式。
 
-api_version: gta.decoder/v2
+api_version: gt.decoder/v2
 name: http-decoder
 protocol: http
 protocol_version: "1.1"

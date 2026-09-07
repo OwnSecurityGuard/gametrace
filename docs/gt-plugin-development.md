@@ -32,7 +32,7 @@
 
 | 术语 | 说明 |
 |------|------|
-| `api_version` | 契约版本，固定为 `gta.decoder/v2` |
+| `api_version` | 契约版本，固定为 `gt.decoder/v2` |
 | `protocol` | 协议名称（slug），如 `http`、`dhcp` |
 | `protocol_version` | 协议版本，如 `1` |
 | `type` | 插件类型：`decoder`（数据解码） |
@@ -135,7 +135,7 @@ go build -o my-http-plugin .
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `api_version` | string | 固定为 `gta.decoder/v2` |
+| `api_version` | string | 固定为 `gt.decoder/v2` |
 | `name` | string | 插件唯一标识，建议格式 `{author}-{protocol}` |
 | `protocol` | string | 协议名称，slug 格式（小写字母/数字/连字符） |
 | `type` | string | 固定为 `decoder` |
@@ -152,7 +152,7 @@ go build -o my-http-plugin .
 ### 示例
 
 ```yaml
-api_version: gta.decoder/v2
+api_version: gt.decoder/v2
 name: gt-http
 protocol: http
 protocol_version: 1
@@ -174,7 +174,7 @@ manifest 在基础字段之外可声明语义契约。`contract:` 块声明契�
 随后 `schemas` / `states` 两段声明插件能产出什么：
 
 ```yaml
-api_version: gta.decoder/v2
+api_version: gt.decoder/v2
 name: game-decoder
 protocol: game
 type: decoder

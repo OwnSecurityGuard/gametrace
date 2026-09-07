@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 	"google.golang.org/grpc"
 )
 

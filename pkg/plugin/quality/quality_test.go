@@ -115,9 +115,8 @@ func TestVerifyViolationPayloadNonEmpty(t *testing.T) {
 	if v.Count != 1 {
 		t.Errorf("count = %d, want 1", v.Count)
 	}
-	if v.Topic != "encoding" {
-		t.Errorf("topic = %q, want encoding", v.Topic)
-	}
+	// topic：payload-non-empty 属宿主运行时层，SDK contract.yaml（v0.7.0 起）
+	// 不再收录其 spec，因此 topic 为空是预期行为，此处不再断言。
 	// error 级违规 -> 整体 fail。
 	if res.Verdict != "fail" {
 		t.Fatalf("verdict = %q, want fail", res.Verdict)

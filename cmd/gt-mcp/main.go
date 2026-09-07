@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/OwnSecurityGuard/gta-plugin-sdk/contract"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/contract"
 	"github.com/expr-lang/expr"
 	"github.com/expr-lang/expr/vm"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -2641,7 +2641,7 @@ func main() {
 	), capture.handleListPlugins)
 
 	s.AddTool(mcp.NewTool("create_plugin",
-		mcp.WithDescription("Scaffold a new decoder plugin project (plugin.yaml + main.go + go.mod) from templates. The skeleton registers itself via github.com/OwnSecurityGuard/gta-plugin-sdk. IMPORTANT: the generated decoder receives a COMPLETE link-layer frame (not L7) for pcap sources — when the pinned SDK ships the framing package, the scaffold uses framing.ExtractL7 + framing.Reassembler; otherwise it is explicitly marked framing-unavailable. Returns the actual output_dir (absolute), the exact sdk_version pinned, and whether framing is available. Ready to compile after adjusting the replace path (point it at the local gta-plugin-sdk repo or the published remote module)."),
+		mcp.WithDescription("Scaffold a new decoder plugin project (plugin.yaml + main.go + go.mod) from templates. The skeleton registers itself via github.com/OwnSecurityGuard/gt-plugin-sdk. IMPORTANT: the generated decoder receives a COMPLETE link-layer frame (not L7) for pcap sources — when the pinned SDK ships the framing package, the scaffold uses framing.ExtractL7 + framing.Reassembler; otherwise it is explicitly marked framing-unavailable. Returns the actual output_dir (absolute), the exact sdk_version pinned, and whether framing is available. Ready to compile after adjusting the replace path (point it at the local gt-plugin-sdk repo or the published remote module)."),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Plugin name, kebab-case, e.g. my-game-decoder")),
 		mcp.WithString("protocol", mcp.Required(), mcp.Description("Protocol the plugin decodes, e.g. my_game")),
 		mcp.WithString("protocol_version", mcp.Description("Optional protocol version, e.g. game/v3")),

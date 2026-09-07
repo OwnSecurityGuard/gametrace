@@ -11,8 +11,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/OwnSecurityGuard/gta-plugin-sdk/framing"
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/framing"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 )
 
 const worldPort = 8087

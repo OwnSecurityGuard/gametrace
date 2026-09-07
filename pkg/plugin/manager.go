@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	sdkcontract "github.com/OwnSecurityGuard/gta-plugin-sdk/contract"
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	sdkcontract "github.com/OwnSecurityGuard/gt-plugin-sdk/contract"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 	"gametrace/pkg/auth"
 	"gametrace/pkg/schema"
 

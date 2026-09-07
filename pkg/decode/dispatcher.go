@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 	"gametrace/pkg/capture"
 	"gametrace/pkg/event"
 	"gametrace/pkg/schema"

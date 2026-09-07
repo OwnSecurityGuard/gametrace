@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/OwnSecurityGuard/gta-plugin-sdk/framing"
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/framing"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 )
 
 // maxStreamBytes caps per-flow reassembly memory. A flow whose bytes never

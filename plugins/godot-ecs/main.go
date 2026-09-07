@@ -3,9 +3,9 @@ package main
 import (
 	"os"
 
-	"github.com/OwnSecurityGuard/gta-plugin-sdk"
-	"github.com/OwnSecurityGuard/gta-plugin-sdk/event"
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 )
 
 func main() {
@@ -31,7 +31,7 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// decodePacket 实现 sdk.DecodeFuncV2（gta.decoder/v2）。
+// decodePacket 实现 sdk.DecodeFuncV2（gt.decoder/v2）。
 // req.Payload 在 pcap 路径下是完整链路层帧，先经 framing.ExtractL7 剥头、
 // Reassembler 重组，再按 [4B 长度][JSON] 切帧解码。
 func decodePacket(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error {

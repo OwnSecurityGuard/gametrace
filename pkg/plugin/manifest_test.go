@@ -6,8 +6,8 @@ import (
 
 	"gametrace/pkg/schema"
 
-	sdk "github.com/OwnSecurityGuard/gta-plugin-sdk"
-	sdkschema "github.com/OwnSecurityGuard/gta-plugin-sdk/schema"
+	sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
+	sdkschema "github.com/OwnSecurityGuard/gt-plugin-sdk/schema"
 )
 
 // Manifest 的解析与字段校验现由 SDK 单一持有，其单元测试也在 SDK
@@ -32,7 +32,7 @@ func TestManifestIsSDKAlias(t *testing.T) {
 
 func TestManifestE2E_FullFlow(t *testing.T) {
 	// 模拟插件传给 Register RPC 的 plugin.yaml 原文
-	yamlContent := `api_version: gta.decoder/v2
+	yamlContent := `api_version: gt.decoder/v2
 name: lol-decoder
 protocol: lol
 type: decoder
@@ -78,7 +78,7 @@ meta:
 // 职责边界：api_version 形态合法但 major 不匹配时，
 // ValidateManifest 必须放行，CheckManifestVersion 必须拦下。
 func TestManifestE2E_VersionMismatch(t *testing.T) {
-	yamlContent := `api_version: gta.decoder/v1
+	yamlContent := `api_version: gt.decoder/v1
 name: future-decoder
 protocol: future
 type: decoder
@@ -111,7 +111,7 @@ type: decoder
 // 必须走 ParseManifest 而不是直接构造 Manifest：遗留块的升格发生在 ParseManifest
 // 内部，生产上所有 Manifest 都出自这条路径，绕过它就测不到真实行为。
 func TestToSchemaRegistry(t *testing.T) {
-	yamlContent := `api_version: gta.decoder/v2
+	yamlContent := `api_version: gt.decoder/v2
 name: lol-decoder
 protocol: lol
 type: decoder
