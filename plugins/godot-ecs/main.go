@@ -19,7 +19,7 @@ func main() {
 		// token 来源：优先 GT_AUTH_TOKEN 环境变量（gt-agent 托管模式会注入）；
 		// 回退到 zzz 的自助注册 token——IDE go run 不好传 env，先保住插件归属，
 		// 换正式身份/改用脚本启动时删掉回退值。（SDK 侧同样有 env 回退逻辑。）
-		AuthToken: envOr("GT_AUTH_TOKEN", "gt_b8f3ffe5e91fce6b785e8d728d541492359e88027e388c14"),
+		AuthToken: envOr("GT_AUTH_TOKEN", "gt_tok_change_me"),
 	})
 }
 

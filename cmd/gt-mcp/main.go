@@ -2796,7 +2796,8 @@ func main() {
 	), capture.handleProbeImportArchive)
 
 	s.AddTool(mcp.NewTool("get_registry_addr",
-		mcp.WithDescription("Return the registry address the pipeline is currently listening on (its -registry-addr, e.g. :9091). Plugins MUST connect here by setting GT_REGISTRY_ADDR at startup; this tool removes the guesswork of reading pipeline startup logs. Use it to learn where a freshly launched plugin should register, or to confirm activate_plugin's resolved address."),
+		mcp.WithDescription("Return the registry address a plugin should connect to when registering (set it as GT_REGISTRY_ADDR at startup). Two addresses are returned: registry_addr is the externally reachable one the caller should actually use (honours GT_PUBLIC_HOST / GT_PUBLIC_REGISTRY_PORT, else inferred from how the caller reached the server); listen_addr is what the pipeline process itself binds (e.g. :9091) — diagnostic only, since under docker/NAT that port is not published and is unreachable from outside. Pass host (e.g. window.location.hostname) when GT_PUBLIC_HOST is unset."),
+		mcp.WithString("host", mcp.Description("Optional: host/IP the caller used to reach this server (used to infer the registry address when GT_PUBLIC_HOST is unset)")),
 	), capture.handleGetRegistryAddr)
 
 	s.AddTool(mcp.NewTool("get_agent_download_options",

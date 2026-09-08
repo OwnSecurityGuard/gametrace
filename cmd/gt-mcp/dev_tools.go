@@ -195,9 +195,14 @@ func (m *mcpCapture) handleDeactivatePlugin(ctx context.Context, req mcp.CallToo
 	return successResult(out), nil
 }
 
-// handleGetRegistryAddr 返回当前 pipeline 的 registry 地址，插件启动时需将其写入
-// GT_REGISTRY_ADDR。此前只能从 pipeline 启动日志人工获取，现由 pipeline 通过
-// GetRegistryAddr RPC 直接暴露，gt-mcp 原样转发。
+// handleGetRegistryAddr 返回插件注册所需的 registry 地址（写入 GT_REGISTRY_ADDR）。
+//
+// 两个地址必须分开给：
+//   - listen_addr：pipeline 进程自己 bind 的地址，由 GetRegistryAddr RPC 原样拿到
+//     （容器内视角，形如 :9091）。docker / NAT 部署下这个端口没有对外发布，
+//     外面连不到，所以只能当诊断信息，不能给插件用。
+//   - registry_addr：调用方真正该连的地址，走 advertisedAddrs（GT_PUBLIC_HOST /
+//     GT_PUBLIC_REGISTRY_PORT 显式通告优先，否则按请求 Host 回推）。
 func (m *mcpCapture) handleGetRegistryAddr(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if m.pipelineClient == nil {
 		return errorResult(fmt.Errorf("pipeline client not available")), nil
@@ -206,15 +211,18 @@ func (m *mcpCapture) handleGetRegistryAddr(ctx context.Context, req mcp.CallTool
 	if err != nil {
 		return errorResult(fmt.Errorf("get registry addr: %w", err)), nil
 	}
-	addr := resp.GetRegistryAddr()
-	out := map[string]any{
-		"registry_addr": addr,
-	}
-	if addr == "" {
+	listenAddr := resp.GetRegistryAddr()
+	out := map[string]any{"listen_addr": listenAddr}
+	if listenAddr == "" {
+		out["registry_addr"] = ""
 		out["message"] = "pipeline returned an empty registry address (registry not configured via -registry-addr)"
-	} else {
-		out["message"] = "set GT_REGISTRY_ADDR=" + addr + " when launching plugins"
+		return successResult(out), nil
 	}
+	registry, _, src := m.advertisedAddrs(ctx, req.GetString("host", ""))
+	out["registry_addr"] = registry
+	out["addr_source"] = string(src)
+	out["message"] = "set GT_REGISTRY_ADDR=" + registry + " when launching plugins" +
+		" (listen_addr is the in-container bind address; it is usually unreachable from outside under docker/NAT)"
 	return successResult(out), nil
 }
 

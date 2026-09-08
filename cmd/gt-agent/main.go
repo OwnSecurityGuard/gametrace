@@ -43,6 +43,12 @@ type embeddedAgentConfig struct {
 	BindPlugins  []string `json:"plugin_names,omitempty"`  // 仅托管这些名字的本地插件（空=托管全部）
 }
 
+// supplied 把固化配置（下载产物 / 启动码领取结果）转成「本次下发的身份与回连」。
+func (e embeddedAgentConfig) supplied() suppliedConfig {
+	return suppliedConfig{token: e.Token, server: e.Server,
+		registry: e.RegistryAddr, ingest: e.IngestAddr}
+}
+
 func main() {
 	var (
 		server        string
@@ -106,6 +112,7 @@ func main() {
 	// 用码自动领取 server/token/session 等作为默认配置。
 	hasClaimed := false
 	var bindFromClaim []string
+	dirty := false
 	effServer := firstNonEmpty(server, cfg.Server, embeddedStr(embedded, "server"))
 	effToken := firstNonEmpty(token, cfg.UserToken, embeddedStr(embedded, "token"))
 	if accessCode != "" || (effServer == "" && effToken == "" && !hasEmbedded) {
@@ -137,17 +144,10 @@ func main() {
 			bpf = claimed.BPF
 		}
 		// 领取到的身份与回连落 probe.json（此后改参走控制面，不再依赖启动码）。
-		if cfg.Server == "" {
-			cfg.Server = claimed.Server
-		}
-		if cfg.UserToken == "" {
-			cfg.UserToken = claimed.Token
-		}
-		if cfg.RegistryAddr == "" {
-			cfg.RegistryAddr = claimed.RegistryAddr
-		}
-		if cfg.IngestAddr == "" {
-			cfg.IngestAddr = claimed.IngestAddr
+		// 启动码是"这台机器现在归谁"的显式意图：与 probe.json 里上次留下的凭证
+		// 冲突时以码为准并作废旧凭证，否则会连到上一个身份/上一个服务端上去。
+		if claimed.supplied().adopt(cfg, "access code") {
+			dirty = true
 		}
 		hasClaimed = true
 		slog.Info("access code claimed", "code", accessCode, "session", claimed.SessionID)
@@ -155,11 +155,11 @@ func main() {
 
 	// 命令行 flag 非空时覆盖 probe.json 并写回（首启引导一次性生效；
 	// 此后一切改参走本地控制面 / 远端指令，不再需要命令行）。
-	dirty := false
-	mergeFlag(&cfg.Server, server, &dirty)
-	mergeFlag(&cfg.UserToken, token, &dirty)
-	mergeFlag(&cfg.RegistryAddr, registryAddr, &dirty)
-	mergeFlag(&cfg.IngestAddr, ingestAddr, &dirty)
+	// 身份或服务端被 flag 换掉时同样作废旧凭证（见 suppliedConfig.adopt）。
+	if (suppliedConfig{token: token, server: server,
+		registry: registryAddr, ingest: ingestAddr}).adopt(cfg, "command-line flag") {
+		dirty = true
+	}
 	// 固化配置仍是最初的兜底（仅当 cfg 仍为空）。
 	if hasEmbedded && embedded != nil {
 		if cfg.Server == "" {
@@ -183,6 +183,11 @@ func main() {
 		}
 		if spoolDir == "" {
 			spoolDir = embedded.SpoolDir
+		}
+		// 下载产物带来的身份/回连优先于 probe.json 里上次留下的：重下一次探针
+		// 不会删 probe.json，沿用旧值会让新用户下的探针仍归上一任 owner。
+		if embedded.supplied().adopt(cfg, "embedded config") {
+			dirty = true
 		}
 	}
 	if dirty {

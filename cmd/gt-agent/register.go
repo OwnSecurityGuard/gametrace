@@ -10,14 +10,17 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"gametrace/pkg/capture/agent/proto"
 	"gametrace/pkg/version"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // ensureRegistered 确保探针已注册：有凭证直接返回；无凭证且有用户 token 时注册。
@@ -50,7 +53,7 @@ func registerProbe(ctx context.Context, cfg *agentConfig, ingestAddr, prevID str
 
 	hostname, _ := os.Hostname()
 	client := proto.NewAgentControlClient(conn)
-	ack, err := client.RegisterProbe(regCtx, &proto.RegisterProbeRequest{
+	req := &proto.RegisterProbeRequest{
 		Hostname:     hostname,
 		Os:           runtime.GOOS,
 		Arch:         runtime.GOARCH,
@@ -58,13 +61,23 @@ func registerProbe(ctx context.Context, cfg *agentConfig, ingestAddr, prevID str
 		Capabilities: []string{"pcap", "plugin_host"},
 		Name:         cfg.Name,
 		PrevProbeId:  prevID,
-	})
+	}
+	ack, err := client.RegisterProbe(regCtx, req)
+	if err != nil && prevID != "" && isForeignProbeError(err) {
+		// 旧记录还在但归别人所有（换人重装 / 服务端恢复过旧库）：带 prev_probe_id
+		// 会被服务端拒绝，去掉它重来一次，按当前身份领一个新 id——否则这台机器
+		// 会永远卡在"注册被拒 → 连不上"。
+		slog.Warn("previous probe record belongs to another user; registering as a new probe",
+			"prev_probe_id", prevID)
+		req.PrevProbeId = ""
+		ack, err = client.RegisterProbe(regCtx, req)
+	}
 	if err != nil {
 		return false, fmt.Errorf("register probe: %w", err)
 	}
 	newID := ack.GetProbeId()
 	if prevID != "" && newID != prevID {
-		slog.Warn("probe re-registered with new id (old record lost server-side)",
+		slog.Warn("probe re-registered with a new id (old record not reusable)",
 			"old_probe_id", prevID, "new_probe_id", newID)
 	}
 	cfg.ProbeID = newID
@@ -74,4 +87,14 @@ func registerProbe(ctx context.Context, cfg *agentConfig, ingestAddr, prevID str
 	}
 	slog.Info("probe registered", "probe_id", cfg.ProbeID)
 	return true, nil
+}
+
+// isForeignProbeError 判断注册被拒是否因为「旧记录归别的 owner」。
+// 服务端原文见 pkg/probe/server.go RegisterProbe：
+// "probe %s belongs to another user; revoke it first"。
+func isForeignProbeError(err error) bool {
+	if status.Code(err) != codes.PermissionDenied {
+		return false
+	}
+	return strings.Contains(status.Convert(err).Message(), "belongs to another user")
 }

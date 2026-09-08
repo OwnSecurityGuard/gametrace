@@ -11,8 +11,11 @@ package main
 // 由平台指派或本地控制面临时给定，不落 probe.json。
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -83,10 +86,87 @@ func saveAgentConfig(cfg *agentConfig) error {
 	return os.Rename(tmp, configPath())
 }
 
-// mergeFlag 首启引导合并：flag 非空时覆盖并标记 dirty（由调用方写回）。
-func mergeFlag(dst *string, flag string, dirty *bool) {
-	if flag != "" && flag != *dst {
-		*dst = flag
-		*dirty = true
+// suppliedConfig 是「本次下发」的身份与回连目标：命令行 flag / 下载产物里的
+// config.embedded.json / 启动码领取结果。它们是同一样东西的三种来源。
+type suppliedConfig struct {
+	token    string
+	server   string
+	registry string
+	ingest   string
+}
+
+// adopt 把下发的身份与回连目标写进 cfg。
+//
+// 为什么下发的身份要**盖掉** probe.json：probe.json 在 UserConfigDir（见 configDir），
+// 重下一次探针、解压到新目录都不会删掉它。沿用上一次的 user_token 有两个后果：
+//  1. 用 B 的身份下载的探针仍然归 A（平台里看到的归属是错的）；
+//  2. 旧 probe_token 只对新身份/新服务端有效，首次回连必然被
+//     PermissionDenied 打回，靠自愈重注册才连上——表现就是"总要失败一次"。
+//
+// 下发值为空表示这次没给该项，不动；与现有值相同也不动（避免无谓重注册）。
+//
+// 返回 written=true 表示 cfg 被改写（调用方需落盘 probe.json）。凭证是否作废是
+// 另一件事：只有**顶掉了一个已有值**（换人 / 换服务端）才作废，首次把空字段
+// 填上不该动凭证——那时还没有凭证，或凭证就是本次身份发的。
+func (s suppliedConfig) adopt(cfg *agentConfig, reason string) (written bool) {
+	invalid := false
+	switch {
+	case s.token == "" || s.token == cfg.UserToken:
+		// 没给 / 和现有身份一样：不动。
+	case cfg.UserToken == "":
+		// 此前是匿名凭证（owner=local）：现在有了用户身份，旧凭证归属是错的。
+		cfg.UserToken = s.token
+		written = true
+		invalid = cfg.ProbeID != "" || cfg.ProbeToken != ""
+		if invalid {
+			slog.Warn("probe identity supplied; dropping anonymous credentials", "reason", reason)
+		}
+	default:
+		slog.Warn("probe identity replaced by supplied config; dropping stale credentials",
+			"reason", reason,
+			"old_token", tokenFingerprint(cfg.UserToken), "new_token", tokenFingerprint(s.token))
+		cfg.UserToken = s.token
+		written, invalid = true, true
 	}
+	// 回连轴：换了服务端，旧凭证那边不认。
+	for _, a := range []struct {
+		dst   *string
+		val   string
+		field string
+	}{
+		{&cfg.Server, s.server, "server"},
+		{&cfg.RegistryAddr, s.registry, "registry_addr"},
+		{&cfg.IngestAddr, s.ingest, "ingest_addr"},
+	} {
+		w, repl := adoptAddr(a.dst, a.val, a.field, reason)
+		written, invalid = written || w, invalid || repl
+	}
+	if invalid {
+		cfg.ProbeID, cfg.ProbeToken = "", ""
+	}
+	return written
+}
+
+// adoptAddr 写入单个回连字段。返回 (written, replaced)：
+// written 表示值被写进了 cfg（含首次填空），replaced 表示顶掉了原有值。
+func adoptAddr(dst *string, val, field, reason string) (written, replaced bool) {
+	if val == "" || val == *dst {
+		return false, false
+	}
+	replaced = *dst != ""
+	if replaced {
+		slog.Warn("probe server replaced by supplied config; dropping stale credentials",
+			"reason", reason, "field", field, "old", *dst, "new", val)
+	}
+	*dst = val
+	return true, replaced
+}
+
+// tokenFingerprint 只取凭证哈希前 8 位：日志里能分辨"换了哪个 token"，又不泄露明文。
+func tokenFingerprint(token string) string {
+	if token == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])[:8]
 }

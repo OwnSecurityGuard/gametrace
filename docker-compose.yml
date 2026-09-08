@@ -114,6 +114,13 @@ services:
       GT_CONTROL_ADDR: pipeline:9888
       # MCP HTTP/SSE 监听地址
       GT_MCP_ADDR: ${GT_MCP_ADDR:-:8781}
+      # 容器内可达的 registry 地址：Developer Plane（activate_plugin）在本容器内拉起
+      # 插件进程，并把 GT_REGISTRY_ADDR 注入给它。registry 实际在 pipeline 容器里，
+      # 不配这个变量插件就回退 SDK 默认 :9091 —— 那是 mcp 容器自己的 9091，什么都没
+      # 监听，插件必然注册失败并无限重试。
+      # 注意与下面的 GT_PUBLIC_REGISTRY_PORT 区分：那是给容器外的探针/插件看的宿主
+      # 发布端口（19091），这里是 compose 网络内地址（pipeline:9091）。
+      GT_REGISTRY_ADDR: ${GT_INTERNAL_REGISTRY_ADDR:-pipeline:9091}
       # CORS 允许的 Origin（逗号分隔）；留空不返回 CORS 头（同源用法不受影响）
       GT_MCP_ALLOWED_ORIGINS: ${GT_MCP_ALLOWED_ORIGINS:-}
       # 对外通告地址（远端探针回连用）：Docker / NAT / 公网部署下容器内地址不可达，
