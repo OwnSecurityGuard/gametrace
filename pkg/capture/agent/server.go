@@ -157,6 +157,12 @@ func (s *IngestServer) Push(stream proto.AgentIngest_PushServer) error {
 	)
 	slog.Debug("agent ingest stream opened", "stream", seq, "owner", owner, "peer", peerOf(stream))
 
+	// noSubWarned：本流已就"无订阅者丢包"告警过一次（每条流只报一次，
+	// 避免持续推流刷日志）。这个告警是"探针在抓包、平台却什么都看不到"的
+	// 唯一现场证据——包被 Hub 静默丢弃（会话 id 对不上 / 该会话的抓包任务
+	// 没在跑），没有它只能靠猜。
+	noSubWarned := false
+
 	// 会话绑定：优先用开流 metadata（零流量也能判定"已连接"）；旧版 agent 不带
 	// metadata 时退化为收到首个合法 batch 后按 batch 的 session_id 绑定。
 	// 绑定只做一次——一个 agent 进程只服务一个会话，后续 batch 的 session_id
@@ -206,6 +212,16 @@ func (s *IngestServer) Push(stream proto.AgentIngest_PushServer) error {
 		d, drBusy, drNoSub := s.hub.Deliver(sessionID, pkts)
 		delivered += d
 		dropped += drBusy + drNoSub
+		// 无订阅者丢包 = 本会话的 capture task 没在跑（没建会话 / 会话已关 / session_id 对不上）。
+		// 这是"探针在抓包、平台却什么都看不到"的唯一现场证据：包被 Hub 静默丢弃。
+		// 每条流只告警一次，避免持续推流刷日志。
+		if drNoSub > 0 && !noSubWarned {
+			noSubWarned = true
+			slog.Warn("agent ingest: packets dropped — no active subscriber for session",
+				"stream", seq, "session_id", sessionID,
+				"dropped", drNoSub,
+				"hint", "capture task for this session_id is not running (session not created, already closed, or session_id mismatch)")
+		}
 	}
 }
 

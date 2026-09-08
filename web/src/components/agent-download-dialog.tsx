@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { useAgentDownloadOptions, useListProbes } from "@/hooks/use-mcp";
 import { AccessCodePanel } from "@/components/access-code-panel";
-import { authHeaders } from "@/lib/auth";
+import { authHeaders, withTokenParam } from "@/lib/auth";
 import { toast } from "@/components/ui/toast";
 import type { AgentPlatform } from "@/types/agent";
 
@@ -106,12 +106,16 @@ export function AgentDownloadDialog({ open, onClose, onStartCapture }: AgentDown
       toast.error("服务端信息未就绪", "请稍后重试");
       return;
     }
+    // 只传平台：回连地址由服务端解析（GT_PUBLIC_HOST 或请求回推），token 走请求头。
+    const url = `/download/agent?platform=${encodeURIComponent(
+      `${selectedPlatform.os}/${selectedPlatform.arch}`,
+    )}`;
+    const markAttached = () => {
+      knownProbeIds.current = new Set(probes.map((p) => p.probe_id));
+      setPhase("awaiting");
+    };
     setBusy(true);
     try {
-      // 只传平台：回连地址由服务端解析（GT_PUBLIC_HOST 或请求回推），token 走请求头。
-      const url = `/download/agent?platform=${encodeURIComponent(
-        `${selectedPlatform.os}/${selectedPlatform.arch}`,
-      )}`;
       const resp = await fetch(url, { headers: authHeaders() });
       if (!resp.ok) {
         const txt = (await resp.text().catch(() => "")) || `HTTP ${resp.status}`;
@@ -129,11 +133,28 @@ export function AgentDownloadDialog({ open, onClose, onStartCapture }: AgentDown
       a.remove();
       URL.revokeObjectURL(objUrl);
 
-      knownProbeIds.current = new Set(probes.map((p) => p.probe_id));
-      setPhase("awaiting");
+      markAttached();
       toast.success("探针已下载", "解压运行后即可在「开始抓包」里选到这台机器");
     } catch (e) {
-      toast.error("下载失败", e instanceof Error ? e.message : String(e));
+      // fetch 通道失败（网络层错误，如大响应经代理/中继链路被截断）：退回浏览器
+      // 原生下载——走下载管理器的另一条传输路径；凭证经查询参数携带（anchor 无法
+      // 自定义请求头，withTokenParam 是 SSE 等无头传输的既有约定）。
+      try {
+        const a = document.createElement("a");
+        a.href = withTokenParam(url);
+        a.download = `gt-agent-${selectedPlatform.os}-${selectedPlatform.arch}.zip`;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        markAttached();
+        toast.info(
+          "已切换为浏览器直接下载",
+          "fetch 通道失败，已自动改走原生下载；如未开始请检查网络后重试",
+        );
+      } catch {
+        toast.error("下载失败", e instanceof Error ? e.message : String(e));
+      }
     } finally {
       setBusy(false);
     }

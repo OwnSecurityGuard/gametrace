@@ -198,10 +198,8 @@ func resolveDefaultIface() (string, error) {
 				"安装时勾选 WinPcap API-compatible Mode）；已安装的话尝试重装并重启")
 	}
 	// 1) 出口网卡：UDP 拨号探测出口 IP（不真正发包），按 IP 精确匹配设备。
-	if ipStr := outboundLocalIP(); ipStr != "" {
-		if dev := pcapDeviceByIP(net.ParseIP(ipStr)); dev != "" {
-			return dev, nil
-		}
+	if dev := egressIface(); dev != "" {
+		return dev, nil
 	}
 	// 2) 兜底：首个绑定了 IPv4 的设备。
 	var withIPv4 []string
@@ -222,6 +220,32 @@ func resolveDefaultIface() (string, error) {
 		fmt.Fprintf(&sb, "\n  %s (%s)", d.Name, d.Description)
 	}
 	return "", fmt.Errorf("pcap 设备均未绑定 IPv4，无法自动选择网卡：%s", sb.String())
+}
+
+// egressIface 返回本机出口 IP 所在网卡的 pcap 设备名；取不到返回空串。
+//
+// 用途：探针未指定抓包网卡时（平台下发 AssignCapture 的 iface 为空是最常见
+// 情形——跨机器部署时网卡名无法预知）用它自动选定网卡，而不是报
+// "capture requires an interface"。
+//
+// 做法：UDP 拨号到公网地址（不发实际报文）拿到内核选定的出口 IP，再到 pcap
+// 设备清单里按 IP 反查设备名。Windows 下这层反查是必需的：net.Interfaces 给的是
+// 友好名（WLAN/以太网），npcap 只认 \Device\NPF_{GUID}。
+// 取不到（无默认路由 / 出口网卡未绑定 IPv4 / npcap 未装）返回空串，由调用方回落。
+func egressIface() string {
+	ipStr := outboundLocalIP()
+	if ipStr == "" {
+		slog.Debug("egress iface: no outbound route detected")
+		return ""
+	}
+	dev := pcapDeviceByIP(net.ParseIP(ipStr))
+	if dev == "" {
+		slog.Warn("egress iface: no pcap device holds the outbound ip (npcap/winpcap missing or ip changed)",
+			"ip", ipStr)
+		return ""
+	}
+	slog.Info("egress iface resolved", "ip", ipStr, "device", dev)
+	return dev
 }
 
 // outboundLocalIP 用 UDP 拨号到公网地址探测本机出口网卡 IP（不真正发包）。

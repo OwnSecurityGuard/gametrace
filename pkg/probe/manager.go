@@ -150,6 +150,17 @@ func (m *Manager) Online(probeID string) bool {
 func (m *Manager) nextCmdID() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.nextCmdIDLocked()
+}
+
+// nextCmdIDLocked 是 nextCmdID 的锁内版本。
+//
+// 存在的理由：syncLocked 一律在调用方已持有 m.mu 时被调用（StartCapture /
+// StopCapture / Retry / openConn / OnSessionClosed），而 Go 的 Mutex 不可重入——
+// 在锁内调 nextCmdID 会自锁死整个 CaptureControl handler（表现为「点了抓包，
+// 探针毫无反应」）。凡是 m.mu 已持有的路径必须用这个版本。
+// 调用方必须持有 m.mu。
+func (m *Manager) nextCmdIDLocked() string {
 	m.seq++
 	return fmt.Sprintf("cmd-%d", m.seq)
 }
@@ -207,7 +218,7 @@ func (m *Manager) syncLocked(probeID string, force bool) {
 	if hasDesired && d.SessionID != "" {
 		if force || !capturing || lt.LastSessionID != d.SessionID {
 			m.sendLockedNoWait(probeID, &proto.Command{
-				Id: m.nextCmdID(),
+				Id: m.nextCmdIDLocked(),
 				Payload: &proto.Command_Assign{
 					Assign: &proto.AssignCapture{
 						SessionId: d.SessionID,
@@ -225,7 +236,7 @@ func (m *Manager) syncLocked(probeID string, force bool) {
 	}
 	if !hasDesired && capturing {
 		m.sendLockedNoWait(probeID, &proto.Command{
-			Id:      m.nextCmdID(),
+			Id:      m.nextCmdIDLocked(),
 			Payload: &proto.Command_Stop{Stop: &proto.StopCaptureCmd{}},
 		})
 	}
@@ -510,7 +521,7 @@ func (m *Manager) QueryArchive(ctx context.Context, probeID string, fromMs, toMs
 	}
 	old := m.queryWait[probeID]
 	m.queryWait[probeID] = ch
-	cmd := &proto.Command{Id: m.nextCmdID(), Payload: &proto.Command_ArchiveQuery{
+	cmd := &proto.Command{Id: m.nextCmdIDLocked(), Payload: &proto.Command_ArchiveQuery{
 		ArchiveQuery: &proto.ArchiveQuery{FromUnix: fromMs / 1000, ToUnix: toMs / 1000},
 	}}
 	select {

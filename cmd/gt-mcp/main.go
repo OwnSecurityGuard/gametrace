@@ -2849,7 +2849,7 @@ func main() {
 	// 代理抓包专有：连接/流/帧查询（Connections 页面数据源）。
 	// 与 list_decoded_data 分离：这些工具按 conn_id 聚合，是移动代理抓包的核心入口。
 	s.AddTool(mcp.NewTool("list_connections",
-		mcp.WithDescription("List proxy capture connections aggregated by conn_id (newest first). Each row has client/server endpoints, protocol, source, start/end time, duration, event count and frame count. Requires a mobile proxy capture session."),
+		mcp.WithDescription("List capture connections aggregated by conn_id (newest first). Each row has client/server endpoints, protocol, source, start/end time, duration, event count and frame count. Works for mobile proxy, gt-agent probe and local NIC captures — any session whose packets carry conn_id (derived from the TCP 5-tuple when absent)."),
 		mcp.WithNumber("limit", mcp.DefaultNumber(100), mcp.Description("Max rows to return")),
 		mcp.WithNumber("offset", mcp.DefaultNumber(0), mcp.Description("Offset")),
 		mcp.WithString("session_id", mcp.Description("Optional session ID to query; defaults to current session")),

@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -304,10 +303,12 @@ func buildAgentZip(binPath string, cfgJSON []byte) ([]byte, error) {
 // 探针接入后由 Web 通过 probe_start_capture 下发（想改就改，不必重下探针）。
 // 同理这里不开会话：会话是「开始抓包」时创建的。
 //
-// serveAgentBinaryByPlatform 按平台下发预置二进制 zip（占位 config.embedded.json），
-// 用于启动码接入：配置由 /access/claim 返回、由接入脚本写成 config.embedded.json。
-// 返回 true 表示已写出响应。
-func (m *mcpCapture) serveAgentBinaryByPlatform(w http.ResponseWriter, platform string) bool {
+// serveAgentZip 把选定的预置平台二进制与该平台对应的 sidecar 配置
+// （config.embedded.json，含回连地址与 token）打成 zip 下发。
+// cfgJSON 为空时回退占位 {}，但下载端点应始终传入带齐身份与回连的配置，
+// 否则探针解压即待命却无凭证，注册会被服务端拒绝（见 handleAgentDownload）。
+// 返回 true 表示成功写出 zip；false 表示已写出错误响应（404/400/500）。
+func (m *mcpCapture) serveAgentZip(w http.ResponseWriter, platform string, cfgJSON []byte) bool {
 	binDir, _ := m.agentBinDir()
 	var binPath string
 	for _, p := range m.availableAgentPlatforms() {
@@ -316,40 +317,81 @@ func (m *mcpCapture) serveAgentBinaryByPlatform(w http.ResponseWriter, platform 
 		}
 		if !p.Available {
 			http.Error(w, "platform "+platform+" is not available; run `make build-agents` on the server to prebuild it", http.StatusNotFound)
-			return true
+			return false
 		}
 		binPath = filepath.Join(binDir, p.Filename)
 		break
 	}
 	if binPath == "" {
 		http.Error(w, "unsupported platform: "+platform, http.StatusBadRequest)
-		return true
+		return false
 	}
-	zipData, err := buildAgentZip(binPath, []byte("{}"))
+	if len(cfgJSON) == 0 {
+		cfgJSON = []byte("{}")
+	}
+	zipData, err := buildAgentZip(binPath, cfgJSON)
 	if err != nil {
 		http.Error(w, "package agent zip failed: "+err.Error(), http.StatusInternalServerError)
-		return true
+		return false
 	}
-	zipName := fmt.Sprintf("gt-agent-%s-%s.zip", platform, time.Now().Format("20060102-150405"))
+	// 平台名含 "/"（windows/amd64），不能进 filename；文件名统一用连字符。
+	zipName := "gt-agent-" + strings.ReplaceAll(platform, "/", "-") + "-" + time.Now().Format("20060102-150405") + ".zip"
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+zipName+`"`)
 	w.Header().Set("Cache-Control", "no-store")
+	// 显式 Content-Length：zip 已整体在内存中，用定长传输而非 chunked——
+	// chunked 大响应经 Docker Desktop wslrelay 等中继链路转发时可能被截断，
+	// 浏览器侧表现为 fetch 抛 "Failed to fetch"（服务端 Write 却全部成功）。
+	w.Header().Set("Content-Length", strconv.Itoa(len(zipData)))
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(zipData); err != nil {
-		slog.Warn("stream agent zip failed (code mode)", "platform", platform, "error", err)
+		slog.Warn("stream agent zip failed", "platform", platform, "error", err)
+		return false
 	}
-	slog.Info("agent binary served (code mode)", "platform", platform)
+	slog.Info("agent binary served", "platform", platform, "bytes", len(zipData))
 	return true
+}
+
+// codeAgentConfig 为启动码接入模式构造 sidecar 配置（含 token），供下载 zip 烧入。
+// 与 /access/claim 返回内容一致；返回 ok=false 时错误响应已写出。
+func (m *mcpCapture) codeAgentConfig(w http.ResponseWriter, r *http.Request, code string) ([]byte, bool) {
+	_, token, registry, ingest, ok := m.resolveAccessCode(w, r, code)
+	if !ok {
+		return nil, false
+	}
+	cfgJSON, err := json.Marshal(map[string]any{
+		"server":        registry,
+		"registry_addr": registry,
+		"ingest_addr":   ingest,
+		"token":         token,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil, false
+	}
+	return cfgJSON, true
 }
 
 func (m *mcpCapture) handleAgentDownload(w http.ResponseWriter, r *http.Request) {
 	owner := auth.OwnerFrom(r.Context())
 	q := r.URL.Query()
 
-	// 启动码接入：只凭 code + platform 下发预置二进制；会话已由 claim 建立，
-	// 不复用下方需要 port/server 的普通下载逻辑（避免重复开会话）。
+	// 启动码接入：token 来自启动码对应的身份（与 /access/claim 同源），一并烧进
+	// config.embedded.json，使下载产物自包含——即使脱离接入脚本直接运行也有凭证。
 	if code := strings.TrimSpace(q.Get("code")); code != "" {
-		m.serveAgentBinaryByPlatform(w, strings.TrimSpace(q.Get("platform")))
+		platform := strings.TrimSpace(q.Get("platform"))
+		if platform == "" {
+			http.Error(w, "platform (os/arch) is required, e.g. windows/amd64", http.StatusBadRequest)
+			return
+		}
+		cfgJSON, ok := m.codeAgentConfig(w, r, code)
+		if !ok {
+			return // 错误响应已在 codeAgentConfig 内写出
+		}
+		if !m.serveAgentZip(w, platform, cfgJSON) {
+			return
+		}
+		slog.Info("agent downloaded (code mode)", "platform", platform)
 		return
 	}
 
@@ -376,25 +418,6 @@ func (m *mcpCapture) handleAgentDownload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// 定位目标平台预置产物；缺失即报错，绝不上报服务端自身平台。
-	binDir, _ := m.agentBinDir()
-	var binPath string
-	for _, p := range m.availableAgentPlatforms() {
-		if p.OS+"/"+p.Arch != platform {
-			continue
-		}
-		if !p.Available {
-			http.Error(w, "platform "+platform+" is not available; run `make build-agents` on the server to prebuild it", http.StatusNotFound)
-			return
-		}
-		binPath = filepath.Join(binDir, p.Filename)
-		break
-	}
-	if binPath == "" {
-		http.Error(w, "unsupported platform: "+platform, http.StatusBadRequest)
-		return
-	}
-
 	// sidecar 配置只带「身份与回连」：server/registry/ingest/token。
 	// 不写 session/bpf/plugin_names——抓包参数由平台在下发抓包时给，探针免参数开机即待命。
 	cfgJSON, err := json.Marshal(map[string]any{
@@ -407,19 +430,7 @@ func (m *mcpCapture) handleAgentDownload(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	zipData, err := buildAgentZip(binPath, cfgJSON)
-	if err != nil {
-		http.Error(w, "package agent zip failed: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	zipName := fmt.Sprintf("gt-agent-%s-%s.zip", platform, time.Now().Format("20060102-150405"))
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+zipName+`"`)
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(zipData); err != nil {
-		slog.Warn("stream agent zip failed", "owner", owner, "error", err)
+	if !m.serveAgentZip(w, platform, cfgJSON) {
 		return
 	}
 	slog.Info("agent downloaded", "owner", owner, "platform", platform,

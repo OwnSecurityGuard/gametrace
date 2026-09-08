@@ -110,6 +110,24 @@ func (c *ingestClient) pushOnce(ctx context.Context, packets <-chan *proto.RawPa
 	// 上一条流可能是在发送失败后退出的：那些记录从未被确认，
 	// 放回队头后本轮会重发（断点续传）。
 	c.spool.Requeue()
+	if n := c.depth(); n > 0 {
+		slog.Info("ingest: resuming unconfirmed packets from spool",
+			"session", c.sessionID, "depth", n)
+	}
+
+	// connected 标记本条流是否真的推通过（gRPC 开流是惰性的，只有 Send 成功
+	// 才算连上），避免"连接成功"日志在服务端不可达时也照打。
+	connected := false
+	flush := func(batch []*proto.RawPacket) error {
+		if err := c.sendAndAck(stream, batch); err != nil {
+			return err
+		}
+		if !connected {
+			connected = true
+			slog.Info("ingest stream connected", "session", c.sessionID, "addr", c.addr, "iface", c.iface)
+		}
+		return nil
+	}
 
 	timer := time.NewTimer(c.batchInterval)
 	defer timer.Stop()
@@ -150,7 +168,7 @@ func (c *ingestClient) pushOnce(ctx context.Context, packets <-chan *proto.RawPa
 			switch {
 			case len(pending) >= c.batchSize:
 				// 满批立即发，时间阈值随之作废。
-				if err := c.sendAndAck(stream, pending); err != nil {
+				if err := flush(pending); err != nil {
 					return err
 				}
 				pending = nil
@@ -170,7 +188,7 @@ func (c *ingestClient) pushOnce(ctx context.Context, packets <-chan *proto.RawPa
 		case <-ctx.Done():
 			// 优雅停机：尾批尽力发一次；失败就留在 spool 里，下次启动续传
 			//（旧实现在这里丢掉半批，且进程退出后无从补救）。
-			if err := c.sendAndAck(stream, pending); err != nil {
+			if err := flush(pending); err != nil {
 				slog.Debug("ingest: final flush failed, packets stay in spool for next run",
 					"session", c.sessionID, "packets", len(pending), "error", err)
 			}
@@ -199,7 +217,7 @@ func (c *ingestClient) pushOnce(ctx context.Context, packets <-chan *proto.RawPa
 				}
 				pending = append(pending, more...)
 				if len(pending) >= c.batchSize {
-					if err := c.sendAndAck(stream, pending); err != nil {
+					if err := flush(pending); err != nil {
 						return err
 					}
 					pending = nil
@@ -210,7 +228,7 @@ func (c *ingestClient) pushOnce(ctx context.Context, packets <-chan *proto.RawPa
 		case <-timer.C:
 			// 时间阈值到：把攒到的半批发出去（低流量兜底）。
 			timerArmed = false
-			if err := c.sendAndAck(stream, pending); err != nil {
+			if err := flush(pending); err != nil {
 				return err
 			}
 			pending = nil

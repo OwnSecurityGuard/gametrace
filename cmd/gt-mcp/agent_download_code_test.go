@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// TestServePrebuiltAgentByPlatform drives serveAgentBinaryByPlatform (the "code mode"
+// TestServePrebuiltAgentByPlatform drives serveAgentZip (the "code mode"
 // download used by setup.sh / PowerShell onboarding) against a temp bin dir.
 func TestServePrebuiltAgentByPlatform(t *testing.T) {
 	dir := t.TempDir()
@@ -24,7 +24,8 @@ func TestServePrebuiltAgentByPlatform(t *testing.T) {
 	m := &mcpCapture{}
 	w := httptest.NewRecorder()
 
-	if served := m.serveAgentBinaryByPlatform(w, "linux/amd64"); !served {
+	// cfgJSON 为空时回退占位 {}（真实下载会传入带 token 的配置）。
+	if served := m.serveAgentZip(w, "linux/amd64", nil); !served {
 		t.Fatal("expected handler to write a response")
 	}
 	if w.Code != http.StatusOK {

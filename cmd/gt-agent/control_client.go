@@ -15,8 +15,10 @@ import (
 	"gametrace/pkg/version"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // ControlAgent 管理 AgentControl 连接：注册、双向流、心跳、指令执行。
@@ -46,6 +48,11 @@ func NewControlAgent(ingestAddr, probeID, probeToken string, runner *captureRunn
 }
 
 // Run 常驻：断线退避重连。ctx 取消时退出。
+//
+// 自愈：控制流被 PermissionDenied 拒绝 = 本地 probe token 已不被服务端认可
+//（服务端存储重建/换库、探针记录被覆盖换发等）。此时用配置里的用户 token
+// 重新注册（带 prev_probe_id）换发新凭证再重试；用户 token 也失效时注册
+// 会失败，退避重试留给人工修凭证。
 func (c *ControlAgent) Run(ctx context.Context) {
 	backoff := time.Second
 	for ctx.Err() == nil {
@@ -56,6 +63,18 @@ func (c *ControlAgent) Run(ctx context.Context) {
 		}
 		if err != nil {
 			slog.Warn("probe control stream error, reconnecting", "error", err, "backoff", backoff)
+		}
+		if status.Code(err) == codes.PermissionDenied && c.cfg.UserToken != "" {
+			if ok, rerr := registerProbe(ctx, c.cfg, c.ingestAddr, c.probeID); rerr != nil {
+				slog.Warn("probe re-register after auth denial failed", "error", rerr)
+			} else if ok {
+				// 同步换发后的凭证到本结构体（connectOnce 用字段而非 cfg），
+				// 立即用新凭证重试。
+				c.probeID = c.cfg.ProbeID
+				c.probeToken = c.cfg.ProbeToken
+				backoff = time.Second
+				continue
+			}
 		}
 		if time.Since(started) > 30*time.Second {
 			backoff = time.Second
@@ -115,7 +134,9 @@ func (c *ControlAgent) connectOnce(ctx context.Context) error {
 			case <-ticker.C:
 				hb := c.heartbeat()
 				if err := stream.Send(&proto.ControlEvent{Payload: &proto.ControlEvent_Heartbeat{Heartbeat: hb}}); err != nil {
-					slog.Debug("heartbeat send failed", "error", err)
+					// 心跳发不出去 = 控制流已死（服务端重启/网络断开），
+					// 这是重连的唯一触发点，必须是 Warn 而不是 Debug。
+					slog.Warn("heartbeat send failed; control stream is dead", "error", err)
 					return
 				}
 			}
@@ -168,6 +189,13 @@ func (c *ControlAgent) heartbeat() *proto.ProbeHeartbeat {
 			OldestUnix: a.OldestMs / 1000, NewestUnix: a.NewestMs / 1000,
 		}
 	}
+	// 数据流留痕：探针日志里能直接看到"抓了多少 / 推出去多少 / 积压多少"，
+	// 不必登服务器就能判断是没抓到包还是推流被拒。
+	slog.Info("probe heartbeat",
+		"capture", state, "session", sessionID, "iface", iface, "err", lastErr,
+		"packets_captured", d.PacketsCaptured, "packets_acked", d.PacketsAcked,
+		"spool_depth", d.SpoolDepth, "dropped", d.Dropped,
+		"last_packet_ms", d.LastPacketMs, "last_upload_ms", d.LastUploadMs)
 	return hb
 }
 
@@ -180,7 +208,18 @@ func (c *ControlAgent) execute(ctx context.Context, cmd *proto.Command, sendEven
 	ok := true
 	errStr := ""
 	if cmd == nil {
+		slog.Warn("probe received empty command")
 		return &proto.CommandResult{}
+	}
+	kind := commandKind(cmd)
+	// 收指令留痕：排障「平台点了抓包但探针没动静」时，这条日志是链路是否打通的分界点。
+	if a := cmd.GetAssign(); a != nil {
+		slog.Info("probe command received", "cmd_id", cmd.GetId(), "kind", kind,
+			"session", a.GetSessionId(), "iface", a.GetIface(), "ports", a.GetPorts(),
+			"hosts", a.GetHosts(), "bpf", a.GetBpf(), "snaplen", a.GetSnaplen(),
+			"promisc", a.GetPromisc())
+	} else {
+		slog.Info("probe command received", "cmd_id", cmd.GetId(), "kind", kind)
 	}
 	// assign 幂等记忆（Retry 用）：仅记录 Assign 参数。
 	if a := cmd.GetAssign(); a != nil {
@@ -256,7 +295,35 @@ func (c *ControlAgent) execute(ctx context.Context, cmd *proto.Command, sendEven
 	default:
 		ok, errStr = false, "unsupported command"
 	}
-	return &proto.CommandResult{Id: cmd.GetId(), Ok: ok, Error: errStr}
+	res := &proto.CommandResult{Id: cmd.GetId(), Ok: ok, Error: errStr}
+	if ok {
+		slog.Info("probe command applied", "cmd_id", res.Id, "kind", kind)
+	} else {
+		slog.Error("probe command failed", "cmd_id", res.Id, "kind", kind, "error", errStr)
+	}
+	return res
+}
+
+// commandKind 返回指令类型名（仅日志用）。
+func commandKind(cmd *proto.Command) string {
+	switch cmd.GetPayload().(type) {
+	case *proto.Command_Assign:
+		return "assign"
+	case *proto.Command_Stop:
+		return "stop"
+	case *proto.Command_Filter:
+		return "filter"
+	case *proto.Command_Config:
+		return "config"
+	case *proto.Command_Retry:
+		return "retry"
+	case *proto.Command_ArchiveQuery:
+		return "archive_query"
+	case *proto.Command_ArchiveUpload:
+		return "archive_upload"
+	default:
+		return "unknown"
+	}
 }
 
 // applyConfig 应用白名单内的配置键并落盘 probe.json。

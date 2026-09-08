@@ -100,6 +100,35 @@ func TestAccessClaimReturnsConfig(t *testing.T) {
 	}
 }
 
+// TestCodeModeDownloadIncludesToken 验证启动码下载模式的 sidecar 配置含 token：
+// 下载产物由此自包含，脱离接入脚本直接运行也有凭证（修复 code 模式下发占位 {} 的缺陷）。
+func TestCodeModeDownloadIncludesToken(t *testing.T) {
+	m, store := newClaimCapture(t)
+	if err := store.Create(context.Background(), &accessCode{
+		Code: "GT-CODE-DL01", Owner: "alice",
+		ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/download/agent?code=GT-CODE-DL01&platform=linux/amd64", nil)
+	rec := httptest.NewRecorder()
+	cfgJSON, ok := m.codeAgentConfig(rec, req, "GT-CODE-DL01")
+	if !ok {
+		t.Fatalf("codeAgentConfig unexpected failure: %d %s", rec.Code, rec.Body.String())
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(cfgJSON, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg["token"] != "tok_alice" {
+		t.Fatalf("downloaded config must carry token, got %v", cfg["token"])
+	}
+	if cfg["server"] == "" || cfg["ingest_addr"] == "" {
+		t.Fatalf("downloaded config must carry return addresses: %+v", cfg)
+	}
+}
+
 // TestAdvertisedAddrsPrecedence 锁住回连地址的优先级：
 // GT_PUBLIC_HOST（+ 可选端口覆盖）> 调用方请求的 Host > lanIP。
 func TestAdvertisedAddrsPrecedence(t *testing.T) {

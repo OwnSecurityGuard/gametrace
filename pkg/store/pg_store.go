@@ -110,8 +110,12 @@ func (s *PGStore) AppendRawPackets(ctx context.Context, packets []event.Packet) 
 			id = uuid.NewString()
 		}
 		connID, metaJSON := rawPacketConnMeta(p)
-		rest := appendRawPacketArgs(p, id, connID, metaJSON) // [id, ts, src, dst, proto, payload, link_type, conn_id, metaJSON]
-		rowArgs := append([]any{s.sessionID}, rest...)
+		// INSERT 列序是 (id, session_id, timestamp, ...)：id 在前、session_id 在后。
+		// appendRawPacketArgs 返回 [id, ts, src, ...]（无 session_id，SQLite 无此列），
+		// 这里把 sessionID 插到第二位。曾把 sessionID 放在首位 → id 列恒为会话 id，
+		// ON CONFLICT(id) 把全会话的包塌缩成 1 行，且 session_id 列变成每包 UUID，
+		// 按会话查询永远为空（2026-09-08 生产事故）。
+		rowArgs := append([]any{id, s.sessionID}, appendRawPacketArgs(p, id, connID, metaJSON)[1:]...)
 		if _, err := stmt.ExecContext(ctx, rowArgs...); err != nil {
 			return fmt.Errorf("insert raw packet: %w", err)
 		}
@@ -737,14 +741,16 @@ func (s *PGStore) ClearDecodedData(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
+	// 先删子表：event_index 有 FK 指向 events（event_index_event_id_fkey），
+	// 后删会被外键约束拒掉（SQLSTATE 23503）。共享库多会话共存，必须带 session_id。
+	if _, err := tx.ExecContext(ctx, "DELETE FROM event_index WHERE session_id = $1", s.sessionID); err != nil {
+		return fmt.Errorf("clear event_index: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM events WHERE session_id = $1", s.sessionID); err != nil {
 		return fmt.Errorf("clear events: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM state_changes WHERE session_id = $1", s.sessionID); err != nil {
 		return fmt.Errorf("clear state_changes: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM event_index WHERE session_id = $1", s.sessionID); err != nil {
-		return fmt.Errorf("clear event_index: %w", err)
 	}
 	return tx.Commit()
 }

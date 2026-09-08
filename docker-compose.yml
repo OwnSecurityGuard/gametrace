@@ -8,11 +8,17 @@
 #     有意不进 PG，见 cmd/gt-mcp/main.go）；
 #   - SQLite 模式（原默认）回滚方式：删掉 GT_DB_DRIVER/GT_DB_DSN 两个环境
 #     变量与 postgres 服务即可，两套模式的配置入口是同一对 env（pkg/config）。
-# 镜像策略：image + build 双声明。本地没有 gt-server:$GT_VERSION 镜像时，
-# compose 自动构建（首次克隆仓库后 docker compose up -d 即可，无需手动 build）；
-# 镜像已存在则直接复用。注意：源码更新后镜像不会自动重建，需显式
-#   docker compose build   （或 docker compose up -d --build）
-# 两个服务共用同一构建定义（x-build 锚点），BuildKit 层缓存使第二次构建近零成本。
+# 镜像策略：image + build 双声明，**默认完全重建**（2026-09-08 起）：
+#   - 每个服务带 `pull_policy: build`：不管本地有没有 gt-server:$GT_VERSION 镜像，
+#     一律从源码构建，绝不复用/拉取已有镜像——避免"改了代码还在跑旧镜像"。
+#   - 构建段带 `no_cache: true`：不用 BuildKit 层缓存，每次都是干净构建
+#     （代价是每次 up 都要重编 Go，约几分钟；本机迭代可用
+#     `GT_BUILD_NO_CACHE=false docker compose up -d` 临时走缓存加速）。
+#   - 构建段带 `pull: true`：顺带检查基础镜像更新，避免底层镜像长期不刷新。
+# 因此 `docker compose up -d` 等价于从零重建服务；要连带强制重建容器
+# （镜像 ID 恰好没变时）补一个 --force-recreate：
+#   docker compose up -d --force-recreate
+# 两个服务共用同一构建定义（x-build 锚点）。
 #
 # 端口策略：容器内端口拓扑不变（9888/9091/9092/8781）；宿主侧映射端口默认
 # 用 1xxxx 偏移值——本机 GameTrace 链路（pipeline 12924 / mcp 11056）已占用
@@ -30,6 +36,9 @@
 x-build: &server-build
   context: .
   dockerfile: Dockerfile
+  # 完全重建（可用 GT_BUILD_NO_CACHE=false 临时退回缓存构建）。
+  no_cache: ${GT_BUILD_NO_CACHE:-true}
+  pull: ${GT_BUILD_PULL:-true}
 
 services:
   postgres:
@@ -50,6 +59,8 @@ services:
   pipeline:
     image: gt-server:${GT_VERSION:-dev}
     build: *server-build
+    # 强制走构建而非复用/拉取已有镜像（见文件头"镜像策略"）。
+    pull_policy: build
     restart: unless-stopped
     depends_on:
       postgres:
@@ -82,6 +93,7 @@ services:
   mcp:
     image: gt-server:${GT_VERSION:-dev}
     build: *server-build
+    pull_policy: build
     restart: unless-stopped
     depends_on:
       postgres:

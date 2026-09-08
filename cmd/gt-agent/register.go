@@ -29,6 +29,14 @@ func ensureRegistered(ctx context.Context, cfg *agentConfig, ingestAddr string) 
 	if cfg.UserToken == "" {
 		return false, nil
 	}
+	return registerProbe(ctx, cfg, ingestAddr, "")
+}
+
+// registerProbe 调 RegisterProbe 换发凭证并落盘。prevID 非空时带上 prev_probe_id：
+// 服务端若还有该探针记录且 owner 一致则覆盖换发（保持 probe_id），
+// 记录已丢（服务端存储重建/换库）则当作新注册发新 probe_id。
+// 成功后 cfg.ProbeID/ProbeToken 已更新并写回 probe.json。
+func registerProbe(ctx context.Context, cfg *agentConfig, ingestAddr, prevID string) (bool, error) {
 	conn, err := grpc.NewClient("passthrough:///"+ingestAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -49,11 +57,17 @@ func ensureRegistered(ctx context.Context, cfg *agentConfig, ingestAddr string) 
 		Version:      version.String(),
 		Capabilities: []string{"pcap", "plugin_host"},
 		Name:         cfg.Name,
+		PrevProbeId:  prevID,
 	})
 	if err != nil {
 		return false, fmt.Errorf("register probe: %w", err)
 	}
-	cfg.ProbeID = ack.GetProbeId()
+	newID := ack.GetProbeId()
+	if prevID != "" && newID != prevID {
+		slog.Warn("probe re-registered with new id (old record lost server-side)",
+			"old_probe_id", prevID, "new_probe_id", newID)
+	}
+	cfg.ProbeID = newID
 	cfg.ProbeToken = ack.GetProbeToken()
 	if err := saveAgentConfig(cfg); err != nil {
 		return false, fmt.Errorf("save probe credentials: %w", err)

@@ -98,6 +98,20 @@ func (us *userStore) OwnerExists(ctx context.Context, owner string) (bool, error
 	return true, nil
 }
 
+// TokenByOwner 返回已存在用户的 token（启动码重复领取时复用，而非重建身份）。
+// 用户不存在返回 ("", nil)；仅数据库错误才返回 err。
+func (us *userStore) TokenByOwner(ctx context.Context, owner string) (string, error) {
+	var token string
+	err := us.db.QueryRowContext(ctx, `SELECT token FROM users WHERE owner=?`, owner).Scan(&token)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
 // Revoke 删除用户（撤销其 token 即时失效）；返回是否删到了记录。
 func (us *userStore) Revoke(ctx context.Context, owner string) (bool, error) {
 	res, err := us.db.ExecContext(ctx, `DELETE FROM users WHERE owner=?`, owner)

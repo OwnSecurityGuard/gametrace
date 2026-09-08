@@ -106,16 +106,31 @@ func TestPGIntegration(t *testing.T) {
 	}
 	defer st2.Close()
 
-	// raw_packets
-	pkts := []event.Packet{{
-		ID:        "p-1",
-		Timestamp: now,
-		Raw:       []byte{0x01, 0x02, 0x03},
-		LinkType:  event.LinkType(1),
-		Src:       netip.MustParseAddrPort("127.0.0.1:5000"),
-		Dst:       netip.MustParseAddrPort("127.0.0.1:8080"),
-		Protocol:  "tcp",
-	}}
+	// raw_packets：两包同连接（conn_id 由 capture_task 写入 Metadata，store 不推导）。
+	// 两包是故意的：pg_store 曾把 id/session_id 参数装反，id 列恒为会话 id，
+	// ON CONFLICT(id) 会把多包塌缩成 1 行——单包测试抓不住这个事故。
+	pkts := []event.Packet{
+		{
+			ID:        "p-1",
+			Timestamp: now,
+			Raw:       []byte{0x01, 0x02, 0x03},
+			LinkType:  event.LinkType(1),
+			Src:       netip.MustParseAddrPort("127.0.0.1:5000"),
+			Dst:       netip.MustParseAddrPort("127.0.0.1:8080"),
+			Protocol:  "tcp",
+			Metadata:  map[string]any{"conn_id": "tcp:127.0.0.1:8080<->127.0.0.1:5000"},
+		},
+		{
+			ID:        "p-2",
+			Timestamp: now.Add(time.Second),
+			Raw:       []byte{0x04, 0x05},
+			LinkType:  event.LinkType(1),
+			Src:       netip.MustParseAddrPort("127.0.0.1:8080"),
+			Dst:       netip.MustParseAddrPort("127.0.0.1:5000"),
+			Protocol:  "tcp",
+			Metadata:  map[string]any{"conn_id": "tcp:127.0.0.1:8080<->127.0.0.1:5000"},
+		},
+	}
 	if err := st1.AppendRawPackets(ctx, pkts); err != nil {
 		t.Fatalf("AppendRawPackets: %v", err)
 	}
@@ -147,8 +162,8 @@ func TestPGIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryRawPackets s1: %v", err)
 	}
-	if len(rawRows) != 1 {
-		t.Fatalf("QueryRawPackets s1: got %d rows, want 1", len(rawRows))
+	if len(rawRows) != 2 {
+		t.Fatalf("QueryRawPackets s1: got %d rows, want 2 (collapse=arg order bug)", len(rawRows))
 	}
 	evRows, err := st1.QueryEvents(ctx, s1, 100, 0)
 	if err != nil {
@@ -203,7 +218,7 @@ func TestPGIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryRawPackets after clear: %v", err)
 	}
-	if len(rawAfter) != 1 {
+	if len(rawAfter) != 2 {
 		t.Fatalf("ClearDecodedData wrongly removed raw_packets: %d", len(rawAfter))
 	}
 }

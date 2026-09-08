@@ -44,8 +44,13 @@ ENV VITE_ENABLE_RAW_DEBUG=${VITE_ENABLE_RAW_DEBUG}
 WORKDIR /src
 
 # 先只拷 package.json/package-lock.json 做 npm ci，充分利用层缓存。
+# npm 重试参数：npmmirror 偶发 ECONNRESET，拉大重试次数与超时避免构建被打断。
 COPY web/package.json web/package-lock.json ./
-RUN npm config set registry ${NPM_REGISTRY} && npm ci
+RUN npm config set registry ${NPM_REGISTRY} \
+ && npm config set fetch-retries 5 \
+ && npm config set fetch-retry-mintimeout 20000 \
+ && npm config set fetch-retry-maxtimeout 120000 \
+ && npm ci
 
 COPY web/ ./
 RUN npm run build

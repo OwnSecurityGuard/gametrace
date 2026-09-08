@@ -284,45 +284,9 @@ func (m *mcpCapture) handleAccessClaim(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "code is required", http.StatusBadRequest)
 		return
 	}
-	ctx := r.Context()
-	rec, err := m.accessCodes.Get(ctx, code)
-	if err != nil || rec == nil {
-		http.Error(w, "invalid access code", http.StatusNotFound)
+	owner, token, registry, ingest, ok := m.resolveAccessCode(w, r, code)
+	if !ok {
 		return
-	}
-	if time.Now().After(rec.ExpiresAt) {
-		http.Error(w, "access code expired", http.StatusGone)
-		return
-	}
-
-	owner := rec.Owner
-	token := m.ownerSecret(owner)
-
-	// 邀请模式：为 new_owner 创建独立身份（users 表 + 即时生效的 DB resolver），
-	// 会话与回连凭证都挂在新身份名下 —— 新用户获得"自己的"token，
-	// 而不是借 code 创建者的身份（2026-09-05 邀请制）。
-	if rec.NewOwner != "" {
-		if m.users == nil {
-			http.Error(w, "invite is not available on this deployment", http.StatusServiceUnavailable)
-			return
-		}
-		u, newToken, err := m.users.CreateUser(ctx, rec.NewOwner, rec.Owner)
-		if err != nil {
-			slog.Warn("invite claim: create user failed", "new_owner", rec.NewOwner, "error", err)
-			http.Error(w, "invite claim failed: "+err.Error(), http.StatusConflict)
-			return
-		}
-		owner = u.Owner
-		token = newToken
-		slog.Info("invite claimed: new identity created", "new_owner", owner, "created_by", rec.Owner, "code", code)
-	}
-
-	// 回连地址与凭证：对外通告地址优先（GT_PUBLIC_HOST），否则按探针本次请求的
-	// Host 回推——探针是怎么访问到 /access/claim 的，就怎么回连。
-	// 不返回 session/bpf/plugin_names：抓包参数由 Web 下发抓包时给。
-	registry, ingest, _ := m.advertisedAddrs(ctx, r.Host)
-	if rec.Server != "" {
-		registry = rec.Server
 	}
 	cfg := map[string]any{
 		"server":        registry,
@@ -331,13 +295,66 @@ func (m *mcpCapture) handleAccessClaim(w http.ResponseWriter, r *http.Request) {
 		"token":         token,
 	}
 
-	if err := m.accessCodes.MarkClaimed(ctx, code); err != nil {
-		slog.Warn("mark access code claimed failed", "code", code, "error", err)
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(cfg)
 	slog.Info("access code claimed", "owner", owner, "code", code, "registry", registry, "ingest", ingest)
+}
+
+// resolveAccessCode 校验启动码并换回「身份 + 回连」：owner、token、registry、ingest。
+// 邀请模式会为 new_owner 创建独立身份；已存在则复用其 token，使接入脚本先 claim 再
+// 下载同码时不会因重复建用户而 409。码无效/过期/邀请不可用已在 w 写出错误响应；
+// 调用方检查 ok 即可（失败时不返回配置）。
+func (m *mcpCapture) resolveAccessCode(w http.ResponseWriter, r *http.Request, code string) (owner, token, registry, ingest string, ok bool) {
+	ctx := r.Context()
+	rec, err := m.accessCodes.Get(ctx, code)
+	if err != nil || rec == nil {
+		http.Error(w, "invalid access code", http.StatusNotFound)
+		return "", "", "", "", false
+	}
+	if time.Now().After(rec.ExpiresAt) {
+		http.Error(w, "access code expired", http.StatusGone)
+		return "", "", "", "", false
+	}
+
+	owner = rec.Owner
+	token = m.ownerSecret(owner)
+	if rec.NewOwner != "" {
+		if m.users == nil {
+			http.Error(w, "invite is not available on this deployment", http.StatusServiceUnavailable)
+			return "", "", "", "", false
+		}
+		// 幂等：接入脚本可能先 claim 再下载（同码二次领取），已建身份直接复用 token。
+		if exists, _ := m.users.OwnerExists(ctx, rec.NewOwner); exists {
+			tok, terr := m.users.TokenByOwner(ctx, rec.NewOwner)
+			if terr != nil {
+				slog.Warn("invite re-claim: get token failed", "new_owner", rec.NewOwner, "error", terr)
+				http.Error(w, "invite re-claim failed: "+terr.Error(), http.StatusInternalServerError)
+				return "", "", "", "", false
+			}
+			owner, token = rec.NewOwner, tok
+		} else {
+			u, newToken, cerr := m.users.CreateUser(ctx, rec.NewOwner, rec.Owner)
+			if cerr != nil {
+				slog.Warn("invite claim: create user failed", "new_owner", rec.NewOwner, "error", cerr)
+				http.Error(w, "invite claim failed: "+cerr.Error(), http.StatusConflict)
+				return "", "", "", "", false
+			}
+			owner, token = u.Owner, newToken
+			slog.Info("invite claimed: new identity created", "new_owner", owner, "created_by", rec.Owner, "code", code)
+		}
+	}
+
+	// 回连地址与凭证：对外通告地址优先（GT_PUBLIC_HOST），否则按探针本次请求的
+	// Host 回推——探针是怎么访问到本端点的，就怎么回连。
+	// 不返回 session/bpf/plugin_names：抓包参数由 Web 下发抓包时给。
+	registry, ingest, _ = m.advertisedAddrs(ctx, r.Host)
+	if rec.Server != "" {
+		registry = rec.Server
+	}
+	if err := m.accessCodes.MarkClaimed(ctx, code); err != nil {
+		slog.Warn("mark access code claimed failed", "code", code, "error", err)
+	}
+	return owner, token, registry, ingest, true
 }
 
 // handleListUsers 列出成员账号（仅 global admin；不回 token —— 凭证只在创建时展示一次）。

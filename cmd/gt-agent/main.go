@@ -307,14 +307,9 @@ func main() {
 			bpf = embedded.BPF
 		}
 	}
+	// 网卡未指定时不在这里解析：runner.Start 会按出口 IP 自动选卡，
+	// 选不到也只是本次抓包进 failed，探针进程照常常驻等平台重发指令。
 	if sessionID != "" {
-		if iface == "" {
-			iface, err = resolveDefaultIface()
-			if err != nil {
-				slog.Error("capture requires a network interface, but none could be resolved", "error", err)
-				os.Exit(1)
-			}
-		}
 		pushToken := cfg.UserToken
 		if registered {
 			pushToken = cfg.ProbeToken

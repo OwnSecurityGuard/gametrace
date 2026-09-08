@@ -188,6 +188,20 @@ func (r *captureRunner) Start(p CaptureParams, ingestAddr, token string) error {
 	bpf := deriveBPF(p)
 	p.BPF = bpf
 
+	// 未指定网卡：按出口 IP 自动选卡（平台下发 iface 为空是常态，跨机器部署时
+	// 网卡名无法预知）。解析失败直接进 failed 并带原因，避免 UI 停在"启动中"。
+	if p.Iface == "" {
+		resolved, err := resolveDefaultIface()
+		if err != nil {
+			r.mu.Lock()
+			r.setState(stateFailed, err.Error())
+			r.mu.Unlock()
+			slog.Error("capture start: auto-select interface failed", "error", err)
+			return err
+		}
+		p.Iface = resolved
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -245,6 +259,9 @@ func (r *captureRunner) Start(p CaptureParams, ingestAddr, token string) error {
 		batchInterval: r.batchInterval,
 		spool:        r.spool,
 		onAck:        r.onAcked,
+		// onPacket 必须接上：它是 packets_captured / last_packet_ms 的唯一来源，
+		// 漏接会让心跳里的"抓包数/最后收包时间"恒为 0（平台显示"从未收到帧"）。
+		onPacket:     r.onPacket,
 	}
 	// 换会话时计数归零（新会话从 0 开始，UI 语义是"本次抓了多少"）。
 	r.packetsCaptured.Store(0)
@@ -279,6 +296,12 @@ func (r *captureRunner) watchCapEnded(runCtx context.Context) {
 		}
 		r.mu.Unlock()
 	}
+}
+
+// onPacket 是 ingestClient 的收包回调：推进抓包计数与最后收包时间（心跳读）。
+func (r *captureRunner) onPacket() {
+	r.lastPacketMs.Store(time.Now().UnixMilli())
+	r.packetsCaptured.Add(1)
 }
 
 // onAcked 是 ingestClient 的确认回调：推进上传计数（心跳读）。
