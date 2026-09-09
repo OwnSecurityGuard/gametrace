@@ -35,6 +35,12 @@ export function Dialog({
   const titleId = React.useId();
   const descId = React.useId();
 
+  // onClose 走 ref：调用方每个渲染都可能新建闭包（如实名表单里 setState 触发重渲染），
+  // 若把它塞进 effect 依赖，会让下面的焦点逻辑在每次输入时重跑——
+  // cleanup 里的 `previouslyFocused.focus()` 会把焦点从正在输入的框夺走。故 effect 只依赖 open。
+  const onCloseRef = React.useRef(onClose);
+  onCloseRef.current = onClose;
+
   // ESC 关闭 + 焦点陷阱 + 打开时锁定背景滚动并聚焦首个可聚焦元素
   React.useEffect(() => {
     if (!open) return;
@@ -52,7 +58,7 @@ export function Dialog({
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab") return;
@@ -84,7 +90,7 @@ export function Dialog({
       document.body.style.overflow = prevOverflow;
       previouslyFocused.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

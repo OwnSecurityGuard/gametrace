@@ -16,6 +16,13 @@ import { toast } from "@/components/ui/toast";
 import type { ProbeInfo } from "@/types/probe";
 import { X, Check, Play, Network, ChevronDown, Loader2, Server, MonitorSmartphone } from "lucide-react";
 
+/** 可选项「已选中」的统一醒目样式：主色边框 + 浅底 + 外圈 ring + 轻投影，配合 Check 角标。 */
+const SELECT_ACTIVE =
+  "border-primary/70 bg-primary/10 text-foreground ring-1 ring-primary/40 shadow-sm";
+/** 未选中态：弱边框，hover 时给一点主色过渡，提示可点。 */
+const SELECT_IDLE =
+  "border-border bg-background text-muted-foreground hover:border-primary/30 hover:bg-muted/60 hover:text-foreground";
+
 interface StartCaptureDialogProps {
   open: boolean;
   onClose: () => void;
@@ -386,11 +393,9 @@ export function StartCaptureDialog({
                           setProbeIfaces([]);
                         }}
                         title={selectable ? p.hostname : probeDisabledReason(p)}
-                        className={`flex items-center gap-2.5 rounded-md border px-2.5 py-2 text-left text-sm transition-colors ${
-                          active
-                            ? "border-primary/60 bg-primary/10 text-foreground"
-                            : "border-border bg-background text-muted-foreground"
-                        } ${selectable ? "cursor-pointer hover:bg-muted/60" : "cursor-not-allowed opacity-50"}`}
+                        className={`flex items-center gap-2.5 rounded-md border px-2.5 py-2 text-left text-sm transition-all ${
+                          active ? SELECT_ACTIVE : SELECT_IDLE
+                        } ${selectable ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}
                       >
                         <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
                         <span className="min-w-0 flex-1">
@@ -399,6 +404,7 @@ export function StartCaptureDialog({
                             {p.hostname} · {p.capture_iface || "自动选网卡"}
                           </span>
                         </span>
+                        {active && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden />}
                         <ProbeStateChip p={p} />
                       </button>
                     );
@@ -482,10 +488,10 @@ export function StartCaptureDialog({
                             )
                           }
                           title={nic.ips?.length ? `${nic.name} · ${nic.ips.join(", ")}` : nic.name}
-                          className={`rounded-md border px-2 py-0.5 font-mono text-[11px] transition-colors ${
+                          className={`inline-flex items-center rounded-md border px-2 py-0.5 font-mono text-[11px] transition-all ${
                             active
-                              ? "border-primary/60 bg-primary/10 text-foreground"
-                              : "border-border bg-muted text-muted-foreground hover:text-foreground"
+                              ? "border-primary/70 bg-primary/10 text-primary ring-1 ring-primary/40"
+                              : "border-border bg-muted text-muted-foreground hover:border-primary/30 hover:text-foreground"
                           }`}
                         >
                           {active && <Check className="mr-0.5 inline h-3 w-3" />}
@@ -526,16 +532,19 @@ export function StartCaptureDialog({
                         aria-pressed={plugin === opt.plugin}
                         disabled={!opt.online}
                         onClick={() => setPlugin(plugin === opt.plugin ? "" : opt.plugin)}
-                        className={`flex items-center gap-2 rounded-md border px-2.5 py-2 text-sm transition-colors ${
-                          plugin === opt.plugin
-                            ? "border-primary/60 bg-primary/10 text-foreground"
-                            : "border-border bg-background text-muted-foreground"
-                        } ${opt.online ? "cursor-pointer hover:bg-muted/60" : "cursor-not-allowed opacity-50"}`}
+                        className={`flex w-full items-center gap-2.5 rounded-md border px-2.5 py-2 text-sm transition-all ${
+                          plugin === opt.plugin ? SELECT_ACTIVE : SELECT_IDLE
+                        } ${opt.online ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}
                       >
-                        <span className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] uppercase">
-                          {GROUP_LABEL[g] ?? g}
+                        <span className="flex min-w-0 flex-1 items-center gap-2">
+                          <span className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] uppercase">
+                            {GROUP_LABEL[g] ?? g}
+                          </span>
+                          <span className="truncate">{opt.label}</span>
                         </span>
-                        <span className="truncate">{opt.label}</span>
+                        {plugin === opt.plugin && (
+                          <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+                        )}
                       </button>
                     )),
                   )}
