@@ -9,6 +9,7 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { StartCaptureDialog } from "@/components/start-capture-dialog";
 import { ProxyConfigDialog } from "@/components/proxy-config-dialog";
 import { AgentDownloadDialog } from "@/components/agent-download-dialog";
+import { McpAccessDialog } from "@/components/mcp-access-dialog";
 import { MembersAdminDialog } from "@/components/members-admin-dialog";
 import { ProbeAdminDialog } from "@/components/probe-admin-dialog";
 import { MyCapturePage } from "@/components/my-capture-page";
@@ -16,7 +17,7 @@ import { ProjectPage } from "@/components/project-page";
 import { SessionOverviewPage } from "@/components/session-overview-page";
 import { DecodedView } from "@/components/decoded-view";
 import { Button } from "@/components/ui/button";
-import { Sun, Moon, Settings, Play, Square, Cable, KeyRound, Download, ChevronDown, Check, UserRound, Users, Server } from "lucide-react";
+import { Sun, Moon, Settings, Play, Square, Cable, KeyRound, Download, ChevronDown, Check, UserRound, Users, Server, Plug } from "lucide-react";
 import { RAW_DEBUG_ENABLED } from "@/lib/env";
 import { usePluginEventStream, useStopCapture, useSessions } from "@/hooks/use-mcp";
 import { useAuthError, useIdentity } from "@/hooks/use-auth";
@@ -89,6 +90,7 @@ export default function App() {
   const [startOpen, setStartOpen] = useState(false);
   const [proxyConfigOpen, setProxyConfigOpen] = useState(false);
   const [agentDownloadOpen, setAgentDownloadOpen] = useState(false);
+  const [mcpAccessOpen, setMcpAccessOpen] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   const [probesOpen, setProbesOpen] = useState(false);
   const [isDark, setIsDark] = useState(() => {
@@ -431,6 +433,17 @@ export default function App() {
               variant="outline"
               size="sm"
               className="h-8"
+              onClick={() => setMcpAccessOpen(true)}
+              title="MCP 接入（复制给 AI 的提示词，让 AI 以 MCP 客户端连上本平台）"
+              aria-label="MCP 接入"
+            >
+              <Plug className="h-4 w-4" />
+              MCP 接入
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8"
               onClick={() => setProbesOpen(true)}
               title="探针管理（接入的抓包机器：状态 / 停抓 / 本地留存导入）"
               aria-label="探针管理"
@@ -596,6 +609,8 @@ export default function App() {
           setStartOpen(true);
         }}
       />
+      {/* MCP 接入弹窗（复制给 AI 的提示词） */}
+      <McpAccessDialog open={mcpAccessOpen} onClose={() => setMcpAccessOpen(false)} />
       {/* 成员管理弹窗（邀请码 / 成员账号列表与撤销） */}
       <MembersAdminDialog open={membersOpen} onClose={() => setMembersOpen(false)} />
       {/* 探针管理弹窗（三维度状态 / 停抓 / 改名 / 吊销 / 本地留存离线导入） */}

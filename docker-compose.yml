@@ -131,17 +131,16 @@ services:
       GT_REGISTRY_ADDR: ${GT_INTERNAL_REGISTRY_ADDR:-pipeline:9091}
       # CORS 允许的 Origin（逗号分隔）；留空不返回 CORS 头（同源用法不受影响）
       GT_MCP_ALLOWED_ORIGINS: ${GT_MCP_ALLOWED_ORIGINS:-}
-      # 对外通告地址（远端探针回连用）：Docker / NAT / 公网部署下容器内地址不可达，
-      # 必须显式通告。GT_PUBLIC_HOST 留空则服务端按"浏览器怎么访问到我们"回推
-      # （同网段/直连可用，跨 NAT/容器会连不上，建议填公网域名或宿主机可达 IP）。
-      GT_PUBLIC_HOST: ${GT_PUBLIC_HOST:-}
-      GT_PUBLIC_REGISTRY_PORT: ${GT_PUBLIC_REGISTRY_PORT:-19091}
-      GT_PUBLIC_INGEST_PORT: ${GT_PUBLIC_INGEST_PORT:-19092}
+      # 对外通告地址（远端探针 / MCP / AI 回连用）：Docker / NAT / 公网部署下容器内
+      # 地址不可达，必须显式通告。以下四个对外地址均为必填 —— 缺失/为空时
+      # `docker compose up` 直接失败（${VAR:?…} 语法），避免服务以不可达地址静默上线。
+      GT_PUBLIC_HOST: "${GT_PUBLIC_HOST:?GT_PUBLIC_HOST is required - 对外通告地址，填公网域名或宿主机在远端可达的 IP}"
+      GT_PUBLIC_REGISTRY_PORT: "${GT_PUBLIC_REGISTRY_PORT:?GT_PUBLIC_REGISTRY_PORT is required - 对外通告的 registry 宿主端口（如 19091）}"
+      GT_PUBLIC_INGEST_PORT: "${GT_PUBLIC_INGEST_PORT:?GT_PUBLIC_INGEST_PORT is required - 对外通告的 ingest 宿主端口（如 19092）}"
       # 代理抓包手机连接地址（二维码里手机填的 HTTP CONNECT 代理地址 host 部分）：
       # 容器内 lanIP() 启发式会拿到 docker bridge 的 172.x / Hyper-V 等不可达网段，
-      # 必须显式填宿主机在手机所在 LAN 内的可达 IPv4（例如 192.168.1.10）。留空走
-      # 启发式兜底（裸机/LAN 直连可用，容器部署务必显式配置，否则手机扫码连不上）。
-      GT_LAN_IP: ${GT_LAN_IP:-}
+      # 必须显式填宿主机在手机所在 LAN 内的可达 IPv4（例如 192.168.1.10），否则手机扫码连不上。
+      GT_LAN_IP: "${GT_LAN_IP:?GT_LAN_IP is required - 手机扫码用，填宿主机在手机所在 LAN 内的可达 IPv4（与 GT_PUBLIC_HOST 同网段时可直接用同值）}"
       # 存储后端：与 pipeline 保持一致（同一 PG 库）
       GT_DB_DRIVER: postgres
       GT_DB_DSN: postgres://${GT_PG_USER:-gametrace}:${GT_PG_PASSWORD:-gt_dev_pass}@postgres:5432/${GT_PG_DB:-gametrace}?sslmode=disable
