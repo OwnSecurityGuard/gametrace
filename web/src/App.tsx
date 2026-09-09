@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { SessionSidebar } from "@/components/session-sidebar";
 import { FilterBar } from "@/components/filter-bar";
-import { EventTable } from "@/components/event-table";
 import { RawPacketTable } from "@/components/raw-packet-table";
 import { ConnectionsPage } from "@/components/connections-page";
 import { PluginPanel } from "@/components/plugin-panel";
@@ -15,6 +14,7 @@ import { ProbeAdminDialog } from "@/components/probe-admin-dialog";
 import { MyCapturePage } from "@/components/my-capture-page";
 import { ProjectPage } from "@/components/project-page";
 import { SessionOverviewPage } from "@/components/session-overview-page";
+import { DecodedView } from "@/components/decoded-view";
 import { Button } from "@/components/ui/button";
 import { Sun, Moon, Settings, Play, Square, Cable, KeyRound, Download, ChevronDown, Check, UserRound, Users, Server } from "lucide-react";
 import { RAW_DEBUG_ENABLED } from "@/lib/env";
@@ -553,8 +553,8 @@ export default function App() {
             />
           )}
           {activeTab === "decoded" && (
-            <div className="h-full overflow-auto p-4 gt-scroll">
-              <EventTable sessionId={selectedSessionId} filter={filter} onFilterChange={setFilter} />
+            <div className="flex h-full flex-col overflow-auto p-4 gt-scroll">
+              <DecodedView sessionId={selectedSessionId} filter={filter} onFilterChange={setFilter} />
             </div>
           )}
           {activeTab === "connections" && (

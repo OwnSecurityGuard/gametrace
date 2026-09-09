@@ -1039,6 +1039,7 @@ func (m *mcpCapture) handleGetCaptureSchema(ctx context.Context, req mcp.CallToo
 		{"name": "is_push", "type": "number", "description": "1 if server push, 0 otherwise"},
 		{"name": "correlation_id", "type": "string", "description": "request/response pairing key from plugin semantic pair rules (same value on both sides)"},
 		{"name": "causation_id", "type": "string", "description": "event id of the preceding request this event responds to (response side only)"},
+		{"name": "parent_id", "type": "string", "description": "parent event id of extract child events (empty for top-level)"},
 		{"name": "src", "type": "string", "description": "source addr (ip:port)"},
 		{"name": "dst", "type": "string", "description": "destination addr (ip:port)"},
 		{"name": "tcp_flags", "type": "string", "description": "TCP control flags (FIN|RST|...), non-empty means tcp_close event"},

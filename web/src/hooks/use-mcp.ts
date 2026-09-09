@@ -5,6 +5,7 @@ import { useAuthToken } from "@/hooks/use-auth";
 import { withTokenParam, notifyAuthError, wasRecentlyUnauthorized } from "@/lib/auth";
 import type { ListSessionsResult } from "@/types/session";
 import type { ListDecodedDataResult, CaptureSchemaResult } from "@/types/event";
+import type { ListStateChangesResult } from "@/types/state-change";
 import type { ListRawPacketsResult } from "@/types/raw-packet";
 import type { ListPluginsResult, DecodeRawPacketsResult } from "@/types/decode";
 import type {
@@ -97,6 +98,36 @@ export function useDecodedData(
     // 抓包是实时写入，需要轮询才能把新解码的事件持续拉出来；
     // 没有轮询时查询只在 enabled 变 true 时触发一次，之后表格永远停留在那一刻的快照。
     refetchInterval: sessionId ? 2000 : false,
+  });
+}
+
+/** 查询指定 session 的实体状态变更（state_changes 投影表）。 */
+export function useStateChanges(
+  sessionId: string | null,
+  options: {
+    limit?: number;
+    offset?: number;
+    subjectType?: string;
+    subjectId?: string;
+    op?: string;
+    path?: string;
+  } = {},
+) {
+  return useQuery({
+    queryKey: ["stateChanges", sessionId, options],
+    queryFn: () =>
+      mcpClient.callTool<ListStateChangesResult>("list_state_changes", {
+        session_id: sessionId ?? undefined,
+        limit: options.limit,
+        offset: options.offset,
+        subject_type: options.subjectType ?? "",
+        subject_id: options.subjectId ?? "",
+        op: options.op ?? "",
+        path: options.path ?? "",
+      }),
+    enabled: !!sessionId,
+    placeholderData: keepPreviousData, // 翻页不闪骨架屏，沿用上一页数据
+    refetchInterval: sessionId ? 2000 : false, // 抓包实时写入，轮询保持新鲜
   });
 }
 

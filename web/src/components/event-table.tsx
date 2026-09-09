@@ -9,16 +9,25 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
+  ChevronRight as TreeChevron,
   Table2,
   SearchX,
   RotateCw,
   ArrowRight,
-  ArrowLeft,
   Link2,
+  GitFork,
 } from "lucide-react";
 import type { DecodedEvent } from "@/types/event";
 import type { CaptureContext } from "@/types/connection";
-import { unpackJsonStrings } from "@/lib/utils";
+import {
+  extractMeta,
+  formatTimestamp,
+  formatSize,
+  DirectionBadge,
+  MessageCell,
+  HighlightedJson,
+  type EventMeta,
+} from "@/lib/event-display";
 
 interface EventTableProps {
   sessionId: string | null;
@@ -28,65 +37,6 @@ interface EventTableProps {
 }
 
 const PAGE_SIZE = 20;
-
-// ─── 元数据提取 ─────────────────────────────────────────────
-
-interface EventMeta {
-  direction: string;   // "client_to_server" | "server_to_client" | ""（端口推断的传输层事实）
-  msgName: string;     // e.g. "on_client_delta"
-  semantic: string[];  // SDK annotate 规则标签：request | response | notification | error
-  blocks?: number;     // Blocks 数量（如有）
-}
-
-/** 安全提取 _meta 字段，缺失时返回空默认值 */
-function extractMeta(data: Record<string, unknown>): EventMeta {
-  const meta = data._meta as Record<string, unknown> | undefined;
-  if (!meta || typeof meta !== "object") {
-    return { direction: "", msgName: "", semantic: [] };
-  }
-  const direction = String(meta.direction ?? "");
-  const msgName = String(meta.msg_name ?? "");
-  const semantic = Array.isArray(meta.semantic)
-    ? meta.semantic.map((s) => String(s)).filter(Boolean)
-    : [];
-
-  // 尝试提取 Blocks 数量（Godot 协议特有）
-  let blocks: number | undefined;
-  const blocksArr = data.Blocks as Array<Record<string, unknown>> | undefined;
-  if (Array.isArray(blocksArr)) {
-    blocks = blocksArr.length;
-  }
-  // 也尝试 count 字段
-  if (blocks === 0 && typeof data.count === "number") {
-    blocks = data.count;
-  }
-
-  return { direction, msgName, semantic, blocks };
-}
-
-// ─── 格式化工具 ─────────────────────────────────────────────
-
-function formatTimestamp(isoStr: string): string {
-  try {
-    return new Date(isoStr).toLocaleString("zh-CN", {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-  } catch {
-    return isoStr;
-  }
-}
-
-/** 字节 → 可读大小 */
-function formatSize(bytes: number): string {
-  if (bytes <= 0) return "-";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 /** 生成一行 payload 摘要文本 */
 function summarizePayload(data: Record<string, unknown>, meta: EventMeta): string {
@@ -112,149 +62,6 @@ function summarizePayload(data: Record<string, unknown>, meta: EventMeta): strin
   }
 
   return parts.length > 0 ? parts.join(" · ") : "(empty)";
-}
-
-// ─── 方向箭头 Badge ──────────────────────────────────────────
-
-function DirectionBadge({ direction }: { direction: string }) {
-  switch (direction) {
-    case "client_to_server":
-      return (
-        <span className="inline-flex items-center gap-0.5 rounded-full bg-blue-50 text-blue-700 px-2 py-0.5 text-xs font-medium dark:bg-blue-950 dark:text-blue-300">
-          <ArrowRight className="h-3 w-3" />
-          C→S
-        </span>
-      );
-    case "server_to_client":
-      return (
-        <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-50 text-emerald-700 px-2 py-0.5 text-xs font-medium dark:bg-emerald-950 dark:text-emerald-300">
-          <ArrowLeft className="h-3 w-3" />
-          S→C
-        </span>
-      );
-    default:
-      return (
-        <span className="inline-flex items-center rounded-full bg-muted text-muted-foreground px-2 py-0.5 text-xs">
-          ?
-        </span>
-      );
-  }
-}
-
-// ─── 语义标签（annotate 规则产出） ───────────────────────────
-
-const SEMANTIC_STYLES: Record<string, string> = {
-  request: "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
-  response: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
-  notification: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-  error: "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300",
-};
-
-function SemanticBadge({ label }: { label: string }) {
-  return (
-    <span
-      className={`shrink-0 rounded px-1 py-px text-[10px] font-medium ${
-        SEMANTIC_STYLES[label] ?? "bg-muted text-muted-foreground"
-      }`}
-    >
-      {label}
-    </span>
-  );
-}
-
-// ─── 消息名 + SDK 语义标签 ───────────────────────────────────
-// ponytail: 协议语义只显示 SDK 规则产出（annotate/pair）；插件私有字段（如
-// http-decoder 的 _meta.is_push）不上 UI——要展示就改成声明 annotate 规则。
-
-function MessageCell({ msgName, semantic }: { msgName: string; semantic: string[] }) {
-  return (
-    <div className="flex items-center gap-1.5 min-w-0">
-      <span className="font-mono text-xs font-semibold truncate" title={msgName}>
-        {msgName || "(unknown)"}
-      </span>
-      {semantic.map((s) => (
-        <SemanticBadge key={s} label={s} />
-      ))}
-    </div>
-  );
-}
-
-// ─── JSON 语法高亮（展开行复用） ──────────────────────────────
-
-function HighlightedJson({ data }: { data: Record<string, unknown> }) {
-  const formatted = useMemo(() => JSON.stringify(unpackJsonStrings(data), null, 2), [data]);
-  return (
-    <pre className="gt-json-pre max-h-[400px] overflow-auto">
-      <HighlightedText text={formatted} />
-    </pre>
-  );
-}
-
-function HighlightedText({ text }: { text: string }) {
-  const tokens = useMemo(() => tokenizeJson(text), [text]);
-  return (
-    <>
-      {tokens.map((token, i) => {
-        switch (token.type) {
-          case "key":
-            return <span key={i} className="gt-json-key">{token.text}</span>;
-          case "string":
-            return <span key={i} className="gt-json-string">{token.text}</span>;
-          case "number":
-            return <span key={i} className="gt-json-number">{token.text}</span>;
-          case "boolean":
-            return <span key={i} className="gt-json-boolean">{token.text}</span>;
-          case "null":
-            return <span key={i} className="gt-json-null">{token.text}</span>;
-          default:
-            return <span key={i} className="gt-json-punct">{token.text}</span>;
-        }
-      })}
-    </>
-  );
-}
-
-interface JsonToken {
-  type: "key" | "string" | "number" | "boolean" | "null" | "punct";
-  text: string;
-}
-
-function tokenizeJson(text: string): JsonToken[] {
-  const tokens: JsonToken[] = [];
-  let i = 0;
-  let inString = false;
-  let stringChar = "";
-
-  while (i < text.length) {
-    const ch = text[i]!;
-    if ((ch === '"' || ch === "'") && !inString) {
-      inString = true;
-      stringChar = ch;
-      let end = i + 1;
-      while (end < text.length && text[end] !== stringChar) {
-        if (text[end] === "\\") end++;
-        end++;
-      }
-      const str = text.slice(i, end + 1);
-      const afterStr = text.slice(end + 1).trimStart();
-      tokens.push({ type: afterStr.startsWith(":") ? "key" : "string", text: str });
-      i = end + 1;
-      continue;
-    }
-    if (inString) { tokens.push({ type: "string", text: ch }); i++; continue; }
-    if (ch === "-" || (ch >= "0" && ch <= "9")) {
-      let end = i + 1;
-      while (end < text.length && /[\d.eE+\-]/.test(text[end]!)) end++;
-      tokens.push({ type: "number", text: text.slice(i, end) }); i = end; continue;
-    }
-    if (text.startsWith("true", i)) { tokens.push({ type: "boolean", text: "true" }); i += 4; continue; }
-    if (text.startsWith("false", i)) { tokens.push({ type: "boolean", text: "false" }); i += 5; continue; }
-    if (text.startsWith("null", i)) { tokens.push({ type: "null", text: "null" }); i += 4; continue; }
-    if (":,{}[]".includes(ch)) { tokens.push({ type: "punct", text: ch }); }
-    else if (ch !== " " && ch !== "\n" && ch !== "\r" && ch !== "\t") { tokens.push({ type: "punct", text: ch }); }
-    i++;
-  }
-  return tokens;
 }
 
 // ─── 捕获上下文（Capture Context，代理抓包特有） ────────────────
@@ -335,16 +142,66 @@ function PairPanel({
   );
 }
 
+/** 父子层级面板：展示 extract 规则产出的子事件（ParentID 指向本事件），可跳转定位。 */
+function ChildPanel({
+  children,
+  onJumpToChild,
+}: {
+  children: DecodedEvent[];
+  onJumpToChild: (id: string) => void;
+}) {
+  if (children.length === 0) return null;
+
+  return (
+    <div className="mb-3 rounded-md border border-border bg-background px-3 py-2">
+      <div className="mb-1.5 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
+        <GitFork className="h-3.5 w-3.5" />
+        父子层级
+        <span className="text-[10px] font-normal text-muted-foreground/70">
+          {children.length} 个子事件
+        </span>
+      </div>
+      <ul className="space-y-1">
+        {children.map((child) => {
+          const cMeta = extractMeta(child.data);
+          return (
+            <li key={child.id} className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground/50">
+                ├─{" "}
+              </span>
+              <button
+                type="button"
+                onClick={() => onJumpToChild(child.id)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs hover:bg-muted transition-colors"
+                title={`跳转到子事件 ${cMeta.msgName || child.id}`}
+              >
+                <TreeChevron className="h-3 w-3 text-muted-foreground" />
+                <span className="font-mono font-semibold">{cMeta.msgName || "(unknown)"}</span>
+                <span className="text-muted-foreground">({child.protocol})</span>
+                <span className="font-mono text-muted-foreground">{formatTimestamp(child.timestamp)}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 function ExpandedRow({
   event,
   partners,
+  children,
   onJumpToPartner,
   onLocatePair,
+  onJumpToChild,
 }: {
   event: DecodedEvent;
   partners: DecodedEvent[];
+  children: DecodedEvent[];
   onJumpToPartner: (id: string) => void;
   onLocatePair: (event: DecodedEvent) => void;
+  onJumpToChild: (id: string) => void;
 }) {
   return (
     <TableRow className="gt-fade-in">
@@ -355,6 +212,7 @@ function ExpandedRow({
           onJumpToPartner={onJumpToPartner}
           onLocatePair={onLocatePair}
         />
+        <ChildPanel children={children} onJumpToChild={onJumpToChild} />
         <div className="gt-json-view">
           <HighlightedJson data={event.data} />
         </div>
@@ -368,19 +226,23 @@ function ExpandedRow({
 const EventRow = memo(function EventRow({
   event,
   partners,
+  children,
   isExpanded,
   isHighlighted,
   onToggle,
   onJumpToPartner,
   onLocatePair,
+  onJumpToChild,
 }: {
   event: DecodedEvent;
   partners: DecodedEvent[];
+  children: DecodedEvent[];
   isExpanded: boolean;
   isHighlighted: boolean;
   onToggle: (id: string) => void;
   onJumpToPartner: (id: string) => void;
   onLocatePair: (event: DecodedEvent) => void;
+  onJumpToChild: (id: string) => void;
 }) {
   const meta = useMemo(() => extractMeta(event.data), [event.data]);
   const summary = useMemo(() => summarizePayload(event.data, meta), [event.data, meta]);
@@ -403,14 +265,27 @@ const EventRow = memo(function EventRow({
           <DirectionBadge direction={meta.direction} />
         </TableCell>
 
-        {/* 消息名 */}
+        {/* 消息名：子事件带缩进角标 */}
         <TableCell className="min-w-[140px] max-w-[220px]">
-          <MessageCell msgName={meta.msgName} semantic={meta.semantic} />
-          {partners.length > 0 && !isExpanded && (
-            <span className="ml-1.5 inline-flex items-center text-muted-foreground/70" title="已配对请求/响应">
-              <Link2 className="h-3 w-3" />
-            </span>
-          )}
+          <div className="flex items-center gap-1 min-w-0">
+            {event.parent_id && (
+              <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60" title={`父事件 ${event.parent_id}`}>
+                ⊢
+              </span>
+            )}
+            <MessageCell msgName={meta.msgName} semantic={meta.semantic} />
+            {children.length > 0 && (
+              <span className="ml-0.5 shrink-0 inline-flex items-center gap-0.5 text-muted-foreground/70" title={`${children.length} 个 extract 子事件`}>
+                <GitFork className="h-3 w-3" />
+                <span className="text-[10px]">{children.length}</span>
+              </span>
+            )}
+            {partners.length > 0 && !isExpanded && (
+              <span className="ml-0.5 shrink-0 inline-flex items-center text-muted-foreground/70" title="已配对请求/响应">
+                <Link2 className="h-3 w-3" />
+              </span>
+            )}
+          </div>
         </TableCell>
 
         {/* 捕获上下文（代理抓包特有） */}
@@ -435,8 +310,10 @@ const EventRow = memo(function EventRow({
         <ExpandedRow
           event={event}
           partners={partners}
+          children={children}
           onJumpToPartner={onJumpToPartner}
           onLocatePair={onLocatePair}
+          onJumpToChild={onJumpToChild}
         />
       )}
     </Fragment>
@@ -497,8 +374,22 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
     return m;
   }, [events]);
 
-  /** 跳转到当前页内的配对消息：展开并短暂高亮。 */
-  function handleJumpToPartner(id: string) {
+  /**
+   * 父子索引：父事件 id → 当前页内的提取子事件（parent_id 指回父事件，extract 规则写入）。
+   */
+  const childrenMap = useMemo(() => {
+    const m = new Map<string, DecodedEvent[]>();
+    for (const ev of events) {
+      if (!ev.parent_id) continue;
+      const arr = m.get(ev.parent_id);
+      if (arr) arr.push(ev);
+      else m.set(ev.parent_id, [ev]);
+    }
+    return m;
+  }, [events]);
+
+  /** 跳转到当前页内的事件（配对伙伴 / 子事件）：展开并短暂高亮。 */
+  function handleJumpTo(id: string) {
     setExpandedId(id);
     setTimeout(() => {
       document.getElementById(`event-row-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -507,7 +398,11 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
     setTimeout(() => setHighlightId(null), 2000);
   }
 
-  /** 配对消息不在当前页：用 causation 关系写筛选表达式定位（App 的 FilterBar 同步更新）。 */
+  /** 跳转到当前页内的配对消息：展开并短暂高亮。 */
+  function handleJumpToPartner(id: string) {
+    handleJumpTo(id);
+  }
+
   function handleLocatePair(ev: DecodedEvent) {
     if (!onFilterChange) return;
     setExpandedId(null);
@@ -602,11 +497,13 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
               key={event.id}
               event={event}
               partners={partnersMap.get(event.id) ?? []}
+              children={childrenMap.get(event.id) ?? []}
               isExpanded={expandedId === event.id}
               isHighlighted={highlightId === event.id}
               onToggle={handleToggleExpand}
               onJumpToPartner={handleJumpToPartner}
               onLocatePair={handleLocatePair}
+              onJumpToChild={handleJumpTo}
             />
           ))}
         </TableBody>

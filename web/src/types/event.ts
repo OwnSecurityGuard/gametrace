@@ -9,6 +9,8 @@ export interface DecodedEvent {
   correlation_id?: string;
   /** 响应侧特有：指向触发它的请求事件 id。 */
   causation_id?: string;
+  /** extract 语义规则产出的子事件特有：指向其父事件 id（顶级事件为空）。 */
+  parent_id?: string;
   data: Record<string, unknown>;
   /** 代理抓包特有：捕获上下文（Captured By / Connection / Stream / Source）。 */
   capture?: import("./connection").CaptureContext;
