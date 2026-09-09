@@ -68,31 +68,39 @@ export function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// ─── 方向箭头 Badge ──────────────────────────────────────────
-
-export function DirectionBadge({ direction }: { direction: string }) {
-  switch (direction) {
-    case "client_to_server":
-      return (
-        <span className="inline-flex items-center gap-0.5 rounded-full bg-blue-50 text-blue-700 px-2 py-0.5 text-xs font-medium dark:bg-blue-950 dark:text-blue-300">
-          <ArrowRight className="h-3 w-3" />
-          C→S
-        </span>
-      );
-    case "server_to_client":
-      return (
-        <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-50 text-emerald-700 px-2 py-0.5 text-xs font-medium dark:bg-emerald-950 dark:text-emerald-300">
-          <ArrowLeft className="h-3 w-3" />
-          S→C
-        </span>
-      );
-    default:
-      return (
-        <span className="inline-flex items-center rounded-full bg-muted text-muted-foreground px-2 py-0.5 text-xs">
-          ?
-        </span>
-      );
+/**
+ * 紧凑方向图标：只编码方向（形状 + 箭头指向），不抢语义 badge 的颜色。
+ *
+ * 表格里方向 pill（C→S 蓝 / S→C 绿）与语义 pill（request 蓝 / response 绿）撞色，
+ * 两排同色小圆点分不清哪个是哪个——这是「看着费劲」的主要来源。
+ * 这里改成中性灰底 + 只给箭头上色，颜色留给语义。
+ */
+export function DirectionIcon({ direction }: { direction: string }) {
+  if (direction === "client_to_server") {
+    return (
+      <span
+        className="shrink-0 rounded bg-muted px-1 py-px text-muted-foreground"
+        title="客户端 → 服务端"
+      >
+        <ArrowRight className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+      </span>
+    );
   }
+  if (direction === "server_to_client") {
+    return (
+      <span
+        className="shrink-0 rounded bg-muted px-1 py-px text-muted-foreground"
+        title="服务端 → 客户端"
+      >
+        <ArrowLeft className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+      </span>
+    );
+  }
+  return (
+    <span className="shrink-0 rounded bg-muted px-1 py-px text-muted-foreground" title="方向未知">
+      <ArrowRight className="h-3 w-3 text-muted-foreground/50" />
+    </span>
+  );
 }
 
 // ─── 语义标签（annotate 规则产出） ───────────────────────────

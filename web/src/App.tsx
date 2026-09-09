@@ -25,16 +25,18 @@ import type { ProjectInfo } from "@/types/project";
 
 type ViewTab = "home" | "overview" | "connections" | "decoded" | "runs" | "plugins" | "raw";
 
-/** 一级视图：普通用户最常用的入口（我的抓包 / 会话概览 / 连接）。 */
+/** 一级视图：普通用户最常用的入口（我的抓包 / 会话 / 协议数据 / 连接）。
+ *  「会话」= 选中会话后的工作区（原「概览」，名字说不出它是什么，故改名）。
+ *  「协议数据」是本平台最重要的数据视图，必须常驻一级，不能藏在「更多」里。 */
 const PRIMARY_TABS: { id: ViewTab; label: string }[] = [
   { id: "home", label: "我的抓包" },
-  { id: "overview", label: "概览" },
+  { id: "overview", label: "会话" },
+  { id: "decoded", label: "协议数据" },
   { id: "connections", label: "连接" },
 ];
 
-/** 高级视图：插件 / 原始包，默认收进「更多」下拉，降低普通用户的认知负担。 */
+/** 高级视图：行为 / 插件 / 原始包，默认收进「更多」下拉，降低普通用户的认知负担。 */
 const ADVANCED_TABS: { id: ViewTab; label: string }[] = [
-  { id: "decoded", label: "协议数据" },
   { id: "runs", label: "行为" },
   { id: "plugins", label: "插件" },
   ...(RAW_DEBUG_ENABLED ? [{ id: "raw" as ViewTab, label: "原始包" }] : []),

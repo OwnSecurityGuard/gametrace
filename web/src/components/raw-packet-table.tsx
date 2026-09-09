@@ -1,3 +1,9 @@
+// RawPacketTable — 「原始包」视图：抓到的原始网络包 + 用插件离线解码入口。
+//
+// 阅读动作与协议数据表保持一致：行可点可展开、可多行同时展开、展开区带头部与复制。
+// 注意：后端 list_raw_packets 的 count 是「当前页条数」而非总数，所以这里不能拿它算
+// 总页数（否则 totalPages 恒为 1 → 翻页按钮永远不出现 → 只能看到前 20 个包）。
+// 改成无总数翻页：本页填满就允许「下一页」，不满即到末尾。
 import { useState, useMemo, useEffect, useRef, Fragment, memo } from "react";
 import { useRawPackets, useListPlugins, useDecodeRawPackets } from "@/hooks/use-mcp";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
@@ -6,8 +12,20 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "@/components/ui/toast";
-import { ChevronLeft, ChevronRight, ChevronsLeft, Network, RotateCw, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronUp,
+  ArrowRight,
+  Copy,
+  Network,
+  RotateCw,
+  X,
+} from "lucide-react";
 import type { RawPacket } from "@/types/raw-packet";
+import { formatTimestamp } from "@/lib/event-display";
+import { hexDump, hexPreview, base64ToBytes } from "@/lib/hex";
 
 interface RawPacketTableProps {
   sessionId: string | null;
@@ -15,99 +33,79 @@ interface RawPacketTableProps {
   onDecoded?: () => void;
 }
 
-const PAGE_SIZE = 20;
+const PAGE_SIZES = [20, 50, 100];
+/** 展开指示 | 时间 | 源 | 目标 | 协议 | 长度 | 预览 */
+const COLSPAN = 7;
 
-/** 格式化 ISO 时间为本地时间 */
-function formatTimestamp(isoStr: string): string {
+async function copyText(label: string, text: string) {
   try {
-    return new Date(isoStr).toLocaleString("zh-CN", {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
+    await navigator.clipboard.writeText(text);
+    toast.success(`已复制${label}`);
   } catch {
-    return isoStr;
+    toast.error("复制失败", "浏览器拒绝访问剪贴板");
   }
 }
 
-/** base64 解码为 Uint8Array */
-function base64ToBytes(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-/** 将字节数组格式化为 hex dump（偏移 | hex | ascii） */
-function hexDump(bytes: Uint8Array, maxBytes = 4096): string {
-  const truncated = bytes.length > maxBytes;
-  const slice = truncated ? bytes.slice(0, maxBytes) : bytes;
-  const lines: string[] = [];
-
-  for (let offset = 0; offset < slice.length; offset += 16) {
-    const chunk = slice.slice(offset, offset + 16);
-    const hexParts: string[] = [];
-    const asciiParts: string[] = [];
-
-    for (let i = 0; i < 16; i++) {
-      if (i < chunk.length) {
-        hexParts.push(chunk[offset + i]!.toString(16).padStart(2, "0"));
-        const ch = chunk[offset + i]!;
-        asciiParts.push(ch >= 0x20 && ch < 0x7f ? String.fromCharCode(ch) : ".");
-      } else {
-        hexParts.push("  ");
-        asciiParts.push(" ");
-      }
-    }
-
-    const offsetStr = offset.toString(16).padStart(8, "0");
-    const hexStr = hexParts.slice(0, 8).join(" ") + "  " + hexParts.slice(8).join(" ");
-    const asciiStr = asciiParts.join("");
-    lines.push(`${offsetStr}  ${hexStr}  |${asciiStr}|`);
-  }
-
-  if (truncated) {
-    lines.push(`... (${bytes.length} bytes total, showing first ${maxBytes})`);
-  }
-
-  return lines.join("\n");
-}
-
-/** payload 预览（单行截断） */
-function payloadPreview(b64: string, maxLen = 48): string {
-  try {
-    const bytes = base64ToBytes(b64);
-    const hex: string[] = [];
-    for (let i = 0; i < Math.min(bytes.length, maxLen); i++) {
-      hex.push(bytes[i]!.toString(16).padStart(2, "0"));
-    }
-    const suffix = bytes.length > maxLen ? "..." : "";
-    return hex.join(" ") + suffix;
-  } catch {
-    return "(decode error)";
-  }
-}
-
-/** 展开行：完整 hex dump */
-function ExpandedHexRow({ payload }: { payload: string }) {
+/** 展开行：完整 hex dump，带头部（哪一行）与复制。 */
+function ExpandedHexRow({
+  pkt,
+  onCollapse,
+}: {
+  pkt: RawPacket;
+  onCollapse: () => void;
+}) {
   const hex = useMemo(() => {
     try {
-      return hexDump(base64ToBytes(payload));
+      return hexDump(base64ToBytes(pkt.payload));
     } catch {
       return "(decode error)";
     }
-  }, [payload]);
+  }, [pkt.payload]);
 
   return (
     <TableRow className="gt-fade-in">
-      <TableCell colSpan={6} className="bg-muted/30 p-4">
-        <pre className="text-xs font-mono whitespace-pre overflow-x-auto">
-          {hex}
-        </pre>
+      <TableCell colSpan={COLSPAN} className="bg-muted/30 p-4">
+        <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-border pb-2">
+          <span className="font-mono text-xs tabular-nums text-muted-foreground">
+            {formatTimestamp(pkt.timestamp)}
+          </span>
+          <span className="font-mono text-sm font-semibold">
+            {pkt.src}
+            <ArrowRight className="mx-1 inline h-3 w-3 text-muted-foreground" />
+            {pkt.dst}
+          </span>
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            {pkt.protocol || "-"}
+          </span>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {pkt.payload_len} B
+          </span>
+          <span className="ml-auto flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void copyText(" hex dump", hex);
+              }}
+              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            >
+              <Copy className="h-3 w-3" />
+              复制 hex
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCollapse();
+              }}
+              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            >
+              <ChevronUp className="h-3 w-3" />
+              收起
+            </button>
+          </span>
+        </div>
+        <pre className="max-h-[360px] overflow-auto whitespace-pre text-xs font-mono">{hex}</pre>
       </TableCell>
     </TableRow>
   );
@@ -118,47 +116,58 @@ const RawPacketRow = memo(function RawPacketRow({
   pkt,
   isExpanded,
   onToggle,
+  onCollapse,
 }: {
   pkt: RawPacket;
   isExpanded: boolean;
   onToggle: (id: string) => void;
+  onCollapse: (id: string) => void;
 }) {
+  const preview = useMemo(() => hexPreview(pkt.payload), [pkt.payload]);
+
   return (
     <Fragment key={pkt.id}>
       <TableRow
-        className="cursor-pointer"
+        className={`cursor-pointer transition-colors ${isExpanded ? "bg-muted/40" : ""}`}
         onClick={() => onToggle(pkt.id)}
         aria-expanded={isExpanded}
       >
-        <TableCell className="font-mono text-xs whitespace-nowrap">
+        <TableCell className="w-8 pl-2 pr-0 text-muted-foreground/60">
+          <ChevronRight
+            className={`h-3.5 w-3.5 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+          />
+        </TableCell>
+        <TableCell className="w-28 font-mono text-xs whitespace-nowrap tabular-nums">
           {formatTimestamp(pkt.timestamp)}
         </TableCell>
-        <TableCell className="max-w-[160px] truncate font-mono text-xs" title={pkt.src}>
+        <TableCell className="max-w-[180px] truncate font-mono text-xs" title={pkt.src}>
           {pkt.src}
         </TableCell>
-        <TableCell className="max-w-[160px] truncate font-mono text-xs" title={pkt.dst}>
+        <TableCell className="max-w-[180px] truncate font-mono text-xs" title={pkt.dst}>
           {pkt.dst}
         </TableCell>
-        <TableCell className="font-mono text-xs">
+        <TableCell className="w-16 font-mono text-xs text-muted-foreground">
           {pkt.protocol}
         </TableCell>
-        <TableCell className="text-xs tabular-nums">
+        <TableCell className="w-16 text-right text-xs tabular-nums text-muted-foreground">
           {pkt.payload_len}
         </TableCell>
-        <TableCell className="font-mono text-xs">
-          <span className="text-muted-foreground">
-            {payloadPreview(pkt.payload)}
+        <TableCell className="max-w-[24rem]">
+          <span className="block truncate font-mono text-xs text-foreground/70" title={preview}>
+            {preview}
           </span>
         </TableCell>
       </TableRow>
-      {isExpanded && <ExpandedHexRow payload={pkt.payload} />}
+      {isExpanded && <ExpandedHexRow pkt={pkt} onCollapse={() => onCollapse(pkt.id)} />}
     </Fragment>
   );
 });
 
 export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
   const [page, setPage] = useState<number>(0);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0]!);
+  // 多行可同时展开：对比相邻包是这里最常见的动作。
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [selectedPlugin, setSelectedPlugin] = useState<string>("");
   const [clearExisting, setClearExisting] = useState<boolean>(true);
 
@@ -179,6 +188,7 @@ export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
     debounceRef.current = window.setTimeout(() => {
       setFilters({ protocol: protoInput.trim(), src: srcInput.trim(), dst: dstInput.trim() });
       setPage(0);
+      setExpandedIds(new Set());
     }, 300);
     return () => {
       if (debounceRef.current) window.clearTimeout(debounceRef.current);
@@ -220,7 +230,7 @@ export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
     );
   }
 
-  const offset = page * PAGE_SIZE;
+  const offset = page * pageSize;
 
   const {
     data,
@@ -231,7 +241,7 @@ export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
     isFetching,
     isPlaceholderData,
   } = useRawPackets(sessionId, {
-    limit: PAGE_SIZE,
+    limit: pageSize,
     offset,
     protocol: filters.protocol || undefined,
     src: filters.src || undefined,
@@ -239,12 +249,24 @@ export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
   });
 
   const packets = useMemo(() => data?.packets ?? [], [data]);
-  const count = data?.count ?? 0;
-  // list_raw_packets 返回当前页的 count，不是 total。用 count 估算分页。
-  const totalPages = Math.ceil(count / PAGE_SIZE);
+  // 后端不返回总数，只能「本页填满 ⇒ 可能还有下一页」。
+  const hasMore = packets.length >= pageSize;
 
   function handleToggleExpand(packetId: string) {
-    setExpandedId((prev) => (prev === packetId ? null : packetId));
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(packetId)) next.delete(packetId);
+      else next.add(packetId);
+      return next;
+    });
+  }
+
+  function handleCollapse(packetId: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(packetId);
+      return next;
+    });
   }
 
   const hasFilter = !!(protoInput || srcInput || dstInput);
@@ -387,23 +409,48 @@ export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
         </div>
       )}
 
-      {/* 统计信息 */}
-      <div className="flex items-center justify-between px-1 text-xs text-muted-foreground" aria-live="polite">
+      {/* 统计信息 + 每页条数 */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground" aria-live="polite">
         <span className="tabular-nums">
-          共 {count} 条 · 显示第 {offset + 1}–{Math.min(offset + PAGE_SIZE, count)} 条
+          第 {offset + 1}–{offset + packets.length} 条
+          {hasMore ? "" : " · 已到末尾"}
           {isPlaceholderData ? " · 更新中…" : ""}
+          {expandedIds.size > 0 ? ` · 已展开 ${expandedIds.size} 行` : ""}
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="text-[11px] text-muted-foreground/70">点击行展开完整 hex</span>
+          <label className="flex items-center gap-1">
+            <span className="text-[11px] text-muted-foreground/70">每页</span>
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setPage(0);
+                setExpandedIds(new Set());
+              }}
+              className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
+              aria-label="每页条数"
+            >
+              {PAGE_SIZES.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
         </span>
       </div>
 
       {/* 数据表格 */}
-      <Table className="gt-table">
+      <Table className="gt-table" containerClassName="relative w-full overflow-visible">
         <TableHeader>
           <TableRow>
-            <TableHead className="w-44">Timestamp</TableHead>
-            <TableHead className="w-32">Src</TableHead>
-            <TableHead className="w-32">Dst</TableHead>
-            <TableHead className="w-16">Proto</TableHead>
-            <TableHead className="w-20">Len</TableHead>
+            <TableHead className="w-8 pl-2 pr-0" aria-label="展开" />
+            <TableHead className="w-28">时间</TableHead>
+            <TableHead>源</TableHead>
+            <TableHead>目标</TableHead>
+            <TableHead className="w-16">协议</TableHead>
+            <TableHead className="w-16 text-right">长度</TableHead>
             <TableHead>Payload (hex)</TableHead>
           </TableRow>
         </TableHeader>
@@ -412,21 +459,25 @@ export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
             <RawPacketRow
               key={pkt.id}
               pkt={pkt}
-              isExpanded={expandedId === pkt.id}
+              isExpanded={expandedIds.has(pkt.id)}
               onToggle={handleToggleExpand}
+              onCollapse={handleCollapse}
             />
           ))}
         </TableBody>
       </Table>
 
-      {/* 分页控件 */}
-      {totalPages > 1 && (
+      {/* 分页控件：后端不返回总数，用「本页是否填满」判断能否继续向后翻 */}
+      {(page > 0 || hasMore) && (
         <div className="flex items-center justify-center gap-2 pt-2">
           <Button
             variant="outline"
             size="icon"
             className="h-8 w-8"
-            onClick={() => setPage(0)}
+            onClick={() => {
+              setPage(0);
+              setExpandedIds(new Set());
+            }}
             disabled={page === 0}
             aria-label="第一页"
           >
@@ -436,21 +487,25 @@ export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
             variant="outline"
             size="icon"
             className="h-8 w-8"
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            onClick={() => {
+              setPage((p) => Math.max(0, p - 1));
+              setExpandedIds(new Set());
+            }}
             disabled={page === 0}
             aria-label="上一页"
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <span className="px-2 text-sm tabular-nums">
-            {page + 1} / {totalPages}
-          </span>
+          <span className="px-2 text-sm tabular-nums">第 {page + 1} 页</span>
           <Button
             variant="outline"
             size="icon"
             className="h-8 w-8"
-            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-            disabled={page >= totalPages - 1}
+            onClick={() => {
+              setPage((p) => p + 1);
+              setExpandedIds(new Set());
+            }}
+            disabled={!hasMore}
             aria-label="下一页"
           >
             <ChevronRight className="h-4 w-4" />

@@ -18,10 +18,11 @@ import {
 } from "@/components/ui/table";
 import {
   ArrowLeft,
-  ArrowRight,
   Cable,
   Clock,
-  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  Copy,
   Rows3,
   Network,
   ListTree,
@@ -31,8 +32,11 @@ import {
   Server,
   RotateCw,
 } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 import { unpackJsonStrings } from "@/lib/utils";
 import { formatDuration, protocolLabel } from "@/components/connections-page";
+import { DirectionIcon, formatTimestamp } from "@/lib/event-display";
+import { base64ToBytes, hexDump } from "@/lib/hex";
 import type {
   ConnectionDetail,
   ConnectionEvent,
@@ -52,6 +56,11 @@ interface ConnectionDetailViewProps {
 
 type DetailTab = "timeline" | "streams" | "frames" | "events" | "raw";
 
+/** 帧子页单次取数上限（后端 limit；达到即视为被截断）。 */
+const FRAME_LIMIT = 500;
+/** 帧表列数：展开指示 | 时间 | 方向 | 源→目标 | 协议 | 大小 */
+const FRAME_COLSPAN = 6;
+
 const TABS: { id: DetailTab; label: string; icon: typeof Clock }[] = [
   { id: "timeline", label: "时间线", icon: Clock },
   { id: "streams", label: "流", icon: Rows3 },
@@ -59,31 +68,6 @@ const TABS: { id: DetailTab; label: string; icon: typeof Clock }[] = [
   { id: "events", label: "事件", icon: Braces },
   { id: "raw", label: "原始", icon: FileText },
 ];
-
-/** 方向徽标（与 event-table 语义一致）。 */
-function DirectionBadge({ direction }: { direction: string }) {
-  if (direction === "client_to_server") {
-    return (
-      <span className="inline-flex items-center gap-0.5 rounded-full bg-blue-50 text-blue-700 px-2 py-0.5 text-xs font-medium dark:bg-blue-950 dark:text-blue-300">
-        <ArrowRight className="h-3 w-3" />
-        C→S
-      </span>
-    );
-  }
-  if (direction === "server_to_client") {
-    return (
-      <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-50 text-emerald-700 px-2 py-0.5 text-xs font-medium dark:bg-emerald-950 dark:text-emerald-300">
-        <ArrowLeft className="h-3 w-3" />
-        S→C
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center rounded-full bg-muted text-muted-foreground px-2 py-0.5 text-xs">
-      ?
-    </span>
-  );
-}
 
 /** 时间（仅时分秒，用于流内紧凑展示）。 */
 function formatTime(iso: string): string {
@@ -94,58 +78,14 @@ function formatTime(iso: string): string {
   }
 }
 
-/** 时间（含日期，用于 Timeline/Frames/Events）。 */
-function formatDateTime(iso: string): string {
+/** 复制文本到剪贴板（失败给 toast，不静默）。 */
+async function copyText(label: string, text: string) {
   try {
-    return new Date(iso).toLocaleString("zh-CN", {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
+    await navigator.clipboard.writeText(text);
+    toast.success(`已复制${label}`);
   } catch {
-    return iso;
+    toast.error("复制失败", "浏览器拒绝访问剪贴板");
   }
-}
-
-/** base64 → 字节数组。 */
-function base64ToBytes(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-/** 字节 → hex dump（偏移 | hex | ascii）。 */
-function hexDump(bytes: Uint8Array, maxBytes = 4096): string {
-  const truncated = bytes.length > maxBytes;
-  const slice = truncated ? bytes.slice(0, maxBytes) : bytes;
-  const lines: string[] = [];
-  for (let offset = 0; offset < slice.length; offset += 16) {
-    const chunk = slice.slice(offset, offset + 16);
-    const hexParts: string[] = [];
-    const asciiParts: string[] = [];
-    for (let i = 0; i < 16; i++) {
-      if (i < chunk.length) {
-        hexParts.push(chunk[i]!.toString(16).padStart(2, "0"));
-        const ch = chunk[i]!;
-        asciiParts.push(ch >= 0x20 && ch < 0x7f ? String.fromCharCode(ch) : ".");
-      } else {
-        hexParts.push("  ");
-        asciiParts.push(" ");
-      }
-    }
-    const offsetStr = offset.toString(16).padStart(8, "0");
-    const hexStr = hexParts.slice(0, 8).join(" ") + "  " + hexParts.slice(8).join(" ");
-    lines.push(`${offsetStr}  ${hexStr}  |${asciiParts.join("")}|`);
-  }
-  if (truncated) {
-    lines.push(`... (${bytes.length} bytes total, showing first ${maxBytes})`);
-  }
-  return lines.join("\n");
 }
 
 /** JSON 视图（去转义 + 等宽展示）。 */
@@ -191,9 +131,9 @@ function TimelineTab({ streams }: { streams: ConnectionStream[] }) {
           <span className="absolute -left-[31px] top-1.5 h-2.5 w-2.5 rounded-full bg-primary ring-4 ring-background" />
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-xs tabular-nums text-muted-foreground whitespace-nowrap">
-              {formatDateTime(ev.timestamp)}
+              {formatTimestamp(ev.timestamp)}
             </span>
-            <DirectionBadge direction={ev.direction} />
+            <DirectionIcon direction={ev.direction} />
             <Badge variant="secondary" className="font-mono text-[10px]">
               Stream #{ev.streamSeq}
             </Badge>
@@ -245,8 +185,8 @@ function StreamsTab({
               </Badge>
             )}
             <span className="text-xs text-muted-foreground tabular-nums">
-              {formatDateTime(stream.start_time)}
-              {stream.end_time !== stream.start_time && ` → ${formatDateTime(stream.end_time)}`}
+              {formatTimestamp(stream.start_time)}
+              {stream.end_time !== stream.start_time && ` → ${formatTimestamp(stream.end_time)}`}
             </span>
             <span className="text-xs text-muted-foreground tabular-nums">
               {stream.event_count} 个事件
@@ -263,7 +203,7 @@ function StreamsTab({
                 <span className="font-mono text-xs tabular-nums text-muted-foreground whitespace-nowrap">
                   {formatTime(ev.timestamp)}
                 </span>
-                <DirectionBadge direction={ev.direction} />
+                <DirectionIcon direction={ev.direction} />
                 <span className="font-mono text-xs font-semibold truncate" title={ev.msg_name}>
                   {ev.msg_name || ev.type || "(unknown)"}
                 </span>
@@ -288,19 +228,67 @@ function StreamsTab({
 
 // ─── 子页：Frames ─────────────────────────────────────────────
 
-function FrameHexRow({ payload }: { payload: string }) {
+/** 展开行：完整 hex dump。头部重复一遍身份信息 + 复制/收起，与协议数据表一致。 */
+function FrameHexRow({
+  frame,
+  colSpan,
+  onCollapse,
+}: {
+  frame: ConnectionFrame;
+  colSpan: number;
+  onCollapse: () => void;
+}) {
   const hex = useMemo(() => {
     try {
-      return hexDump(base64ToBytes(payload));
+      return hexDump(base64ToBytes(frame.payload));
     } catch {
       return "(decode error)";
     }
-  }, [payload]);
+  }, [frame.payload]);
 
   return (
     <TableRow className="gt-fade-in">
-      <TableCell colSpan={6} className="bg-muted/30 p-4">
-        <pre className="text-xs font-mono whitespace-pre overflow-x-auto">{hex}</pre>
+      <TableCell colSpan={colSpan} className="bg-muted/30 p-4">
+        <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-border pb-2">
+          <span className="font-mono text-xs tabular-nums text-muted-foreground">
+            {formatTimestamp(frame.timestamp)}
+          </span>
+          <DirectionIcon direction={frame.direction} />
+          <span className="font-mono text-sm font-semibold">
+            {frame.src} → {frame.dst}
+          </span>
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            {frame.protocol || "-"}
+          </span>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {frame.payload ? byteLen(frame.payload) : 0} B
+          </span>
+          <span className="ml-auto flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void copyText(" hex dump", hex);
+              }}
+              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            >
+              <Copy className="h-3 w-3" />
+              复制 hex
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCollapse();
+              }}
+              className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            >
+              <ChevronUp className="h-3 w-3" />
+              收起
+            </button>
+          </span>
+        </div>
+        <pre className="max-h-[360px] overflow-auto whitespace-pre text-xs font-mono">{hex}</pre>
       </TableCell>
     </TableRow>
   );
@@ -322,9 +310,9 @@ function RawFrames({ frames }: { frames: ConnectionFrame[] }) {
         <div key={frame.id} className="rounded-lg border border-border bg-card/60 p-3 gt-fade-in">
           <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
             <span className="font-mono tabular-nums text-muted-foreground">
-              {formatDateTime(frame.timestamp)}
+              {formatTimestamp(frame.timestamp)}
             </span>
-            <DirectionBadge direction={frame.direction} />
+            <DirectionIcon direction={frame.direction} />
             <span className="font-mono text-muted-foreground">
               {frame.src} → {frame.dst}
             </span>
@@ -351,12 +339,23 @@ function FramesTab({
   /** rawOnly=true 时直接以纯 hex dump 展示（Raw 子页）。 */
   rawOnly?: boolean;
 }) {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // 多行可同时展开：对比相邻帧是这里最常见的动作。
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const { data, isLoading, isError, error, refetch } = useConnectionFrames(sessionId, connId, {
-    limit: 500,
+    limit: FRAME_LIMIT,
     offset: 0,
   });
   const frames = useMemo(() => data?.frames ?? [], [data]);
+  const truncated = frames.length >= FRAME_LIMIT;
+
+  function toggle(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   if (isLoading) {
     return (
@@ -396,34 +395,49 @@ function FramesTab({
 
   return (
     <div className="space-y-3">
+      {/* 帧子页：说明取数上限，避免把「只载入了 500 条」误读成「连接只有 500 帧」 */}
+      {!rawOnly && (
+        <div className="px-1 text-xs text-muted-foreground" aria-live="polite">
+          <span className="tabular-nums">
+            {truncated ? `最多展示前 ${FRAME_LIMIT} 帧` : `共 ${frames.length} 帧`}
+            {expandedIds.size > 0 ? ` · 已展开 ${expandedIds.size} 行` : ""}
+          </span>
+        </div>
+      )}
+
       {/* Raw 子页：连续 hex dump 流 */}
       {rawOnly ? (
         <RawFrames frames={frames} />
       ) : (
-        <Table className="gt-table">
+        <Table className="gt-table" containerClassName="relative w-full overflow-visible">
           <TableHeader>
             <TableRow>
-              <TableHead className="w-40">时间</TableHead>
-              <TableHead className="w-24">方向</TableHead>
+              <TableHead className="w-8 pl-2 pr-0" aria-label="展开" />
+              <TableHead className="w-28">时间</TableHead>
+              <TableHead className="w-12">方向</TableHead>
               <TableHead>源 → 目标</TableHead>
-              <TableHead className="w-20">协议</TableHead>
-              <TableHead className="w-20 text-right">大小</TableHead>
-              <TableHead className="w-10" />
+              <TableHead className="w-16">协议</TableHead>
+              <TableHead className="w-16 text-right">大小</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {frames.map((frame: ConnectionFrame) => (
               <Fragment key={frame.id}>
                 <TableRow
-                  className="cursor-pointer hover:bg-muted/50 transition-colors"
-                  onClick={() => setExpandedId((prev) => (prev === frame.id ? null : frame.id))}
-                  aria-expanded={expandedId === frame.id}
+                  className={`cursor-pointer transition-colors ${expandedIds.has(frame.id) ? "bg-muted/40" : ""}`}
+                  onClick={() => toggle(frame.id)}
+                  aria-expanded={expandedIds.has(frame.id)}
                 >
-                  <TableCell className="font-mono text-xs whitespace-nowrap">
-                    {formatDateTime(frame.timestamp)}
+                  <TableCell className="w-8 pl-2 pr-0 text-muted-foreground/60">
+                    <ChevronRight
+                      className={`h-3.5 w-3.5 transition-transform ${expandedIds.has(frame.id) ? "rotate-90" : ""}`}
+                    />
+                  </TableCell>
+                  <TableCell className="w-28 font-mono text-xs whitespace-nowrap tabular-nums">
+                    {formatTimestamp(frame.timestamp)}
                   </TableCell>
                   <TableCell>
-                    <DirectionBadge direction={frame.direction} />
+                    <DirectionIcon direction={frame.direction} />
                   </TableCell>
                   <TableCell className="font-mono text-xs max-w-[300px]">
                     <span className="truncate block" title={`${frame.src} → ${frame.dst}`}>
@@ -436,11 +450,14 @@ function FramesTab({
                   <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
                     {frame.payload ? byteLen(frame.payload) : 0}
                   </TableCell>
-                  <TableCell className="w-10 text-muted-foreground">
-                    <ChevronDown className="h-4 w-4" />
-                  </TableCell>
                 </TableRow>
-                {expandedId === frame.id && <FrameHexRow payload={frame.payload} />}
+                {expandedIds.has(frame.id) && (
+                  <FrameHexRow
+                    frame={frame}
+                    colSpan={FRAME_COLSPAN}
+                    onCollapse={() => toggle(frame.id)}
+                  />
+                )}
               </Fragment>
             ))}
           </TableBody>
@@ -476,7 +493,8 @@ function EventsTab({
   streams: ConnectionStream[];
   onJumpToRun?: (flowId: string) => void;
 }) {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // 多行可同时展开：请求/响应要对着看，accordion 会逼着来回点。
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
   // 摊平全部流的事件，按时间正序，作为连接内的事件列表。
   const events = useMemo(() => {
@@ -489,6 +507,15 @@ function EventsTab({
     all.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
     return all;
   }, [streams]);
+
+  function toggle(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   if (events.length === 0) {
     return (
@@ -503,18 +530,24 @@ function EventsTab({
 
   return (
     <div className="space-y-2">
+      <div className="px-1 text-xs text-muted-foreground" aria-live="polite">
+        <span className="tabular-nums">
+          共 {events.length} 个事件
+          {expandedIds.size > 0 ? ` · 已展开 ${expandedIds.size} 行` : ""}
+        </span>
+      </div>
       {events.map((ev) => (
         <div key={ev.id} className="rounded-md border border-border bg-card/40 overflow-hidden">
           <button
             type="button"
-            className="flex w-full flex-wrap items-center gap-2 px-3 py-2 text-left hover:bg-muted/50 transition-colors"
-            onClick={() => setExpandedId((prev) => (prev === ev.id ? null : ev.id))}
-            aria-expanded={expandedId === ev.id}
+            className={`flex w-full flex-wrap items-center gap-2 px-3 py-2 text-left hover:bg-muted/50 transition-colors ${expandedIds.has(ev.id) ? "bg-muted/40" : ""}`}
+            onClick={() => toggle(ev.id)}
+            aria-expanded={expandedIds.has(ev.id)}
           >
             <span className="font-mono text-xs tabular-nums text-muted-foreground whitespace-nowrap">
-              {formatDateTime(ev.timestamp)}
+              {formatTimestamp(ev.timestamp)}
             </span>
-            <DirectionBadge direction={ev.direction} />
+            <DirectionIcon direction={ev.direction} />
             <Badge variant="secondary" className="font-mono text-[10px]">
               Stream #{ev.streamSeq}
             </Badge>
@@ -543,8 +576,37 @@ function EventsTab({
               </span>
             )}
           </button>
-          {expandedId === ev.id && (
+          {expandedIds.has(ev.id) && (
             <div className="border-t border-border bg-muted/30 p-4 gt-fade-in">
+              <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-border pb-2">
+                <DirectionIcon direction={ev.direction} />
+                <span className="font-mono text-sm font-semibold">
+                  {ev.msg_name || ev.type || "(unknown)"}
+                </span>
+                <span className="font-mono text-xs text-muted-foreground">
+                  {formatTimestamp(ev.timestamp)}
+                </span>
+                <span className="ml-auto flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void copyText(" JSON", JSON.stringify(unpackJsonStrings(ev.data), null, 2))
+                    }
+                    className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                  >
+                    <Copy className="h-3 w-3" />
+                    复制 JSON
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggle(ev.id)}
+                    className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                  >
+                    <ChevronUp className="h-3 w-3" />
+                    收起
+                  </button>
+                </span>
+              </div>
               <JsonView data={ev.data} />
             </div>
           )}

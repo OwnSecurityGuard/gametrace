@@ -1,13 +1,21 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
-  ({ className, ...props }, ref) => (
-    <div className="relative w-full overflow-auto">
-      <table ref={ref} className={cn("w-full caption-bottom text-sm", className)} {...props} />
-    </div>
-  ),
-);
+/**
+ * containerClassName 让调用方能摘掉外层滚动容器（默认 `overflow-auto`）。
+ *
+ * 原因：`.gt-table thead th` 的吸顶是 sticky，而 sticky 只相对「最近的滚动容器」生效。
+ * 外层 div 一旦自己 overflow-auto，高度又被内容撑开（永不纵向滚动），表头就永远吸不住。
+ * 想让表头吸顶，要么给这个容器限高，要么把它交给页面级滚动容器（传 containerClassName）。
+ */
+const Table = React.forwardRef<
+  HTMLTableElement,
+  React.HTMLAttributes<HTMLTableElement> & { containerClassName?: string }
+>(({ className, containerClassName, ...props }, ref) => (
+  <div className={cn("relative w-full overflow-auto", containerClassName)}>
+    <table ref={ref} className={cn("w-full caption-bottom text-sm", className)} {...props} />
+  </div>
+));
 Table.displayName = "Table";
 
 const TableHeader = React.forwardRef<HTMLTableSectionElement, React.HTMLAttributes<HTMLTableSectionElement>>(

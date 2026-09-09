@@ -12,9 +12,13 @@ interface FilterBarProps {
   inputRef?: Ref<HTMLInputElement>;
 }
 
+/** 快捷字段默认只露出前 N 个：字段多时整排小按钮会把筛选栏撑成两行，反而更难找。 */
+const QUICK_FIELD_LIMIT = 6;
+
 export function FilterBar({ sessionId, filter, onFilterChange, inputRef }: FilterBarProps) {
   const { data: schemaData } = useCaptureSchema(sessionId);
   const [local, setLocal] = useState(filter);
+  const [showAllFields, setShowAllFields] = useState(false);
   const debounceRef = useRef<number | null>(null);
 
   // 外部 filter 变化（切换会话清空、快捷标签）同步到本地输入
@@ -107,7 +111,7 @@ export function FilterBar({ sessionId, filter, onFilterChange, inputRef }: Filte
       {dataFields.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-xs text-muted-foreground">快捷字段：</span>
-          {dataFields.map((field) => (
+          {(showAllFields ? dataFields : dataFields.slice(0, QUICK_FIELD_LIMIT)).map((field) => (
             <button
               key={field}
               type="button"
@@ -117,6 +121,15 @@ export function FilterBar({ sessionId, filter, onFilterChange, inputRef }: Filte
               {field}
             </button>
           ))}
+          {dataFields.length > QUICK_FIELD_LIMIT && (
+            <button
+              type="button"
+              onClick={() => setShowAllFields((v) => !v)}
+              className="rounded-md px-1.5 py-0.5 text-xs text-primary hover:underline"
+            >
+              {showAllFields ? "收起" : `更多 ${dataFields.length - QUICK_FIELD_LIMIT} 个`}
+            </button>
+          )}
         </div>
       )}
     </div>

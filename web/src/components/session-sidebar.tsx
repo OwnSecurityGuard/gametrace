@@ -482,7 +482,9 @@ export function SessionSidebar({
     return identity && s.owner === identity.owner ? "我" : s.owner;
   };
 
-  const runningCount = sessions.filter((s) => s.status === "running").length;
+  // 徽标数量取「当前实际可见的会话」，与下方列表/空态保持一致
+  // （服务端 count 与 sessions 口径不一致时，曾出现「6 个会话」+「暂无会话」同屏）。
+  const runningCount = visibleSessions.filter((s) => s.status === "running").length;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -492,7 +494,7 @@ export function SessionSidebar({
         {data && (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
             {runningCount > 0 && <span className="gt-live-dot" />}
-            {data.count} 个会话{runningCount > 0 && ` · ${runningCount} 运行`}
+            {visibleSessions.length} 个会话{runningCount > 0 && ` · ${runningCount} 运行`}
           </span>
         )}
       </div>

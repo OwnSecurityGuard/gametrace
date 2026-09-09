@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "@/components/ui/toast";
 import {
   ChevronLeft,
   ChevronRight,
@@ -16,6 +17,8 @@ import {
   ArrowRight,
   Link2,
   GitFork,
+  Copy,
+  ChevronUp,
 } from "lucide-react";
 import type { DecodedEvent } from "@/types/event";
 import type { CaptureContext } from "@/types/connection";
@@ -23,7 +26,7 @@ import {
   extractMeta,
   formatTimestamp,
   formatSize,
-  DirectionBadge,
+  DirectionIcon,
   MessageCell,
   HighlightedJson,
   type EventMeta,
@@ -36,7 +39,7 @@ interface EventTableProps {
   onFilterChange?: (filter: string) => void;
 }
 
-const PAGE_SIZE = 20;
+const PAGE_SIZES = [20, 50, 100];
 
 /** 生成一行 payload 摘要文本 */
 function summarizePayload(data: Record<string, unknown>, meta: EventMeta): string {
@@ -64,6 +67,16 @@ function summarizePayload(data: Record<string, unknown>, meta: EventMeta): strin
   return parts.length > 0 ? parts.join(" · ") : "(empty)";
 }
 
+/** 复制 JSON 到剪贴板（失败给 toast，不静默）。 */
+async function copyJson(data: unknown) {
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+    toast.success("已复制 JSON");
+  } catch {
+    toast.error("复制失败", "浏览器拒绝访问剪贴板");
+  }
+}
+
 // ─── 捕获上下文（Capture Context，代理抓包特有） ────────────────
 
 /** 展示 Captured By / Connection / Stream / Source 归属徽标组。 */
@@ -84,8 +97,6 @@ function CaptureCell({ capture }: { capture: CaptureContext }) {
 }
 
 // ─── 展开行：配对关系 + 完整 JSON ────────────────────────────
-
-const COLSPAN = 6; // Timestamp | Dir | Msg | Capture | Summary | Size
 
 /** 配对面板：展示 pair 语义规则配出的对侧消息（响应 causation_id → 请求），可跳转定位。 */
 function PairPanel({
@@ -188,24 +199,84 @@ function ChildPanel({
   );
 }
 
+/**
+ * 展开区头部：展开后内容是长 JSON，很容易忘记自己点开的是哪一行，
+ * 所以先重复一遍身份信息，并把「复制 / 收起」放在手边。
+ */
+function ExpandedHeader({
+  event,
+  meta,
+  onCollapse,
+}: {
+  event: DecodedEvent;
+  meta: EventMeta;
+  onCollapse: () => void;
+}) {
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-border pb-2">
+      <DirectionIcon direction={meta.direction} />
+      <span className="font-mono text-sm font-semibold">{meta.msgName || "(unknown)"}</span>
+      <span className="font-mono text-xs text-muted-foreground">
+        {formatTimestamp(event.timestamp)}
+      </span>
+      {event.protocol && (
+        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          {event.protocol}
+        </span>
+      )}
+      <span className="text-xs text-muted-foreground">{formatSize(event.raw_len)}</span>
+      <span className="ml-auto flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            void copyJson(event.data);
+          }}
+          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+        >
+          <Copy className="h-3 w-3" />
+          复制 JSON
+        </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onCollapse();
+          }}
+          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+        >
+          <ChevronUp className="h-3 w-3" />
+          收起
+        </button>
+      </span>
+    </div>
+  );
+}
+
 function ExpandedRow({
   event,
   partners,
   children,
+  colSpan,
   onJumpToPartner,
   onLocatePair,
   onJumpToChild,
+  onCollapse,
 }: {
   event: DecodedEvent;
   partners: DecodedEvent[];
   children: DecodedEvent[];
+  colSpan: number;
   onJumpToPartner: (id: string) => void;
   onLocatePair: (event: DecodedEvent) => void;
   onJumpToChild: (id: string) => void;
+  onCollapse: () => void;
 }) {
+  const meta = useMemo(() => extractMeta(event.data), [event.data]);
   return (
     <TableRow className="gt-fade-in">
-      <TableCell colSpan={COLSPAN} className="bg-muted/30 p-4">
+      <TableCell colSpan={colSpan} className="bg-muted/30 p-4">
+        <ExpandedHeader event={event} meta={meta} onCollapse={onCollapse} />
         <PairPanel
           event={event}
           partners={partners}
@@ -227,52 +298,60 @@ const EventRow = memo(function EventRow({
   event,
   partners,
   children,
+  showCapture,
   isExpanded,
   isHighlighted,
   onToggle,
   onJumpToPartner,
   onLocatePair,
   onJumpToChild,
+  onCollapse,
 }: {
   event: DecodedEvent;
   partners: DecodedEvent[];
   children: DecodedEvent[];
+  showCapture: boolean;
   isExpanded: boolean;
   isHighlighted: boolean;
   onToggle: (id: string) => void;
   onJumpToPartner: (id: string) => void;
   onLocatePair: (event: DecodedEvent) => void;
   onJumpToChild: (id: string) => void;
+  onCollapse: (id: string) => void;
 }) {
   const meta = useMemo(() => extractMeta(event.data), [event.data]);
   const summary = useMemo(() => summarizePayload(event.data, meta), [event.data, meta]);
+  const colSpan = showCapture ? 6 : 5;
 
   return (
     <Fragment key={event.id}>
       <TableRow
         id={`event-row-${event.id}`}
-        className={`cursor-pointer hover:bg-muted/50 transition-colors ${isHighlighted ? "bg-primary/10" : ""}`}
+        className={`cursor-pointer transition-colors ${isHighlighted ? "bg-primary/10" : ""} ${isExpanded ? "bg-muted/40" : ""}`}
         onClick={() => onToggle(event.id)}
         aria-expanded={isExpanded}
       >
+        {/* 展开指示：没有它用户看不出行是可点的 */}
+        <TableCell className="w-8 pl-2 pr-0 text-muted-foreground/60">
+          <ChevronRight
+            className={`h-3.5 w-3.5 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+          />
+        </TableCell>
+
         {/* 时间 */}
-        <TableCell className="font-mono text-xs whitespace-nowrap">
+        <TableCell className="w-28 font-mono text-xs whitespace-nowrap tabular-nums">
           {formatTimestamp(event.timestamp)}
         </TableCell>
 
-        {/* 方向 */}
-        <TableCell className="w-24">
-          <DirectionBadge direction={meta.direction} />
-        </TableCell>
-
-        {/* 消息名：子事件带缩进角标 */}
-        <TableCell className="min-w-[140px] max-w-[220px]">
-          <div className="flex items-center gap-1 min-w-0">
+        {/* 消息名：方向图标 + 名称 + 语义标签 + 子事件/配对角标 */}
+        <TableCell className="min-w-[220px] max-w-[320px]">
+          <div className="flex items-center gap-1.5 min-w-0">
             {event.parent_id && (
               <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60" title={`父事件 ${event.parent_id}`}>
                 ⊢
               </span>
             )}
+            <DirectionIcon direction={meta.direction} />
             <MessageCell msgName={meta.msgName} semantic={meta.semantic} />
             {children.length > 0 && (
               <span className="ml-0.5 shrink-0 inline-flex items-center gap-0.5 text-muted-foreground/70" title={`${children.length} 个 extract 子事件`}>
@@ -288,14 +367,20 @@ const EventRow = memo(function EventRow({
           </div>
         </TableCell>
 
-        {/* 捕获上下文（代理抓包特有） */}
-        <TableCell className="w-44 max-w-[200px]">
-          {event.capture ? <CaptureCell capture={event.capture} /> : <span className="text-xs text-muted-foreground/50">-</span>}
-        </TableCell>
+        {/* 捕获上下文（代理抓包特有）：非代理抓包整列不渲染，把宽度让给消息与摘要 */}
+        {showCapture && (
+          <TableCell className="w-40 max-w-[180px]">
+            {event.capture ? (
+              <CaptureCell capture={event.capture} />
+            ) : (
+              <span className="text-xs text-muted-foreground/50">-</span>
+            )}
+          </TableCell>
+        )}
 
         {/* Payload 摘要 */}
-        <TableCell className="max-w-md">
-          <span className="text-xs text-muted-foreground truncate block" title={summary}>
+        <TableCell className="max-w-[28rem]">
+          <span className="block truncate text-xs text-foreground/70" title={summary}>
             {summary}
           </span>
         </TableCell>
@@ -311,9 +396,11 @@ const EventRow = memo(function EventRow({
           event={event}
           partners={partners}
           children={children}
+          colSpan={colSpan}
           onJumpToPartner={onJumpToPartner}
           onLocatePair={onLocatePair}
           onJumpToChild={onJumpToChild}
+          onCollapse={() => onCollapse(event.id)}
         />
       )}
     </Fragment>
@@ -324,14 +411,17 @@ const EventRow = memo(function EventRow({
 
 export function EventTable({ sessionId, filter, onFilterChange }: EventTableProps) {
   const [page, setPage] = useState<number>(0);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0]!);
+  // 允许多行同时展开：对比请求/响应时不用来回点，这是最常见的阅读动作。
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [highlightId, setHighlightId] = useState<string | null>(null);
 
   useEffect(() => {
     setPage(0);
+    setExpandedIds(new Set());
   }, [sessionId, filter]);
 
-  const offset = page * PAGE_SIZE;
+  const offset = page * pageSize;
 
   const {
     data,
@@ -342,14 +432,16 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
     isFetching,
     isPlaceholderData,
   } = useDecodedData(sessionId, {
-    limit: PAGE_SIZE,
+    limit: pageSize,
     offset,
     filter: filter || undefined,
   });
 
   const events = useMemo(() => data?.events ?? [], [data]);
   const totalMatched = data?.total_matched ?? 0;
-  const totalPages = Math.ceil(totalMatched / PAGE_SIZE);
+  const totalPages = Math.ceil(totalMatched / pageSize);
+  // 整页都没有 capture 上下文（非代理抓包）时隐藏该列，把宽度让给消息与摘要。
+  const showCapture = useMemo(() => events.some((e) => !!e.capture), [events]);
 
   /**
    * 配对索引：事件 id → 当前页内的配对伙伴。
@@ -388,30 +480,38 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
     return m;
   }, [events]);
 
-  /** 跳转到当前页内的事件（配对伙伴 / 子事件）：展开并短暂高亮。 */
+  /** 展开并滚动定位到某事件（配对伙伴 / 子事件跳转）。 */
   function handleJumpTo(id: string) {
-    setExpandedId(id);
+    setExpandedIds((prev) => new Set(prev).add(id));
+    setHighlightId(id);
     setTimeout(() => {
       document.getElementById(`event-row-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 0);
-    setHighlightId(id);
     setTimeout(() => setHighlightId(null), 2000);
-  }
-
-  /** 跳转到当前页内的配对消息：展开并短暂高亮。 */
-  function handleJumpToPartner(id: string) {
-    handleJumpTo(id);
   }
 
   function handleLocatePair(ev: DecodedEvent) {
     if (!onFilterChange) return;
-    setExpandedId(null);
+    setExpandedIds(new Set());
     // 响应方：按请求事件 id 找；请求方：找 causation_id 指向自己的响应。
     onFilterChange(ev.causation_id ? `id == "${ev.causation_id}"` : `causation_id == "${ev.id}"`);
   }
 
   function handleToggleExpand(eventId: string) {
-    setExpandedId((prev) => (prev === eventId ? null : eventId));
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(eventId)) next.delete(eventId);
+      else next.add(eventId);
+      return next;
+    });
+  }
+
+  function handleCollapse(eventId: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(eventId);
+      return next;
+    });
   }
 
   if (!sessionId) {
@@ -470,23 +570,46 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
       {/* 后台刷新指示 */}
       {isFetching && !isLoading && <div className="gt-loading-bar" aria-hidden="true" />}
 
-      {/* 统计信息 */}
-      <div className="flex items-center justify-between px-1 text-xs text-muted-foreground" aria-live="polite">
+      {/* 统计信息 + 每页条数 */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground" aria-live="polite">
         <span className="tabular-nums">
-          共 {totalMatched} 条 · 当前第 {offset + 1}–{Math.min(offset + PAGE_SIZE, totalMatched)} 条
+          共 {totalMatched} 条 · 当前第 {offset + 1}–{Math.min(offset + pageSize, totalMatched)} 条
           {isPlaceholderData ? " · 更新中…" : ""}
+          {expandedIds.size > 0 ? ` · 已展开 ${expandedIds.size} 行` : ""}
         </span>
-        <span className="text-[11px] text-muted-foreground/70">点击行展开完整 JSON</span>
+        <span className="flex items-center gap-2">
+          <span className="text-[11px] text-muted-foreground/70">点击行展开完整 JSON</span>
+          <label className="flex items-center gap-1">
+            <span className="text-[11px] text-muted-foreground/70">每页</span>
+            <select
+              value={pageSize}
+              onChange={(e) => {
+                setPageSize(Number(e.target.value));
+                setPage(0);
+                setExpandedIds(new Set());
+              }}
+              className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
+              aria-label="每页条数"
+            >
+              {PAGE_SIZES.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+        </span>
       </div>
 
       {/* 数据表格 */}
-      <Table className="gt-table">
+      {/* 表头吸顶交给页面级滚动容器（见 ui/table.tsx 的 containerClassName 说明） */}
+      <Table className="gt-table" containerClassName="relative w-full overflow-visible">
         <TableHeader>
           <TableRow>
-            <TableHead className="w-44">时间</TableHead>
-            <TableHead className="w-24">方向</TableHead>
-            <TableHead className="min-w-[140px]">消息</TableHead>
-            <TableHead className="w-44">捕获</TableHead>
+            <TableHead className="w-8 pl-2 pr-0" aria-label="展开" />
+            <TableHead className="w-28">时间</TableHead>
+            <TableHead className="min-w-[220px]">消息</TableHead>
+            {showCapture && <TableHead className="w-40">捕获</TableHead>}
             <TableHead>摘要</TableHead>
             <TableHead className="w-16 text-right">大小</TableHead>
           </TableRow>
@@ -498,12 +621,14 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
               event={event}
               partners={partnersMap.get(event.id) ?? []}
               children={childrenMap.get(event.id) ?? []}
-              isExpanded={expandedId === event.id}
+              showCapture={showCapture}
+              isExpanded={expandedIds.has(event.id)}
               isHighlighted={highlightId === event.id}
               onToggle={handleToggleExpand}
-              onJumpToPartner={handleJumpToPartner}
+              onJumpToPartner={handleJumpTo}
               onLocatePair={handleLocatePair}
               onJumpToChild={handleJumpTo}
+              onCollapse={handleCollapse}
             />
           ))}
         </TableBody>
