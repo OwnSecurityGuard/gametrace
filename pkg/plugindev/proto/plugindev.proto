@@ -48,7 +48,7 @@ message ScaffoldResponse {
   string name = 1;
   string output_dir = 2;
   repeated string created = 3;
-  // sdk_version 是脚手架固定引用的 gta-plugin-sdk 版本（与开发指南/SDK 同版本发布）。
+  // sdk_version 是脚手架固定引用的 gt-plugin-sdk 版本（与开发指南/SDK 同版本发布）。
   string sdk_version = 4;
   // framing_available 标记当前 SDK 版本是否包含 framing 包。为 false 时生成的
   // main.go 不会 import framing，并显式标注「framing 不可用」，避免引用缺失的导入。

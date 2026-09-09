@@ -98,6 +98,8 @@ export function StartCaptureDialog({
 }: StartCaptureDialogProps) {
   const [source, setSource] = useState<"nic" | "agent">("nic");
   const [probeId, setProbeId] = useState("");
+  // 探针抓包选卡：空数组 = 自动选卡（探针按出口 IP 挑默认网卡）；可多选并发抓。
+  const [probeIfaces, setProbeIfaces] = useState<string[]>([]);
   const [port, setPort] = useState("8080");
   const [plugin, setPlugin] = useState("");
   // 从项目一键抓包时带入的项目 id（本次抓包会话归属到此项目）。
@@ -137,6 +139,7 @@ export function StartCaptureDialog({
       setStarted(false);
       setAgentSessionId(null);
       setProbeId("");
+      setProbeIfaces([]);
       // 打开时应用项目预填：有初始端口/插件才覆盖默认值，否则回到默认。
       if (initialPort && initialPort > 0) setPort(String(initialPort));
       if (initialPlugin) setPlugin(initialPlugin);
@@ -176,6 +179,7 @@ export function StartCaptureDialog({
         {
           probeId,
           ports: p > 0 ? [p] : undefined,
+          ifaces: probeIfaces.length > 0 ? probeIfaces : undefined,
           plugin: plugin || undefined,
           projectId: projectId || undefined,
         },
@@ -377,7 +381,10 @@ export function StartCaptureDialog({
                         type="button"
                         aria-pressed={active}
                         disabled={!selectable}
-                        onClick={() => setProbeId(p.probe_id)}
+                        onClick={() => {
+                          setProbeId(p.probe_id);
+                          setProbeIfaces([]);
+                        }}
                         title={selectable ? p.hostname : probeDisabledReason(p)}
                         className={`flex items-center gap-2.5 rounded-md border px-2.5 py-2 text-left text-sm transition-colors ${
                           active
@@ -453,10 +460,46 @@ export function StartCaptureDialog({
                     ))}
                   </div>
                 )
-              ) : (
+              ) : !selectedProbe || (selectedProbe.interfaces?.length ?? 0) === 0 ? (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  探针默认自动选择默认网卡；如需指定，稍后在「探针」管理里对该机器下发抓包时填写。
+                  {selectedProbe
+                    ? "探针未上报网卡清单（未装 Npcap 或版本过旧），将自动选择默认网卡。"
+                    : "选择探针机器后展示其网卡清单。"}
                 </p>
+              ) : (
+                <>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {selectedProbe.interfaces!.map((nic) => {
+                      const active = probeIfaces.includes(nic.name);
+                      return (
+                        <button
+                          key={nic.name}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() =>
+                            setProbeIfaces((prev) =>
+                              active ? prev.filter((x) => x !== nic.name) : [...prev, nic.name],
+                            )
+                          }
+                          title={nic.ips?.length ? `${nic.name} · ${nic.ips.join(", ")}` : nic.name}
+                          className={`rounded-md border px-2 py-0.5 font-mono text-[11px] transition-colors ${
+                            active
+                              ? "border-primary/60 bg-primary/10 text-foreground"
+                              : "border-border bg-muted text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          {active && <Check className="mr-0.5 inline h-3 w-3" />}
+                          {nic.friendly || nic.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {probeIfaces.length === 0
+                      ? "未选中任何网卡 = 探针自动选默认网卡；可点选一个或多个网卡同时抓。"
+                      : `已选 ${probeIfaces.length} 张网卡，多选时各卡并发抓、汇入同一会话。`}
+                  </p>
+                </>
               )}
               {source === "nic" && (
                 <p className="mt-1 text-xs text-muted-foreground">

@@ -2746,7 +2746,8 @@ func main() {
 		mcp.WithString("probe_id", mcp.Required(), mcp.Description("Probe ID to capture on (from list_probes)")),
 		mcp.WithArray("ports", mcp.Description("TCP ports to filter, e.g. [8080]. Empty = capture everything"), mcp.Items(map[string]any{"type": "number"})),
 		mcp.WithArray("hosts", mcp.Description("Optional host filter list"), mcp.Items(map[string]any{"type": "string"})),
-		mcp.WithString("iface", mcp.Description("Optional interface name on the probe machine; empty = probe auto-detects the default interface")),
+		mcp.WithString("iface", mcp.Description("Optional single interface name on the probe machine; empty = probe auto-detects the default interface. Legacy single-nic field — prefer ifaces")),
+		mcp.WithArray("ifaces", mcp.Description("Optional list of interface names on the probe machine (see list_probes → interfaces[].name). One = capture on that nic; multiple = capture on all of them concurrently into the same session; empty = probe auto-detects the default interface"), mcp.Items(map[string]any{"type": "string"})),
 		mcp.WithString("plugin", mcp.Description("Optional decoder plugin bound to the session")),
 		mcp.WithString("project_id", mcp.Description("Optional project the session belongs to")),
 	), capture.handleProbeStartCapture)

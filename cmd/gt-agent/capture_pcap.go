@@ -44,9 +44,9 @@ func (lc *liveCapture) SetFilter(bpf string) error {
 	return nil
 }
 
-// runCapture 打开网卡、应用 BPF，把抓到的每个完整帧转成 RawPacket
-// 发往 out，直到 ctx 取消或网卡关闭。
-// 只支持单网卡（agent 一次只服务一个会话）；Iface 为空返回错误。
+// runCapture 打开一张网卡、应用 BPF，把抓到的每个完整帧转成 RawPacket
+// 发往 out，直到 ctx 取消或网卡关闭。多网卡抓包由调用方（captureRunner.Start）
+// 对每张卡各起一个 runCapture，帧汇入同一条通道；Iface 为空返回错误。
 // 抓包源意外关闭时向 ended 非阻塞发送错误（ctx 正常取消则不发送）。
 // 返回的 *liveCapture 供运行期热更新（SetFilter）；启动失败返回错误。
 func runCapture(ctx context.Context, cfg captureConfig, out chan<- *proto.RawPacket, ended chan<- error) (*liveCapture, error) {

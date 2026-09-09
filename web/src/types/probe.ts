@@ -1,5 +1,13 @@
 /** 探针相关类型（v2 探针优化，对应 MCP 工具 list_probes / get_probe 等）。 */
 
+/** ProbeNicInfo：探针上报的一张可抓包网卡（name 是 pcap 设备名，可直接填 ifaces）。 */
+export interface ProbeNicInfo {
+  name: string;
+  friendly?: string;
+  description?: string;
+  ips?: string[];
+}
+
 /** ProbeInfo：三维度状态快照（connection / capture / data）。 */
 export interface ProbeInfo {
   probe_id: string;
@@ -20,6 +28,8 @@ export interface ProbeInfo {
   status_error: string;
   capture_iface: string;
   capture_ports: string; // csv
+  // 探针本机可抓包网卡（连接时上报；离线后仍展示上次清单，可能为空）
+  interfaces?: ProbeNicInfo[];
   // 维度三：数据
   last_packet_unix_ms: number;
   last_upload_unix_ms: number;

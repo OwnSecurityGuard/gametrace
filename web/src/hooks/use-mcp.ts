@@ -919,6 +919,7 @@ export function useProbeStartCapture() {
       ports?: number[];
       hosts?: string[];
       iface?: string;
+      ifaces?: string[];
       plugin?: string;
       projectId?: string;
     }) =>
@@ -927,6 +928,7 @@ export function useProbeStartCapture() {
         ports: vars.ports ?? [],
         hosts: vars.hosts ?? [],
         iface: vars.iface ?? "",
+        ifaces: vars.ifaces ?? [],
         plugin: vars.plugin ?? "",
         project_id: vars.projectId ?? "",
       }),

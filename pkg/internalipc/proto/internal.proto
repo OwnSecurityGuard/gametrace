@@ -602,7 +602,18 @@ message ProbeInfo {
   uint32 archive_segments = 24;
   int64 archive_oldest_unix = 25;
   int64 archive_newest_unix = 26;
-  string created_at = 27;
+  // 探针本机可抓包网卡（连接时上报，最后快照；离线后仍展示上次清单）。
+  repeated ProbeNicInfo interfaces = 27;
+  string created_at = 28;
+}
+
+// ProbeNicInfo 是探针的一张可抓包网卡（与 agent 侧 ProbeIface 同构；
+// 独立定义避免 internalipc 依赖 agent proto）。
+message ProbeNicInfo {
+  string name = 1;                   // pcap 设备名（可直接填 ifaces）
+  string friendly = 2;               // 系统友好名（Windows "WLAN" 等）
+  string description = 3;
+  repeated string ips = 4;
 }
 
 message ListProbesRequest {
@@ -622,12 +633,13 @@ message ProbeStartCaptureRequest {
   string probe_id = 1;
   repeated int32 ports = 2;
   repeated string hosts = 3;
-  string iface = 4;                  // 空 = 探针自动探测默认网卡
+  string iface = 4;                  // 空 = 探针自动探测默认网卡（旧单卡字段）
   string plugin = 5;                 // 解码插件绑定（同 StartCaptureRequest.plugin）
   string project_id = 6;             // 会话归属项目（会话是用户任务，探针不挂项目）
   string owner = 7;
   bool all_owners = 8;
   repeated string plugin_owners = 9;
+  repeated string ifaces = 10;       // 多网卡抓包；非空时优先于 iface
 }
 message ProbeStartCaptureResponse {
   string session_id = 1;

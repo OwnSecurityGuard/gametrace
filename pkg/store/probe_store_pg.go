@@ -83,6 +83,12 @@ WHERE probe_id=$18`,
 	return err
 }
 
+// UpdateProbeInterfaces 落库探针上报的网卡清单（JSON；探针连接 hello 时调用）。
+func (cs *PGControlStore) UpdateProbeInterfaces(ctx context.Context, probeID, interfaces string) error {
+	_, err := cs.db.ExecContext(ctx, `UPDATE probes SET interfaces=$1 WHERE probe_id=$2`, interfaces, probeID)
+	return err
+}
+
 func (cs *PGControlStore) SetProbeConnection(ctx context.Context, probeID, state string, seen time.Time) error {
 	_, err := cs.db.ExecContext(ctx,
 		`UPDATE probes SET connection_state=$1, last_seen_at=$2 WHERE probe_id=$3`, state, seen, probeID)

@@ -37,6 +37,7 @@ func probeToJSON(p *pb.ProbeInfo) map[string]any {
 		"status_error":        p.GetStatusError(),
 		"capture_iface":       p.GetCaptureIface(),
 		"capture_ports":       p.GetCapturePorts(),
+		"interfaces":          nicsToJSON(p.GetInterfaces()),
 		"last_packet_unix_ms": p.GetLastPacketUnixMs(),
 		"last_upload_unix_ms": p.GetLastUploadUnixMs(),
 		"packets_captured":    p.GetPacketsCaptured(),
@@ -49,6 +50,20 @@ func probeToJSON(p *pb.ProbeInfo) map[string]any {
 		"archive_newest_unix": p.GetArchiveNewestUnix(),
 		"created_at":          p.GetCreatedAt(),
 	}
+}
+
+// nicsToJSON 把探针上报的网卡清单转成前端 JSON（snake_case；空清单返回 []）。
+func nicsToJSON(nics []*pb.ProbeNicInfo) []map[string]any {
+	out := make([]map[string]any, 0, len(nics))
+	for _, n := range nics {
+		out = append(out, map[string]any{
+			"name":        n.GetName(),
+			"friendly":    n.GetFriendly(),
+			"description": n.GetDescription(),
+			"ips":         n.GetIps(),
+		})
+	}
+	return out
 }
 
 // fillOwner 透传调用方身份（owner/all_owners）到 pipeline 请求。
@@ -124,6 +139,7 @@ func (m *mcpCapture) handleProbeStartCapture(ctx context.Context, req mcp.CallTo
 	grpcReq := &pb.ProbeStartCaptureRequest{
 		ProbeId:   req.GetString("probe_id", ""),
 		Iface:     req.GetString("iface", ""),
+		Ifaces:    req.GetStringSlice("ifaces", nil),
 		Plugin:    req.GetString("plugin", ""),
 		ProjectId: req.GetString("project_id", ""),
 	}

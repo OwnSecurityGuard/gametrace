@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS probes (
     status_error    TEXT NOT NULL DEFAULT '',
     capture_iface   TEXT NOT NULL DEFAULT '',
     capture_ports   TEXT NOT NULL DEFAULT '',
+    interfaces      TEXT NOT NULL DEFAULT '',
     last_packet_ms  BIGINT NOT NULL DEFAULT 0,
     last_upload_ms  BIGINT NOT NULL DEFAULT 0,
     packets_captured BIGINT NOT NULL DEFAULT 0,
@@ -208,6 +209,11 @@ func InitPGControlSchema(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx,
 		`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'`); err != nil {
 		return fmt.Errorf("add sessions.tenant_id: %w", err)
+	}
+	// 探针网卡清单（2026-09-09：探针连接时上报可抓包网卡）。
+	if _, err := db.ExecContext(ctx,
+		`ALTER TABLE probes ADD COLUMN IF NOT EXISTS interfaces TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("add probes.interfaces: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, pgControlIndexes); err != nil {
 		return fmt.Errorf("init pg control indexes: %w", err)

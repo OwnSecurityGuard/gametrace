@@ -46,14 +46,28 @@ type DataStats struct {
 }
 
 // CaptureParams 是一次抓包的参数（AssignCapture / 本地 start 共用）。
+// Ifaces 非空时优先于 Iface（多网卡并发抓，帧汇入同一会话）；
+// 两者都空 = 探针自动选默认网卡。
 type CaptureParams struct {
 	SessionID string
 	Iface     string
+	Ifaces    []string
 	Ports     []int32
 	Hosts     []string
 	BPF       string // 显式 BPF；空则按 Ports/Hosts 派生
 	SnapLen   int32
 	Promisc   bool
+}
+
+// ifaceList 归一化抓包网卡清单：Ifaces 优先，回退单卡 Iface。
+func (p CaptureParams) ifaceList() []string {
+	if len(p.Ifaces) > 0 {
+		return p.Ifaces
+	}
+	if p.Iface != "" {
+		return []string{p.Iface}
+	}
+	return nil
 }
 
 // deriveBPF 把 ports/hosts/显式 BPF 统一成最终过滤表达式。
@@ -84,7 +98,7 @@ type captureRunner struct {
 	params     CaptureParams // last/当前参数（stopped 保留供 UI 展示）
 	lastErr    string
 	updatedMs  int64
-	live       *liveCapture // running 时非 nil（SetFilter 用）
+	lives      []*liveCapture // running 时非空（每张卡一个，SetFilter 逐卡应用）
 	cancelFn   context.CancelFunc
 	packets    chan *proto.RawPacket
 	capEnded   chan error
@@ -141,11 +155,13 @@ func (r *captureRunner) Close() error {
 	return err
 }
 
-// State 返回当前状态机快照（本地控制面与心跳共用）。
+// State 返回当前状态机快照（本地控制面与心跳共用）。iface 为逗号连接的
+// 网卡清单（单卡时即该卡名）。
 func (r *captureRunner) State() (state, sessionID, iface, portsCSV, lastErr string, updatedMs int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.state, r.params.SessionID, r.params.Iface, joinInt32s(r.params.Ports), r.lastErr, r.updatedMs
+	return r.state, r.params.SessionID, strings.Join(r.params.ifaceList(), ","),
+		joinInt32s(r.params.Ports), r.lastErr, r.updatedMs
 }
 
 // Data 返回数据面快照。
@@ -190,7 +206,8 @@ func (r *captureRunner) Start(p CaptureParams, ingestAddr, token string) error {
 
 	// 未指定网卡：按出口 IP 自动选卡（平台下发 iface 为空是常态，跨机器部署时
 	// 网卡名无法预知）。解析失败直接进 failed 并带原因，避免 UI 停在"启动中"。
-	if p.Iface == "" {
+	ifaces := p.ifaceList()
+	if len(ifaces) == 0 {
 		resolved, err := resolveDefaultIface()
 		if err != nil {
 			r.mu.Lock()
@@ -199,15 +216,17 @@ func (r *captureRunner) Start(p CaptureParams, ingestAddr, token string) error {
 			slog.Error("capture start: auto-select interface failed", "error", err)
 			return err
 		}
-		p.Iface = resolved
+		ifaces = []string{resolved}
 	}
+	p.Ifaces = ifaces
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	// 幂等：同会话同参数已 running，直接受理（指令重放安全）。
 	if r.state == stateRunning && r.params.SessionID == p.SessionID &&
-		r.params.Iface == p.Iface && r.params.BPF == p.BPF {
+		strings.Join(r.params.ifaceList(), ",") == strings.Join(ifaces, ",") &&
+		r.params.BPF == p.BPF {
 		return nil
 	}
 	// 先停旧的（换会话/换参数）。
@@ -223,15 +242,20 @@ func (r *captureRunner) Start(p CaptureParams, ingestAddr, token string) error {
 	r.packets = make(chan *proto.RawPacket, 1024)
 	r.capEnded = make(chan error, 1)
 
-	lc, err := runCapture(runCtx, captureConfig{
-		Iface: p.Iface, BPF: bpf, SnapLen: p.SnapLen, Promisc: p.Promisc,
-	}, r.packets, r.capEnded)
-	if err != nil {
-		cancel()
-		r.setState(stateFailed, err.Error())
-		return err
+	// 每张卡一个抓包 goroutine，帧汇入同一条 packets 通道（同一会话同一 spool）。
+	// 任一卡打开失败：整体 failed（已打开的卡随 cancel 关闭）。
+	for _, ifc := range ifaces {
+		lc, err := runCapture(runCtx, captureConfig{
+			Iface: ifc, BPF: bpf, SnapLen: p.SnapLen, Promisc: p.Promisc,
+		}, r.packets, r.capEnded)
+		if err != nil {
+			cancel()
+			r.lives = nil
+			r.setState(stateFailed, err.Error())
+			return err
+		}
+		r.lives = append(r.lives, lc)
 	}
-	r.live = lc
 
 	// spool 按会话隔离（断电续传按会话恢复）。
 	if r.spool == nil || r.spoolDir != defaultSpoolDir(p.SessionID) {
@@ -254,7 +278,7 @@ func (r *captureRunner) Start(p CaptureParams, ingestAddr, token string) error {
 		addr:         ingestAddr,
 		token:        token,
 		sessionID:    p.SessionID,
-		iface:        p.Iface,
+		iface:        strings.Join(p.ifaceList(), ","),
 		batchSize:    r.batchSize,
 		batchInterval: r.batchInterval,
 		spool:        r.spool,
@@ -273,7 +297,7 @@ func (r *captureRunner) Start(p CaptureParams, ingestAddr, token string) error {
 	go r.watchCapEnded(runCtx)
 
 	r.setState(stateRunning, "")
-	slog.Info("capture started", "session", p.SessionID, "iface", p.Iface, "bpf", bpf)
+	slog.Info("capture started", "session", p.SessionID, "ifaces", ifaces, "bpf", bpf)
 	return nil
 }
 
@@ -330,7 +354,7 @@ func (r *captureRunner) stopLocked() {
 		r.cancelFn()
 		r.cancelFn = nil
 	}
-	r.live = nil
+	r.lives = nil
 	// packets/capEnded chan 留给 GC；下次 Start 重建。
 }
 
@@ -339,12 +363,14 @@ func (r *captureRunner) stopLocked() {
 func (r *captureRunner) UpdateFilter(ports []int32, hosts []string, bpf string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.state != stateRunning || r.live == nil {
+	if r.state != stateRunning || len(r.lives) == 0 {
 		return errors.New("capture is not running; filter update requires a running capture")
 	}
 	derived := deriveBPF(CaptureParams{Ports: ports, Hosts: hosts, BPF: bpf})
-	if err := r.live.SetFilter(derived); err != nil {
-		return err
+	for _, lc := range r.lives {
+		if err := lc.SetFilter(derived); err != nil {
+			return err
+		}
 	}
 	r.params.Ports = ports
 	r.params.Hosts = hosts

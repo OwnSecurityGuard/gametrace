@@ -111,6 +111,7 @@ type ControlStoreBackend interface {
 	GetProbeByTokenHash(ctx context.Context, tokenHash string) (*ProbeMeta, error)
 	ListProbes(ctx context.Context) ([]ProbeMeta, error)
 	UpdateProbeStatus(ctx context.Context, probeID string, st ProbeRuntimeStatus) error
+	UpdateProbeInterfaces(ctx context.Context, probeID, interfaces string) error
 	SetProbeConnection(ctx context.Context, probeID, state string, seen time.Time) error
 	RenameProbe(ctx context.Context, probeID, name string) error
 	RevokeProbe(ctx context.Context, probeID string) error

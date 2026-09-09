@@ -13,6 +13,7 @@ package probe
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -42,6 +43,7 @@ type ProbeStore interface {
 	GetProbeByTokenHash(ctx context.Context, tokenHash string) (*store.ProbeMeta, error)
 	UpsertProbe(ctx context.Context, m store.ProbeMeta) error
 	UpdateProbeStatus(ctx context.Context, probeID string, st store.ProbeRuntimeStatus) error
+	UpdateProbeInterfaces(ctx context.Context, probeID, interfaces string) error
 	SetProbeConnection(ctx context.Context, probeID, state string, seen time.Time) error
 	ListProbes(ctx context.Context) ([]store.ProbeMeta, error)
 	RenameProbe(ctx context.Context, probeID, name string) error
@@ -56,6 +58,8 @@ type ProbeStore interface {
 type Desired struct {
 	SessionID string
 	Iface     string
+	// Ifaces 是多网卡抓包清单；非空时优先于 Iface，空 = 探针自动选卡。
+	Ifaces    []string
 	Ports     []int32
 	Hosts     []string
 	BPF       string
@@ -223,6 +227,7 @@ func (m *Manager) syncLocked(probeID string, force bool) {
 					Assign: &proto.AssignCapture{
 						SessionId: d.SessionID,
 						Iface:     d.Iface,
+						Ifaces:    d.Ifaces,
 						Ports:     d.Ports,
 						Hosts:     d.Hosts,
 						Bpf:       d.BPF,
@@ -318,6 +323,7 @@ func mergeRuntime(p *store.ProbeMeta, lt store.ProbeRuntimeStatus) {
 	p.StatusError = lt.StatusError
 	p.CaptureIface = lt.CaptureIface
 	p.CapturePorts = lt.CapturePorts
+	p.Interfaces = lt.Interfaces
 	p.LastPacketMs = lt.LastPacketMs
 	p.LastUploadMs = lt.LastUploadMs
 	p.PacketsCaptured = lt.PacketsCaptured
@@ -458,11 +464,45 @@ func (m *Manager) OnSessionClosed(sessionID string) {
 // ---- 心跳与快照 ----
 
 // applyHeartbeat 消化探针心跳：刷新 latest 快照并落库（探针离线后 UI 仍有最后状态）。
+// SetInterfaces 记录探针连接时上报的本机网卡清单（JSON 快照）。
+// 落库 + 进内存 latest，供 List/Get 合并透出；清单随每次重连刷新。
+func (m *Manager) SetInterfaces(probeID string, ifaces []*proto.ProbeIface) {
+	nics := make([]store.ProbeIface, 0, len(ifaces))
+	for _, f := range ifaces {
+		if f == nil {
+			continue
+		}
+		nics = append(nics, store.ProbeIface{
+			Name: f.GetName(), Friendly: f.GetFriendly(),
+			Description: f.GetDescription(), IPs: f.GetIps(),
+		})
+	}
+	b, err := json.Marshal(nics)
+	if err != nil {
+		m.log.Warn("marshal probe interfaces failed", "probe_id", probeID, "error", err)
+		return
+	}
+	m.mu.Lock()
+	lt := m.latest[probeID]
+	lt.Interfaces = string(b)
+	m.latest[probeID] = lt
+	m.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := m.store.UpdateProbeInterfaces(ctx, probeID, string(b)); err != nil {
+		m.log.Warn("persist probe interfaces failed", "probe_id", probeID, "error", err)
+	}
+}
+
 func (m *Manager) applyHeartbeat(probeID string, hb *proto.ProbeHeartbeat) {
 	now := time.Now().UTC()
 	st := store.ProbeRuntimeStatus{
 		ConnectionState: "online",
 		LastSeenAt:      now,
+	}
+	// 心跳快照不带网卡清单：保留 hello（SetInterfaces）写入的值，否则每 10s 被抹掉。
+	if prev, ok := m.latest[probeID]; ok {
+		st.Interfaces = prev.Interfaces
 	}
 	if c := hb.GetCapture(); c != nil {
 		st.CaptureState = c.GetState()

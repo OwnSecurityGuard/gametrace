@@ -41,6 +41,9 @@ func (f *fakeProbeStore) UpsertProbe(context.Context, store.ProbeMeta) error { r
 func (f *fakeProbeStore) UpdateProbeStatus(context.Context, string, store.ProbeRuntimeStatus) error {
 	return nil
 }
+func (f *fakeProbeStore) UpdateProbeInterfaces(context.Context, string, string) error {
+	return nil
+}
 func (f *fakeProbeStore) SetProbeConnection(context.Context, string, string, time.Time) error {
 	return nil
 }

@@ -82,6 +82,19 @@ message ProbeHello {
   string probe_id = 1;
   string version = 2;
   repeated string capabilities = 3;
+  // 探针本机可抓包网卡清单（连接时上报，供平台侧展示与选取）。
+  // 空列表 = 探针无法枚举（未装 npcap 等），平台侧显示"自动选卡"即可。
+  repeated ProbeIface interfaces = 4;
+}
+
+// ProbeIface 是一张可抓包网卡。name 是 pcap 设备名（可直接填进
+// AssignCapture.ifaces，探针能直接 OpenLive）；friendly 是系统友好名（Windows
+// 的 "WLAN"/"以太网"）；ips 是绑定的 IP（辅助用户辨认）。
+message ProbeIface {
+  string name = 1;
+  string friendly = 2;
+  string description = 3;
+  repeated string ips = 4;
 }
 
 // ProbeCaptureStatus 是抓包状态机快照（三维度的第二维）。
@@ -148,7 +161,10 @@ message ControlEvent {
   }
 }
 
-// AssignCapture 指派抓包：iface 空 = 自动探测；ports/hosts/bpf 全空 = 不过滤。
+// AssignCapture 指派抓包：ifaces 空（且 iface 空）= 自动探测；一个 = 单卡；
+// 多个 = 多卡并发抓（各卡一个抓包 goroutine，帧汇入同一会话）。
+// iface 是旧的单卡字段（v1 兼容）：ifaces 为空时回退用它。
+// ports/hosts/bpf 全空 = 不过滤。
 message AssignCapture {
   string session_id = 1;
   string iface = 2;
@@ -157,6 +173,7 @@ message AssignCapture {
   string bpf = 5;                    // 显式 BPF；非空时覆盖 ports/hosts 派生
   int32 snaplen = 6;                 // 0 = 默认 1600
   bool promisc = 7;
+  repeated string ifaces = 8;        // 多网卡抓包；优先于 iface
 }
 
 message StopCaptureCmd {}

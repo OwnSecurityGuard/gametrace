@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,10 @@ type ProbeMeta struct {
 	CaptureIface  string
 	CapturePorts  string // csv，展示用
 
+	// 探针本机可抓包网卡（连接时上报的 JSON 快照；离线后仍展示上次清单）。
+	// 元素结构见 probeIfaceJSON：{name, friendly, description, ips}。
+	Interfaces string
+
 	// 维度三：数据
 	LastPacketMs    int64 // 0 = 从未抓到帧
 	LastUploadMs    int64 // 0 = 从未成功推流（未被确认）
@@ -50,6 +55,15 @@ type ProbeMeta struct {
 	CreatedAt time.Time
 }
 
+// ProbeIface 是探针上报的一张可抓包网卡（JSON 存 probes.interfaces）。
+// name 是 pcap 设备名，可直接填进抓包指令的 ifaces；friendly 是系统友好名。
+type ProbeIface struct {
+	Name        string   `json:"name"`
+	Friendly    string   `json:"friendly,omitempty"`
+	Description string   `json:"description,omitempty"`
+	IPs         []string `json:"ips,omitempty"`
+}
+
 // ProbeRuntimeStatus 是心跳携带的运行时快照（不含注册信息，Update 专用）。
 type ProbeRuntimeStatus struct {
 	ConnectionState string
@@ -58,6 +72,7 @@ type ProbeRuntimeStatus struct {
 	StatusError     string
 	CaptureIface    string
 	CapturePorts    string
+	Interfaces      string // JSON；仅探针连接（hello）时更新，心跳不携带
 	LastPacketMs    int64
 	LastUploadMs    int64
 	PacketsCaptured uint64
@@ -82,12 +97,12 @@ type ArchiveSegmentMeta struct {
 }
 
 const probeCols = `probe_id, name, owner, tenant_id, capabilities, token_hash, version, hostname, os, arch,
-connection_state, last_seen_at, capture_state, last_session_id, status_error, capture_iface, capture_ports,
+connection_state, last_seen_at, capture_state, last_session_id, status_error, capture_iface, capture_ports, interfaces,
 last_packet_ms, last_upload_ms, packets_captured, packets_acked, spool_depth, dropped,
 archive_bytes, archive_segments, archive_oldest_ms, archive_newest_ms, created_at`
 
 const probeScanCols = `probe_id, name, owner, COALESCE(tenant_id,'default'), capabilities, token_hash, version, hostname, os, arch,
-connection_state, last_seen_at, capture_state, last_session_id, status_error, capture_iface, capture_ports,
+connection_state, last_seen_at, capture_state, last_session_id, status_error, capture_iface, capture_ports, interfaces,
 last_packet_ms, last_upload_ms, packets_captured, packets_acked, spool_depth, dropped,
 archive_bytes, archive_segments, archive_oldest_ms, archive_newest_ms, created_at`
 
@@ -96,7 +111,7 @@ func scanProbe(row interface{ Scan(...any) error }) (*ProbeMeta, error) {
 	var lastSeen, created sql.NullTime
 	err := row.Scan(&m.ProbeID, &m.Name, &m.Owner, &m.TenantID, &m.Capabilities, &m.TokenHash,
 		&m.Version, &m.Hostname, &m.OS, &m.Arch,
-		&m.ConnectionState, &lastSeen, &m.CaptureState, &m.LastSessionID, &m.StatusError, &m.CaptureIface, &m.CapturePorts,
+		&m.ConnectionState, &lastSeen, &m.CaptureState, &m.LastSessionID, &m.StatusError, &m.CaptureIface, &m.CapturePorts, &m.Interfaces,
 		&m.LastPacketMs, &m.LastUploadMs, &m.PacketsCaptured, &m.PacketsAcked, &m.SpoolDepth, &m.Dropped,
 		&m.ArchiveBytes, &m.ArchiveSegments, &m.ArchiveOldestMs, &m.ArchiveNewestMs, &created)
 	if err != nil {
@@ -131,6 +146,7 @@ CREATE TABLE IF NOT EXISTS probes (
     status_error    TEXT NOT NULL DEFAULT '',
     capture_iface   TEXT NOT NULL DEFAULT '',
     capture_ports   TEXT NOT NULL DEFAULT '',
+    interfaces      TEXT NOT NULL DEFAULT '',
     last_packet_ms  INTEGER NOT NULL DEFAULT 0,
     last_upload_ms  INTEGER NOT NULL DEFAULT 0,
     packets_captured INTEGER NOT NULL DEFAULT 0,
@@ -157,6 +173,12 @@ CREATE TABLE IF NOT EXISTS probe_archive_segments (
 );`
 	if _, err := cs.db.Exec(schema); err != nil {
 		return fmt.Errorf("ensure probes schema: %w", err)
+	}
+	// 老库补列（CREATE IF NOT EXISTS 不会给已存在的表加列）。
+	if _, err := cs.db.Exec(`ALTER TABLE probes ADD COLUMN interfaces TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("migrate probes.interfaces: %w", err)
+		}
 	}
 	return nil
 }
@@ -237,6 +259,13 @@ WHERE probe_id=?`,
 		st.PacketsCaptured, st.PacketsAcked, st.SpoolDepth, st.Dropped,
 		st.ArchiveBytes, st.ArchiveSegments, st.ArchiveOldestMs, st.ArchiveNewestMs, st.LastSeenAt,
 		probeID)
+	return err
+}
+
+// UpdateProbeInterfaces 落库探针上报的网卡清单（JSON；探针连接 hello 时调用）。
+// 心跳不携带网卡，独立于 UpdateProbeStatus，避免心跳把清单抹掉。
+func (cs *ControlStore) UpdateProbeInterfaces(ctx context.Context, probeID, interfaces string) error {
+	_, err := cs.db.ExecContext(ctx, `UPDATE probes SET interfaces=? WHERE probe_id=?`, interfaces, probeID)
 	return err
 }
 

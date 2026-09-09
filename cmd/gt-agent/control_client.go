@@ -109,12 +109,14 @@ func (c *ControlAgent) connectOnce(ctx context.Context) error {
 		return fmt.Errorf("open control stream: %w", err)
 	}
 
-	// 首包 Hello（服务端校验 probe_id 与凭证一致）。
+	// 首包 Hello（服务端校验 probe_id 与凭证一致）。网卡清单随 hello 上报，
+	// 供平台展示与抓包选卡；每次重连都会刷新服务端快照。
 	if err := stream.Send(&proto.ControlEvent{Payload: &proto.ControlEvent_Hello{
 		Hello: &proto.ProbeHello{
-			ProbeId:  c.probeID,
-			Version:  version.String(),
+			ProbeId:      c.probeID,
+			Version:      version.String(),
 			Capabilities: []string{"pcap", "plugin_host"},
+			Interfaces:   ifacesToProto(listInterfacesLocal()),
 		},
 	}}); err != nil {
 		return fmt.Errorf("send hello: %w", err)
@@ -215,7 +217,7 @@ func (c *ControlAgent) execute(ctx context.Context, cmd *proto.Command, sendEven
 	// 收指令留痕：排障「平台点了抓包但探针没动静」时，这条日志是链路是否打通的分界点。
 	if a := cmd.GetAssign(); a != nil {
 		slog.Info("probe command received", "cmd_id", cmd.GetId(), "kind", kind,
-			"session", a.GetSessionId(), "iface", a.GetIface(), "ports", a.GetPorts(),
+			"session", a.GetSessionId(), "iface", a.GetIface(), "ifaces", a.GetIfaces(), "ports", a.GetPorts(),
 			"hosts", a.GetHosts(), "bpf", a.GetBpf(), "snaplen", a.GetSnaplen(),
 			"promisc", a.GetPromisc())
 	} else {
@@ -224,7 +226,7 @@ func (c *ControlAgent) execute(ctx context.Context, cmd *proto.Command, sendEven
 	// assign 幂等记忆（Retry 用）：仅记录 Assign 参数。
 	if a := cmd.GetAssign(); a != nil {
 		p := &CaptureParams{
-			SessionID: a.GetSessionId(), Iface: a.GetIface(),
+			SessionID: a.GetSessionId(), Iface: a.GetIface(), Ifaces: a.GetIfaces(),
 			Ports: a.GetPorts(), Hosts: a.GetHosts(), BPF: a.GetBpf(),
 			SnapLen: a.GetSnaplen(), Promisc: a.GetPromisc(),
 		}
@@ -234,7 +236,7 @@ func (c *ControlAgent) execute(ctx context.Context, cmd *proto.Command, sendEven
 	case *proto.Command_Assign:
 		a := p.Assign
 		err := c.runner.Start(CaptureParams{
-			SessionID: a.GetSessionId(), Iface: a.GetIface(),
+			SessionID: a.GetSessionId(), Iface: a.GetIface(), Ifaces: a.GetIfaces(),
 			Ports: a.GetPorts(), Hosts: a.GetHosts(), BPF: a.GetBpf(),
 			SnapLen: a.GetSnaplen(), Promisc: a.GetPromisc(),
 		}, c.ingestAddr, c.probeToken)
@@ -398,6 +400,17 @@ func splitComma(s string) []string {
 	}
 	if cur != "" {
 		out = append(out, cur)
+	}
+	return out
+}
+
+// ifacesToProto 把本地网卡清单转成 hello 上报结构（nil 清单原样传空）。
+func ifacesToProto(list []IfaceInfo) []*proto.ProbeIface {
+	out := make([]*proto.ProbeIface, 0, len(list))
+	for _, f := range list {
+		out = append(out, &proto.ProbeIface{
+			Name: f.Name, Friendly: f.Friendly, Description: f.Description, Ips: f.IPs,
+		})
 	}
 	return out
 }

@@ -9,6 +9,7 @@ package capturecontrol
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -96,8 +97,27 @@ func probeInfoToProto(p *store.ProbeMeta) *pb.ProbeInfo {
 		ArchiveSegments:  p.ArchiveSegments,
 		ArchiveOldestUnix: p.ArchiveOldestMs / 1000,
 		ArchiveNewestUnix: p.ArchiveNewestMs / 1000,
-		CreatedAt:        formatTime(p.CreatedAt),
+		Interfaces:        nicsToProto(p.Interfaces),
+		CreatedAt:         formatTime(p.CreatedAt),
 	}
+}
+
+// nicsToProto 把探针上报的网卡 JSON 快照转为 proto；坏 JSON 按空清单处理（不炸列表）。
+func nicsToProto(jsonStr string) []*pb.ProbeNicInfo {
+	if jsonStr == "" {
+		return nil
+	}
+	var nics []store.ProbeIface
+	if err := json.Unmarshal([]byte(jsonStr), &nics); err != nil {
+		return nil
+	}
+	out := make([]*pb.ProbeNicInfo, 0, len(nics))
+	for _, n := range nics {
+		out = append(out, &pb.ProbeNicInfo{
+			Name: n.Name, Friendly: n.Friendly, Description: n.Description, Ips: n.IPs,
+		})
+	}
+	return out
 }
 
 // ListProbes 处理探针列表 RPC（creator 轴过滤）。
@@ -173,6 +193,7 @@ func (s *Server) ProbeStartCapture(ctx context.Context, req *pb.ProbeStartCaptur
 	d := probe.Desired{
 		SessionID: started.SessionID,
 		Iface:     req.GetIface(),
+		Ifaces:    req.GetIfaces(),
 		Ports:     req.GetPorts(),
 		Hosts:     req.GetHosts(),
 		SnapLen:   1600,

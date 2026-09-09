@@ -151,6 +151,11 @@ func (s *Server) Connect(stream proto.AgentControl_ConnectServer) error {
 	ctx, cancel := context.WithCancel(stream.Context())
 	defer cancel()
 
+	// 网卡清单随 hello 上报（每次重连刷新），供平台展示与抓包选卡。
+	if ifs := hello.GetInterfaces(); len(ifs) > 0 {
+		s.mgr.SetInterfaces(probeID, ifs)
+	}
+
 	s.mgr.openConn(probeID, cancel)
 	defer s.mgr.closeConn(probeID)
 

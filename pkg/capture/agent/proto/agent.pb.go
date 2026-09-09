@@ -405,10 +405,13 @@ func (x *RegisterProbeAck) GetProbeToken() string {
 }
 
 type ProbeHello struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ProbeId       string                 `protobuf:"bytes,1,opt,name=probe_id,json=probeId,proto3" json:"probe_id,omitempty"`
-	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
-	Capabilities  []string               `protobuf:"bytes,3,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	ProbeId      string                 `protobuf:"bytes,1,opt,name=probe_id,json=probeId,proto3" json:"probe_id,omitempty"`
+	Version      string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	Capabilities []string               `protobuf:"bytes,3,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	// 探针本机可抓包网卡清单（连接时上报，供平台侧展示与选取）。
+	// 空列表 = 探针无法枚举（未装 npcap 等），平台侧显示"自动选卡"即可。
+	Interfaces    []*ProbeIface `protobuf:"bytes,4,rep,name=interfaces,proto3" json:"interfaces,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -464,6 +467,84 @@ func (x *ProbeHello) GetCapabilities() []string {
 	return nil
 }
 
+func (x *ProbeHello) GetInterfaces() []*ProbeIface {
+	if x != nil {
+		return x.Interfaces
+	}
+	return nil
+}
+
+// ProbeIface 是一张可抓包网卡。name 是 pcap 设备名（可直接填进
+// AssignCapture.ifaces，探针能直接 OpenLive）；friendly 是系统友好名（Windows
+// 的 "WLAN"/"以太网"）；ips 是绑定的 IP（辅助用户辨认）。
+type ProbeIface struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Friendly      string                 `protobuf:"bytes,2,opt,name=friendly,proto3" json:"friendly,omitempty"`
+	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Ips           []string               `protobuf:"bytes,4,rep,name=ips,proto3" json:"ips,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProbeIface) Reset() {
+	*x = ProbeIface{}
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeIface) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeIface) ProtoMessage() {}
+
+func (x *ProbeIface) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeIface.ProtoReflect.Descriptor instead.
+func (*ProbeIface) Descriptor() ([]byte, []int) {
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ProbeIface) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ProbeIface) GetFriendly() string {
+	if x != nil {
+		return x.Friendly
+	}
+	return ""
+}
+
+func (x *ProbeIface) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *ProbeIface) GetIps() []string {
+	if x != nil {
+		return x.Ips
+	}
+	return nil
+}
+
 // ProbeCaptureStatus 是抓包状态机快照（三维度的第二维）。
 // state: idle | starting | running | stopped | failed（失败带 error，进程不退出）。
 type ProbeCaptureStatus struct {
@@ -480,7 +561,7 @@ type ProbeCaptureStatus struct {
 
 func (x *ProbeCaptureStatus) Reset() {
 	*x = ProbeCaptureStatus{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[6]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -492,7 +573,7 @@ func (x *ProbeCaptureStatus) String() string {
 func (*ProbeCaptureStatus) ProtoMessage() {}
 
 func (x *ProbeCaptureStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[6]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -505,7 +586,7 @@ func (x *ProbeCaptureStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeCaptureStatus.ProtoReflect.Descriptor instead.
 func (*ProbeCaptureStatus) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{6}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ProbeCaptureStatus) GetState() string {
@@ -566,7 +647,7 @@ type ProbeDataStatus struct {
 
 func (x *ProbeDataStatus) Reset() {
 	*x = ProbeDataStatus{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[7]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -578,7 +659,7 @@ func (x *ProbeDataStatus) String() string {
 func (*ProbeDataStatus) ProtoMessage() {}
 
 func (x *ProbeDataStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[7]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -591,7 +672,7 @@ func (x *ProbeDataStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeDataStatus.ProtoReflect.Descriptor instead.
 func (*ProbeDataStatus) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{7}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ProbeDataStatus) GetLastPacketUnixMs() int64 {
@@ -648,7 +729,7 @@ type ProbeArchiveStatus struct {
 
 func (x *ProbeArchiveStatus) Reset() {
 	*x = ProbeArchiveStatus{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[8]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -660,7 +741,7 @@ func (x *ProbeArchiveStatus) String() string {
 func (*ProbeArchiveStatus) ProtoMessage() {}
 
 func (x *ProbeArchiveStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[8]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -673,7 +754,7 @@ func (x *ProbeArchiveStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeArchiveStatus.ProtoReflect.Descriptor instead.
 func (*ProbeArchiveStatus) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{8}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ProbeArchiveStatus) GetBytes() uint64 {
@@ -715,7 +796,7 @@ type ProbeHeartbeat struct {
 
 func (x *ProbeHeartbeat) Reset() {
 	*x = ProbeHeartbeat{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[9]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -727,7 +808,7 @@ func (x *ProbeHeartbeat) String() string {
 func (*ProbeHeartbeat) ProtoMessage() {}
 
 func (x *ProbeHeartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[9]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -740,7 +821,7 @@ func (x *ProbeHeartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeHeartbeat.ProtoReflect.Descriptor instead.
 func (*ProbeHeartbeat) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{9}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ProbeHeartbeat) GetCapture() *ProbeCaptureStatus {
@@ -775,7 +856,7 @@ type CommandResult struct {
 
 func (x *CommandResult) Reset() {
 	*x = CommandResult{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[10]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -787,7 +868,7 @@ func (x *CommandResult) String() string {
 func (*CommandResult) ProtoMessage() {}
 
 func (x *CommandResult) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[10]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -800,7 +881,7 @@ func (x *CommandResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandResult.ProtoReflect.Descriptor instead.
 func (*CommandResult) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{10}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *CommandResult) GetId() string {
@@ -838,7 +919,7 @@ type ArchiveSegmentInfo struct {
 
 func (x *ArchiveSegmentInfo) Reset() {
 	*x = ArchiveSegmentInfo{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[11]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -850,7 +931,7 @@ func (x *ArchiveSegmentInfo) String() string {
 func (*ArchiveSegmentInfo) ProtoMessage() {}
 
 func (x *ArchiveSegmentInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[11]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -863,7 +944,7 @@ func (x *ArchiveSegmentInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveSegmentInfo.ProtoReflect.Descriptor instead.
 func (*ArchiveSegmentInfo) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{11}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ArchiveSegmentInfo) GetSegId() string {
@@ -918,7 +999,7 @@ type ArchiveSegmentsReply struct {
 
 func (x *ArchiveSegmentsReply) Reset() {
 	*x = ArchiveSegmentsReply{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[12]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -930,7 +1011,7 @@ func (x *ArchiveSegmentsReply) String() string {
 func (*ArchiveSegmentsReply) ProtoMessage() {}
 
 func (x *ArchiveSegmentsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[12]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -943,7 +1024,7 @@ func (x *ArchiveSegmentsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveSegmentsReply.ProtoReflect.Descriptor instead.
 func (*ArchiveSegmentsReply) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{12}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ArchiveSegmentsReply) GetSegments() []*ArchiveSegmentInfo {
@@ -968,7 +1049,7 @@ type ControlEvent struct {
 
 func (x *ControlEvent) Reset() {
 	*x = ControlEvent{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[13]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -980,7 +1061,7 @@ func (x *ControlEvent) String() string {
 func (*ControlEvent) ProtoMessage() {}
 
 func (x *ControlEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[13]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -993,7 +1074,7 @@ func (x *ControlEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ControlEvent.ProtoReflect.Descriptor instead.
 func (*ControlEvent) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{13}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ControlEvent) GetPayload() isControlEvent_Payload {
@@ -1067,7 +1148,10 @@ func (*ControlEvent_Result) isControlEvent_Payload() {}
 
 func (*ControlEvent_ArchiveSegments) isControlEvent_Payload() {}
 
-// AssignCapture 指派抓包：iface 空 = 自动探测；ports/hosts/bpf 全空 = 不过滤。
+// AssignCapture 指派抓包：ifaces 空（且 iface 空）= 自动探测；一个 = 单卡；
+// 多个 = 多卡并发抓（各卡一个抓包 goroutine，帧汇入同一会话）。
+// iface 是旧的单卡字段（v1 兼容）：ifaces 为空时回退用它。
+// ports/hosts/bpf 全空 = 不过滤。
 type AssignCapture struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -1077,13 +1161,14 @@ type AssignCapture struct {
 	Bpf           string                 `protobuf:"bytes,5,opt,name=bpf,proto3" json:"bpf,omitempty"`          // 显式 BPF；非空时覆盖 ports/hosts 派生
 	Snaplen       int32                  `protobuf:"varint,6,opt,name=snaplen,proto3" json:"snaplen,omitempty"` // 0 = 默认 1600
 	Promisc       bool                   `protobuf:"varint,7,opt,name=promisc,proto3" json:"promisc,omitempty"`
+	Ifaces        []string               `protobuf:"bytes,8,rep,name=ifaces,proto3" json:"ifaces,omitempty"` // 多网卡抓包；优先于 iface
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AssignCapture) Reset() {
 	*x = AssignCapture{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[14]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1095,7 +1180,7 @@ func (x *AssignCapture) String() string {
 func (*AssignCapture) ProtoMessage() {}
 
 func (x *AssignCapture) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[14]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1108,7 +1193,7 @@ func (x *AssignCapture) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignCapture.ProtoReflect.Descriptor instead.
 func (*AssignCapture) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{14}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *AssignCapture) GetSessionId() string {
@@ -1160,6 +1245,13 @@ func (x *AssignCapture) GetPromisc() bool {
 	return false
 }
 
+func (x *AssignCapture) GetIfaces() []string {
+	if x != nil {
+		return x.Ifaces
+	}
+	return nil
+}
+
 type StopCaptureCmd struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1168,7 +1260,7 @@ type StopCaptureCmd struct {
 
 func (x *StopCaptureCmd) Reset() {
 	*x = StopCaptureCmd{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[15]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1180,7 +1272,7 @@ func (x *StopCaptureCmd) String() string {
 func (*StopCaptureCmd) ProtoMessage() {}
 
 func (x *StopCaptureCmd) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[15]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1193,7 +1285,7 @@ func (x *StopCaptureCmd) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopCaptureCmd.ProtoReflect.Descriptor instead.
 func (*StopCaptureCmd) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{15}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{16}
 }
 
 // UpdateFilter 热更新过滤条件，不中断抓包（SetBPFFilter）。
@@ -1209,7 +1301,7 @@ type UpdateFilter struct {
 
 func (x *UpdateFilter) Reset() {
 	*x = UpdateFilter{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[16]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1221,7 +1313,7 @@ func (x *UpdateFilter) String() string {
 func (*UpdateFilter) ProtoMessage() {}
 
 func (x *UpdateFilter) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[16]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1234,7 +1326,7 @@ func (x *UpdateFilter) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateFilter.ProtoReflect.Descriptor instead.
 func (*UpdateFilter) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{16}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *UpdateFilter) GetPorts() []int32 {
@@ -1268,7 +1360,7 @@ type SetConfig struct {
 
 func (x *SetConfig) Reset() {
 	*x = SetConfig{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[17]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1280,7 +1372,7 @@ func (x *SetConfig) String() string {
 func (*SetConfig) ProtoMessage() {}
 
 func (x *SetConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[17]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1293,7 +1385,7 @@ func (x *SetConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetConfig.ProtoReflect.Descriptor instead.
 func (*SetConfig) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{17}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SetConfig) GetKvs() map[string]string {
@@ -1313,7 +1405,7 @@ type ArchiveQuery struct {
 
 func (x *ArchiveQuery) Reset() {
 	*x = ArchiveQuery{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[18]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1325,7 +1417,7 @@ func (x *ArchiveQuery) String() string {
 func (*ArchiveQuery) ProtoMessage() {}
 
 func (x *ArchiveQuery) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[18]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1338,7 +1430,7 @@ func (x *ArchiveQuery) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveQuery.ProtoReflect.Descriptor instead.
 func (*ArchiveQuery) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{18}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ArchiveQuery) GetFromUnix() int64 {
@@ -1366,7 +1458,7 @@ type ArchiveUpload struct {
 
 func (x *ArchiveUpload) Reset() {
 	*x = ArchiveUpload{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[19]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1378,7 +1470,7 @@ func (x *ArchiveUpload) String() string {
 func (*ArchiveUpload) ProtoMessage() {}
 
 func (x *ArchiveUpload) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[19]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1391,7 +1483,7 @@ func (x *ArchiveUpload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveUpload.ProtoReflect.Descriptor instead.
 func (*ArchiveUpload) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{19}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ArchiveUpload) GetTargetSessionId() string {
@@ -1423,7 +1515,7 @@ type RetryCmd struct {
 
 func (x *RetryCmd) Reset() {
 	*x = RetryCmd{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[20]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1435,7 +1527,7 @@ func (x *RetryCmd) String() string {
 func (*RetryCmd) ProtoMessage() {}
 
 func (x *RetryCmd) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[20]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1448,7 +1540,7 @@ func (x *RetryCmd) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetryCmd.ProtoReflect.Descriptor instead.
 func (*RetryCmd) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{20}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{21}
 }
 
 type Command struct {
@@ -1470,7 +1562,7 @@ type Command struct {
 
 func (x *Command) Reset() {
 	*x = Command{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[21]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1482,7 +1574,7 @@ func (x *Command) String() string {
 func (*Command) ProtoMessage() {}
 
 func (x *Command) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[21]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1495,7 +1587,7 @@ func (x *Command) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Command.ProtoReflect.Descriptor instead.
 func (*Command) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{21}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *Command) GetId() string {
@@ -1633,7 +1725,7 @@ type ArchiveChunk struct {
 
 func (x *ArchiveChunk) Reset() {
 	*x = ArchiveChunk{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[22]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1645,7 +1737,7 @@ func (x *ArchiveChunk) String() string {
 func (*ArchiveChunk) ProtoMessage() {}
 
 func (x *ArchiveChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[22]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1658,7 +1750,7 @@ func (x *ArchiveChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveChunk.ProtoReflect.Descriptor instead.
 func (*ArchiveChunk) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{22}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ArchiveChunk) GetTargetSessionId() string {
@@ -1699,7 +1791,7 @@ type UploadArchiveAck struct {
 
 func (x *UploadArchiveAck) Reset() {
 	*x = UploadArchiveAck{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[23]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1711,7 +1803,7 @@ func (x *UploadArchiveAck) String() string {
 func (*UploadArchiveAck) ProtoMessage() {}
 
 func (x *UploadArchiveAck) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[23]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1724,7 +1816,7 @@ func (x *UploadArchiveAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadArchiveAck.ProtoReflect.Descriptor instead.
 func (*UploadArchiveAck) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{23}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *UploadArchiveAck) GetPackets() uint64 {
@@ -1780,12 +1872,21 @@ const file_pkg_capture_agent_proto_agent_proto_rawDesc = "" +
 	"\x10RegisterProbeAck\x12\x19\n" +
 	"\bprobe_id\x18\x01 \x01(\tR\aprobeId\x12\x1f\n" +
 	"\vprobe_token\x18\x02 \x01(\tR\n" +
-	"probeToken\"e\n" +
+	"probeToken\"\xa2\x01\n" +
 	"\n" +
 	"ProbeHello\x12\x19\n" +
 	"\bprobe_id\x18\x01 \x01(\tR\aprobeId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\"\n" +
-	"\fcapabilities\x18\x03 \x03(\tR\fcapabilities\"\xa1\x01\n" +
+	"\fcapabilities\x18\x03 \x03(\tR\fcapabilities\x12;\n" +
+	"\n" +
+	"interfaces\x18\x04 \x03(\v2\x1b.gametrace.agent.ProbeIfaceR\n" +
+	"interfaces\"p\n" +
+	"\n" +
+	"ProbeIface\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
+	"\bfriendly\x18\x02 \x01(\tR\bfriendly\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x10\n" +
+	"\x03ips\x18\x04 \x03(\tR\x03ips\"\xa1\x01\n" +
 	"\x12ProbeCaptureStatus\x12\x14\n" +
 	"\x05state\x18\x01 \x01(\tR\x05state\x12\x1d\n" +
 	"\n" +
@@ -1832,7 +1933,7 @@ const file_pkg_capture_agent_proto_agent_proto_rawDesc = "" +
 	"\theartbeat\x18\x02 \x01(\v2\x1f.gametrace.agent.ProbeHeartbeatH\x00R\theartbeat\x128\n" +
 	"\x06result\x18\x03 \x01(\v2\x1e.gametrace.agent.CommandResultH\x00R\x06result\x12R\n" +
 	"\x10archive_segments\x18\x04 \x01(\v2%.gametrace.agent.ArchiveSegmentsReplyH\x00R\x0farchiveSegmentsB\t\n" +
-	"\apayload\"\xb6\x01\n" +
+	"\apayload\"\xce\x01\n" +
 	"\rAssignCapture\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x14\n" +
@@ -1841,7 +1942,8 @@ const file_pkg_capture_agent_proto_agent_proto_rawDesc = "" +
 	"\x05hosts\x18\x04 \x03(\tR\x05hosts\x12\x10\n" +
 	"\x03bpf\x18\x05 \x01(\tR\x03bpf\x12\x18\n" +
 	"\asnaplen\x18\x06 \x01(\x05R\asnaplen\x12\x18\n" +
-	"\apromisc\x18\a \x01(\bR\apromisc\"\x10\n" +
+	"\apromisc\x18\a \x01(\bR\apromisc\x12\x16\n" +
+	"\x06ifaces\x18\b \x03(\tR\x06ifaces\"\x10\n" +
 	"\x0eStopCaptureCmd\"L\n" +
 	"\fUpdateFilter\x12\x14\n" +
 	"\x05ports\x18\x01 \x03(\x05R\x05ports\x12\x14\n" +
@@ -1898,7 +2000,7 @@ func file_pkg_capture_agent_proto_agent_proto_rawDescGZIP() []byte {
 	return file_pkg_capture_agent_proto_agent_proto_rawDescData
 }
 
-var file_pkg_capture_agent_proto_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_pkg_capture_agent_proto_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_pkg_capture_agent_proto_agent_proto_goTypes = []any{
 	(*PacketBatch)(nil),          // 0: gametrace.agent.PacketBatch
 	(*RawPacket)(nil),            // 1: gametrace.agent.RawPacket
@@ -1906,60 +2008,62 @@ var file_pkg_capture_agent_proto_agent_proto_goTypes = []any{
 	(*RegisterProbeRequest)(nil), // 3: gametrace.agent.RegisterProbeRequest
 	(*RegisterProbeAck)(nil),     // 4: gametrace.agent.RegisterProbeAck
 	(*ProbeHello)(nil),           // 5: gametrace.agent.ProbeHello
-	(*ProbeCaptureStatus)(nil),   // 6: gametrace.agent.ProbeCaptureStatus
-	(*ProbeDataStatus)(nil),      // 7: gametrace.agent.ProbeDataStatus
-	(*ProbeArchiveStatus)(nil),   // 8: gametrace.agent.ProbeArchiveStatus
-	(*ProbeHeartbeat)(nil),       // 9: gametrace.agent.ProbeHeartbeat
-	(*CommandResult)(nil),        // 10: gametrace.agent.CommandResult
-	(*ArchiveSegmentInfo)(nil),   // 11: gametrace.agent.ArchiveSegmentInfo
-	(*ArchiveSegmentsReply)(nil), // 12: gametrace.agent.ArchiveSegmentsReply
-	(*ControlEvent)(nil),         // 13: gametrace.agent.ControlEvent
-	(*AssignCapture)(nil),        // 14: gametrace.agent.AssignCapture
-	(*StopCaptureCmd)(nil),       // 15: gametrace.agent.StopCaptureCmd
-	(*UpdateFilter)(nil),         // 16: gametrace.agent.UpdateFilter
-	(*SetConfig)(nil),            // 17: gametrace.agent.SetConfig
-	(*ArchiveQuery)(nil),         // 18: gametrace.agent.ArchiveQuery
-	(*ArchiveUpload)(nil),        // 19: gametrace.agent.ArchiveUpload
-	(*RetryCmd)(nil),             // 20: gametrace.agent.RetryCmd
-	(*Command)(nil),              // 21: gametrace.agent.Command
-	(*ArchiveChunk)(nil),         // 22: gametrace.agent.ArchiveChunk
-	(*UploadArchiveAck)(nil),     // 23: gametrace.agent.UploadArchiveAck
-	nil,                          // 24: gametrace.agent.RawPacket.MetadataEntry
-	nil,                          // 25: gametrace.agent.SetConfig.KvsEntry
+	(*ProbeIface)(nil),           // 6: gametrace.agent.ProbeIface
+	(*ProbeCaptureStatus)(nil),   // 7: gametrace.agent.ProbeCaptureStatus
+	(*ProbeDataStatus)(nil),      // 8: gametrace.agent.ProbeDataStatus
+	(*ProbeArchiveStatus)(nil),   // 9: gametrace.agent.ProbeArchiveStatus
+	(*ProbeHeartbeat)(nil),       // 10: gametrace.agent.ProbeHeartbeat
+	(*CommandResult)(nil),        // 11: gametrace.agent.CommandResult
+	(*ArchiveSegmentInfo)(nil),   // 12: gametrace.agent.ArchiveSegmentInfo
+	(*ArchiveSegmentsReply)(nil), // 13: gametrace.agent.ArchiveSegmentsReply
+	(*ControlEvent)(nil),         // 14: gametrace.agent.ControlEvent
+	(*AssignCapture)(nil),        // 15: gametrace.agent.AssignCapture
+	(*StopCaptureCmd)(nil),       // 16: gametrace.agent.StopCaptureCmd
+	(*UpdateFilter)(nil),         // 17: gametrace.agent.UpdateFilter
+	(*SetConfig)(nil),            // 18: gametrace.agent.SetConfig
+	(*ArchiveQuery)(nil),         // 19: gametrace.agent.ArchiveQuery
+	(*ArchiveUpload)(nil),        // 20: gametrace.agent.ArchiveUpload
+	(*RetryCmd)(nil),             // 21: gametrace.agent.RetryCmd
+	(*Command)(nil),              // 22: gametrace.agent.Command
+	(*ArchiveChunk)(nil),         // 23: gametrace.agent.ArchiveChunk
+	(*UploadArchiveAck)(nil),     // 24: gametrace.agent.UploadArchiveAck
+	nil,                          // 25: gametrace.agent.RawPacket.MetadataEntry
+	nil,                          // 26: gametrace.agent.SetConfig.KvsEntry
 }
 var file_pkg_capture_agent_proto_agent_proto_depIdxs = []int32{
 	1,  // 0: gametrace.agent.PacketBatch.packets:type_name -> gametrace.agent.RawPacket
-	24, // 1: gametrace.agent.RawPacket.metadata:type_name -> gametrace.agent.RawPacket.MetadataEntry
-	6,  // 2: gametrace.agent.ProbeHeartbeat.capture:type_name -> gametrace.agent.ProbeCaptureStatus
-	7,  // 3: gametrace.agent.ProbeHeartbeat.data:type_name -> gametrace.agent.ProbeDataStatus
-	8,  // 4: gametrace.agent.ProbeHeartbeat.archive:type_name -> gametrace.agent.ProbeArchiveStatus
-	11, // 5: gametrace.agent.ArchiveSegmentsReply.segments:type_name -> gametrace.agent.ArchiveSegmentInfo
-	5,  // 6: gametrace.agent.ControlEvent.hello:type_name -> gametrace.agent.ProbeHello
-	9,  // 7: gametrace.agent.ControlEvent.heartbeat:type_name -> gametrace.agent.ProbeHeartbeat
-	10, // 8: gametrace.agent.ControlEvent.result:type_name -> gametrace.agent.CommandResult
-	12, // 9: gametrace.agent.ControlEvent.archive_segments:type_name -> gametrace.agent.ArchiveSegmentsReply
-	25, // 10: gametrace.agent.SetConfig.kvs:type_name -> gametrace.agent.SetConfig.KvsEntry
-	14, // 11: gametrace.agent.Command.assign:type_name -> gametrace.agent.AssignCapture
-	15, // 12: gametrace.agent.Command.stop:type_name -> gametrace.agent.StopCaptureCmd
-	16, // 13: gametrace.agent.Command.filter:type_name -> gametrace.agent.UpdateFilter
-	17, // 14: gametrace.agent.Command.config:type_name -> gametrace.agent.SetConfig
-	18, // 15: gametrace.agent.Command.archive_query:type_name -> gametrace.agent.ArchiveQuery
-	19, // 16: gametrace.agent.Command.archive_upload:type_name -> gametrace.agent.ArchiveUpload
-	20, // 17: gametrace.agent.Command.retry:type_name -> gametrace.agent.RetryCmd
-	1,  // 18: gametrace.agent.ArchiveChunk.packet:type_name -> gametrace.agent.RawPacket
-	0,  // 19: gametrace.agent.AgentIngest.Push:input_type -> gametrace.agent.PacketBatch
-	3,  // 20: gametrace.agent.AgentControl.RegisterProbe:input_type -> gametrace.agent.RegisterProbeRequest
-	13, // 21: gametrace.agent.AgentControl.Connect:input_type -> gametrace.agent.ControlEvent
-	22, // 22: gametrace.agent.AgentControl.UploadArchive:input_type -> gametrace.agent.ArchiveChunk
-	2,  // 23: gametrace.agent.AgentIngest.Push:output_type -> gametrace.agent.PushAck
-	4,  // 24: gametrace.agent.AgentControl.RegisterProbe:output_type -> gametrace.agent.RegisterProbeAck
-	21, // 25: gametrace.agent.AgentControl.Connect:output_type -> gametrace.agent.Command
-	23, // 26: gametrace.agent.AgentControl.UploadArchive:output_type -> gametrace.agent.UploadArchiveAck
-	23, // [23:27] is the sub-list for method output_type
-	19, // [19:23] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	25, // 1: gametrace.agent.RawPacket.metadata:type_name -> gametrace.agent.RawPacket.MetadataEntry
+	6,  // 2: gametrace.agent.ProbeHello.interfaces:type_name -> gametrace.agent.ProbeIface
+	7,  // 3: gametrace.agent.ProbeHeartbeat.capture:type_name -> gametrace.agent.ProbeCaptureStatus
+	8,  // 4: gametrace.agent.ProbeHeartbeat.data:type_name -> gametrace.agent.ProbeDataStatus
+	9,  // 5: gametrace.agent.ProbeHeartbeat.archive:type_name -> gametrace.agent.ProbeArchiveStatus
+	12, // 6: gametrace.agent.ArchiveSegmentsReply.segments:type_name -> gametrace.agent.ArchiveSegmentInfo
+	5,  // 7: gametrace.agent.ControlEvent.hello:type_name -> gametrace.agent.ProbeHello
+	10, // 8: gametrace.agent.ControlEvent.heartbeat:type_name -> gametrace.agent.ProbeHeartbeat
+	11, // 9: gametrace.agent.ControlEvent.result:type_name -> gametrace.agent.CommandResult
+	13, // 10: gametrace.agent.ControlEvent.archive_segments:type_name -> gametrace.agent.ArchiveSegmentsReply
+	26, // 11: gametrace.agent.SetConfig.kvs:type_name -> gametrace.agent.SetConfig.KvsEntry
+	15, // 12: gametrace.agent.Command.assign:type_name -> gametrace.agent.AssignCapture
+	16, // 13: gametrace.agent.Command.stop:type_name -> gametrace.agent.StopCaptureCmd
+	17, // 14: gametrace.agent.Command.filter:type_name -> gametrace.agent.UpdateFilter
+	18, // 15: gametrace.agent.Command.config:type_name -> gametrace.agent.SetConfig
+	19, // 16: gametrace.agent.Command.archive_query:type_name -> gametrace.agent.ArchiveQuery
+	20, // 17: gametrace.agent.Command.archive_upload:type_name -> gametrace.agent.ArchiveUpload
+	21, // 18: gametrace.agent.Command.retry:type_name -> gametrace.agent.RetryCmd
+	1,  // 19: gametrace.agent.ArchiveChunk.packet:type_name -> gametrace.agent.RawPacket
+	0,  // 20: gametrace.agent.AgentIngest.Push:input_type -> gametrace.agent.PacketBatch
+	3,  // 21: gametrace.agent.AgentControl.RegisterProbe:input_type -> gametrace.agent.RegisterProbeRequest
+	14, // 22: gametrace.agent.AgentControl.Connect:input_type -> gametrace.agent.ControlEvent
+	23, // 23: gametrace.agent.AgentControl.UploadArchive:input_type -> gametrace.agent.ArchiveChunk
+	2,  // 24: gametrace.agent.AgentIngest.Push:output_type -> gametrace.agent.PushAck
+	4,  // 25: gametrace.agent.AgentControl.RegisterProbe:output_type -> gametrace.agent.RegisterProbeAck
+	22, // 26: gametrace.agent.AgentControl.Connect:output_type -> gametrace.agent.Command
+	24, // 27: gametrace.agent.AgentControl.UploadArchive:output_type -> gametrace.agent.UploadArchiveAck
+	24, // [24:28] is the sub-list for method output_type
+	20, // [20:24] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_pkg_capture_agent_proto_agent_proto_init() }
@@ -1967,13 +2071,13 @@ func file_pkg_capture_agent_proto_agent_proto_init() {
 	if File_pkg_capture_agent_proto_agent_proto != nil {
 		return
 	}
-	file_pkg_capture_agent_proto_agent_proto_msgTypes[13].OneofWrappers = []any{
+	file_pkg_capture_agent_proto_agent_proto_msgTypes[14].OneofWrappers = []any{
 		(*ControlEvent_Hello)(nil),
 		(*ControlEvent_Heartbeat)(nil),
 		(*ControlEvent_Result)(nil),
 		(*ControlEvent_ArchiveSegments)(nil),
 	}
-	file_pkg_capture_agent_proto_agent_proto_msgTypes[21].OneofWrappers = []any{
+	file_pkg_capture_agent_proto_agent_proto_msgTypes[22].OneofWrappers = []any{
 		(*Command_Assign)(nil),
 		(*Command_Stop)(nil),
 		(*Command_Filter)(nil),
@@ -1988,7 +2092,7 @@ func file_pkg_capture_agent_proto_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_capture_agent_proto_agent_proto_rawDesc), len(file_pkg_capture_agent_proto_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   26,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   2,
 		},
