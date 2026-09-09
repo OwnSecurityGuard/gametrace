@@ -4,7 +4,10 @@ package main
 // 判错的代价是探针连到上一个 owner / 上一个服务端，且必然先失败一次才自愈，
 // 所以这条规则必须有测试钉住。
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestSuppliedConfigAdopt(t *testing.T) {
 	tests := []struct {
@@ -92,6 +95,35 @@ func TestSuppliedConfigAdopt(t *testing.T) {
 				if !tt.wantCreds && hasCreds {
 					t.Errorf("credentials kept but should be dropped: %+v", cfg)
 				}
+			}
+		})
+	}
+}
+
+// TestArchiveDefaultEnable 钉住"数据落盘留存"的默认开关：archive.enabled 未显式
+// 给出时默认开启（让抓包数据持久化到磁盘），只有显式 false 才算关闭。
+func TestArchiveDefaultEnable(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{name: "无 archive 键（升级前老配置）", raw: `{"probe_id":"p1"}`, want: true},
+		{name: "空 archive 对象", raw: `{"archive":{}}`, want: true},
+		{name: "archive 未给 enabled", raw: `{"archive":{"max_age_hours":12}}`, want: true},
+		{name: "显式 enabled:true", raw: `{"archive":{"enabled":true}}`, want: true},
+		{name: "显式 enabled:false", raw: `{"archive":{"enabled":false}}`, want: false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var cfg agentConfig
+			if err := json.Unmarshal([]byte(c.raw), &cfg); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			cfg.Archive.defaultEnableOn()
+			if cfg.Archive.Enabled != c.want {
+				t.Errorf("Archive.Enabled = %v, want %v (configured=%v)",
+					cfg.Archive.Enabled, c.want, cfg.Archive.configured)
 			}
 		})
 	}

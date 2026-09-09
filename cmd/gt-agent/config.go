@@ -21,21 +21,54 @@ import (
 )
 
 // archiveConfig 是本地留存的保留策略（可在运行中经控制面 / 远端指令调整）。
+//
+// Enabled 默认开启（数据落盘留存），除非配置显式写了 "enabled": false。
+// configured 标记「本次解析里是否显式出现了 enabled 键」，用于区分
+// 「用户明确关闭」（保留 false）与「老配置没写过 archive」（默认开启）——
+// 否则升级前的老 probe.json 会让抓包回到发后即焚、数据不持久化。
 type archiveConfig struct {
 	Enabled   bool  `json:"enabled"`
 	MaxAgeHrs int   `json:"max_age_hours"` // 0 = 默认 24
 	MaxBytes  int64 `json:"max_bytes"`     // 0 = 默认 4GB
+
+	configured bool `json:"-"`
+}
+
+// UnmarshalJSON 在解析 archive 对象时记录 enabled 键是否出现。
+func (c *archiveConfig) UnmarshalJSON(b []byte) error {
+	type plain archiveConfig
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*c = archiveConfig(p)
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(b, &raw) == nil {
+		if _, ok := raw["enabled"]; ok {
+			c.configured = true
+		}
+	}
+	return nil
+}
+
+// defaultEnableOn 在配置从未显式给出 enabled 时置为开启：保证老配置 / 升级前的
+// probe.json（没有 archive 字段）也默认把抓包数据落盘留存，而不是发后即焚。
+func (c *archiveConfig) defaultEnableOn() {
+	if !c.configured {
+		c.Enabled = true
+		c.configured = true
+	}
 }
 
 // agentConfig 是 probe.json 的内存形态。
 type agentConfig struct {
-	ProbeID    string `json:"probe_id,omitempty"`
-	ProbeToken string `json:"probe_token,omitempty"` // 长期凭证；明文落盘（0600），丢失可重接
-	UserToken  string `json:"user_token,omitempty"`  // 用户 token（注册/重接用）
-	Server     string `json:"server,omitempty"`      // host[:registryPort]
-	IngestAddr string `json:"ingest_addr,omitempty"` // 显式覆盖（默认由 Server 推导）
+	ProbeID      string `json:"probe_id,omitempty"`
+	ProbeToken   string `json:"probe_token,omitempty"` // 长期凭证；明文落盘（0600），丢失可重接
+	UserToken    string `json:"user_token,omitempty"`  // 用户 token（注册/重接用）
+	Server       string `json:"server,omitempty"`      // host[:registryPort]
+	IngestAddr   string `json:"ingest_addr,omitempty"` // 显式覆盖（默认由 Server 推导）
 	RegistryAddr string `json:"registry_addr,omitempty"`
-	Name       string `json:"name,omitempty"` // 机器业务名；空 = 注册时默认 hostname
+	Name         string `json:"name,omitempty"` // 机器业务名；空 = 注册时默认 hostname
 
 	Archive archiveConfig `json:"archive"`
 }
@@ -56,16 +89,20 @@ func configDir() string {
 func configPath() string { return filepath.Join(configDir(), "probe.json") }
 
 // loadAgentConfig 读 probe.json；不存在返回零值配置与 false。
+// 无论文件是否存在，archive.enabled 未显式给出时一律默认开启（数据落盘留存）。
 func loadAgentConfig() (*agentConfig, bool) {
+	missing := &agentConfig{Archive: archiveConfig{Enabled: true, configured: true}}
 	b, err := os.ReadFile(configPath())
 	if err != nil {
-		return &agentConfig{}, false
+		return missing, false
 	}
 	cfg := &agentConfig{}
 	if err := json.Unmarshal(b, cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "probe.json 解析失败（忽略该文件）: %v\n", err)
-		return &agentConfig{}, false
+		return missing, false
 	}
+	// 升级前的老 probe.json 没有 archive 字段 → 默认为归档开启，避免数据发后即焚。
+	cfg.Archive.defaultEnableOn()
 	return cfg, true
 }
 

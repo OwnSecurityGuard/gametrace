@@ -93,11 +93,9 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
 	// ---- 身份与回连的装配（优先级：flag > probe.json > 固化配置 > 启动码）----
-	cfg, cfgLoaded := loadAgentConfig()
-	if !cfgLoaded {
-		// 首启：注册探针默认开启归档留存（24h / 4GB，可用控制面/远端指令调整）。
-		cfg.Archive.Enabled = true
-	}
+	// 归档留存默认开启（loadAgentConfig 已处理：archive.enabled 未给出即视为开），
+	// 保证抓包数据落盘留存，除非配置显式关闭。
+	cfg, _ := loadAgentConfig()
 
 	// 固化配置（-tags embedded 下载形态）或 sidecar config.embedded.json：
 	// 仅当更高优先级来源没有给值时作为默认值。
