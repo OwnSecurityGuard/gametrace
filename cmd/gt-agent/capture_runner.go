@@ -267,6 +267,7 @@ func (r *captureRunner) Start(p CaptureParams, ingestAddr, token string) error {
 		q, err := spool.Open(dir, spool.Options{Retention: r.retention})
 		if err != nil {
 			cancel()
+			r.lives = nil
 			r.setState(stateFailed, fmt.Sprintf("open spool: %v", err))
 			return fmt.Errorf("open ingest spool: %w", err)
 		}

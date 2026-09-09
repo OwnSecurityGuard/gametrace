@@ -501,9 +501,6 @@ func (m *Manager) applyHeartbeat(probeID string, hb *proto.ProbeHeartbeat) {
 		LastSeenAt:      now,
 	}
 	// 心跳快照不带网卡清单：保留 hello（SetInterfaces）写入的值，否则每 10s 被抹掉。
-	if prev, ok := m.latest[probeID]; ok {
-		st.Interfaces = prev.Interfaces
-	}
 	if c := hb.GetCapture(); c != nil {
 		st.CaptureState = c.GetState()
 		st.LastSessionID = c.GetSessionId()
@@ -525,7 +522,12 @@ func (m *Manager) applyHeartbeat(probeID string, hb *proto.ProbeHeartbeat) {
 		st.ArchiveOldestMs = a.GetOldestUnix() * 1000
 		st.ArchiveNewestMs = a.GetNewestUnix() * 1000
 	}
+	// 继承与写入同锁：applyHeartbeat 在心跳 goroutine，SetInterfaces 在流 goroutine，
+	// 无锁读 m.latest 是 data race。
 	m.mu.Lock()
+	if prev, ok := m.latest[probeID]; ok {
+		st.Interfaces = prev.Interfaces
+	}
 	m.latest[probeID] = st
 	m.mu.Unlock()
 

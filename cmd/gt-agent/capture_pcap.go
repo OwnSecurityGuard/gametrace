@@ -34,9 +34,6 @@ type liveCapture struct {
 // SetFilter 热更新 BPF（在现有 handle 上重编译，不断流）。
 // 失败返回错误但**不清除**旧过滤——保留旧规则比裸奔安全。
 func (lc *liveCapture) SetFilter(bpf string) error {
-	if bpf == "" {
-		bpf = ""
-	}
 	if err := lc.h.SetBPFFilter(bpf); err != nil {
 		return fmt.Errorf("set bpf: %w", err)
 	}
@@ -67,7 +64,7 @@ func runCapture(ctx context.Context, cfg captureConfig, out chan<- *proto.RawPac
 		}
 	}
 	slog.Info("live capture opened", "iface", cfg.Iface, "bpf", cfg.BPF, "snaplen", cfg.SnapLen)
-	lc := &liveCapture{h: h, ctx: ctx}
+	lc := &liveCapture{h: h}
 
 	go func() {
 		defer h.Close()
@@ -85,7 +82,6 @@ func runCapture(ctx context.Context, cfg captureConfig, out chan<- *proto.RawPac
 					notifyCaptureEnded(ended, errors.New("capture source closed for iface "+cfg.Iface))
 					return
 				}
-				_ = lc
 				data := pkt.Data()
 				if len(data) == 0 {
 					continue
