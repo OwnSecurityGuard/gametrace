@@ -9,12 +9,18 @@
 #   - SQLite 模式（原默认）回滚方式：删掉 GT_DB_DRIVER/GT_DB_DSN 两个环境
 #     变量与 postgres 服务即可，两套模式的配置入口是同一对 env（pkg/config）。
 # 镜像策略：image + build 双声明，**默认完全重建**（2026-09-08 起）：
-#   - 每个服务带 `pull_policy: build`：不管本地有没有 gt-server:$GT_VERSION 镜像，
+#   - pipeline 带 `pull_policy: build`：不管本地有没有 gt-server:$GT_VERSION 镜像，
 #     一律从源码构建，绝不复用/拉取已有镜像——避免"改了代码还在跑旧镜像"。
 #   - 构建段带 `no_cache: true`：不用 BuildKit 层缓存，每次都是干净构建
 #     （代价是每次 up 都要重编 Go，约几分钟；本机迭代可用
 #     `GT_BUILD_NO_CACHE=false docker compose up -d` 临时走缓存加速）。
 #   - 构建段带 `pull: true`：顺带检查基础镜像更新，避免底层镜像长期不刷新。
+#   - **只由 pipeline 承担构建**：mcp 复用同一镜像（同 tag + `pull_policy: never`，
+#     不声明 build）。若两个服务各自声明 build 且指向同一镜像名，buildx 第二次
+#     导出同名 tag 会报 `image "gt-server:dev": already exists`（docker/buildx#3576），
+#     `docker compose up -d` 必然失败——这正是之前"每次首次构建必现"的报错。
+#     因此单独构建请用 `docker compose build pipeline`；单独 `up mcp` 且本地无镜像
+#     时需先 `up pipeline` 或手动 `docker build -t gt-server:dev .`。
 # 因此 `docker compose up -d` 等价于从零重建服务；要连带强制重建容器
 # （镜像 ID 恰好没变时）补一个 --force-recreate：
 #   docker compose up -d --force-recreate
@@ -92,8 +98,10 @@ services:
 
   mcp:
     image: gt-server:${GT_VERSION:-dev}
-    build: *server-build
-    pull_policy: build
+    # 不声明 build：镜像由 pipeline 服务的 `pull_policy: build` 在本次 up 中构建，
+    # 这里复用本地镜像。若两个服务各自声明 build 且指向同一镜像名，buildx 第二次
+    # 导出同名 tag 会报 `image "gt-server:dev": already exists`（docker/buildx#3576）。
+    pull_policy: never
     restart: unless-stopped
     depends_on:
       postgres:
