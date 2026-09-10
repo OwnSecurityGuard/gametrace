@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="web/public/logo.png" alt="GameTrace logo" width="120" />
+
 # GameTrace
 
 **AI-Friendly Game Network Debugging & Protocol Analysis Platform**

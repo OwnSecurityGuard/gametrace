@@ -68,6 +68,7 @@ web/.vite/
 # （历史上有一次误提交，见 commit 21338dd）
 cmd/gt-mcp/webui/assets/
 cmd/gt-mcp/webui/index.html
+cmd/gt-mcp/webui/logo.png
 
 # 本地环境文件备份（含真实 token）
 .env.bak

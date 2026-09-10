@@ -48,20 +48,13 @@ const TABS: { id: ViewTab; label: string }[] = [...PRIMARY_TABS, ...ADVANCED_TAB
 /** 品牌标识：广播/信号图标，呼应"游戏调试自动化"。 */
 function BrandMark({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 36 36" className={className} role="img" aria-label="GameTrace 标识">
-      <rect width="36" height="36" rx="9" fill="url(#gt-brand-grad)" />
-      <g fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
-        <path d="M11 21a7.5 7.5 0 0 1 14 0" />
-        <path d="M14.5 24.5a3.5 3.5 0 0 1 7 0" />
-      </g>
-      <circle cx="18" cy="28.5" r="2" fill="white" />
-      <defs>
-        <linearGradient id="gt-brand-grad" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#4f46e5" />
-          <stop offset="1" stopColor="#0284c7" />
-        </linearGradient>
-      </defs>
-    </svg>
+    <img
+      src="/logo.png"
+      alt="GameTrace 标识"
+      role="img"
+      aria-label="GameTrace 标识"
+      className={`${className ?? ""} object-contain`}
+    />
   );
 }
 
