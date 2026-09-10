@@ -85,15 +85,13 @@ func retentionFrom(cfg *agentConfig) *spool.Retention {
 var spoolBaseCustom string
 
 // spoolBase 返回 spool 根目录（每个子目录 = 一个会话的上行缓冲 + 留存）。
+// 默认落在探针自身当前目录下的 spool/，随程序整体移动、便于清理，
+// 不占用系统缓存目录；可用 --spool-dir 显式覆盖。
 func spoolBase() string {
 	if spoolBaseCustom != "" {
 		return spoolBaseCustom
 	}
-	base, err := os.UserCacheDir()
-	if err != nil || base == "" {
-		base = os.TempDir()
-	}
-	return filepath.Join(base, "gt-agent", "spool")
+	return filepath.Join(".", "spool")
 }
 
 // ArchiveStatus 是留存观测快照（心跳 ProbeArchiveStatus 用，单位毫秒）。
