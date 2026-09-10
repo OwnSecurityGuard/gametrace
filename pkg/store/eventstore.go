@@ -36,6 +36,9 @@ type EventReader interface {
 	// QueryEventsDesc 时间倒序版本，供展示层"最新在前"。
 	QueryEventsDesc(ctx context.Context, sessionID string, limit, offset int) ([]*event.Event, error)
 	GetEventByID(ctx context.Context, id string) (*event.Event, error)
+	// QueryEventsInRange 按时间窗口（含端点，零值表示不限制）顺序返回事件。
+	// 状态变更分析需要「某个操作前后 N 秒」的事件上下文，而不想整会话全量加载。
+	QueryEventsInRange(ctx context.Context, sessionID string, from, to time.Time, limit int) ([]*event.Event, error)
 	QueryEventsByType(ctx context.Context, sessionID, eventType string, limit, offset int) ([]*event.Event, error)
 	QueryEventsByCorrelation(ctx context.Context, correlationID string, limit, offset int) ([]*event.Event, error)
 	QueryRawPackets(ctx context.Context, q RawPacketQuery) ([]RawPacketRow, error)
@@ -146,6 +149,7 @@ type MetricQuery struct {
 }
 
 // StateChangeQuery 查询 state_changes 投影表。
+// From/To 为时间窗口（含端点）；零值表示不限制该侧。
 type StateChangeQuery struct {
 	SessionID   string
 	FlowID      string
@@ -153,8 +157,16 @@ type StateChangeQuery struct {
 	SubjectID   string
 	Op          string
 	Path        string
-	Limit       int
-	Offset      int
+	// EventID 非空时只返回该事件产生的变更（get_state_change_detail 用）。
+	EventID string
+	// ID 是变更行主键精确查询（get_state_change_detail 定位单条变更用）。
+	ID string
+	// From/To 是时间窗口下界/上界，零值表示不限。
+	From  time.Time
+	To    time.Time
+	Limit int
+	// Offset 分页偏移；与 Limit 同时使用时需要稳定的排序（timestamp, id）。
+	Offset int
 }
 
 // ===== 返回行类型 =====

@@ -5,7 +5,13 @@ import { useAuthToken } from "@/hooks/use-auth";
 import { withTokenParam, notifyAuthError, wasRecentlyUnauthorized } from "@/lib/auth";
 import type { ListSessionsResult } from "@/types/session";
 import type { ListDecodedDataResult, CaptureSchemaResult } from "@/types/event";
-import type { ListStateChangesResult } from "@/types/state-change";
+import type {
+  QueryStateChangesResult,
+  StateChangeDetailResult,
+  AnchorKind,
+  GroupBy,
+  SortBy,
+} from "@/types/state-change";
 import type { ListRawPacketsResult } from "@/types/raw-packet";
 import type { ListPluginsResult, DecodeRawPacketsResult } from "@/types/decode";
 import type {
@@ -101,33 +107,85 @@ export function useDecodedData(
   });
 }
 
-/** 查询指定 session 的实体状态变更（state_changes 投影表）。 */
+/** query_state_changes 的查询参数 */
+export interface StateChangesQueryParams {
+  anchorType?: AnchorKind;
+  anchorId?: string;
+  windowBeforeMs?: number;
+  windowAfterMs?: number;
+  groupBy?: GroupBy;
+  sortBy?: SortBy;
+  desc?: boolean;
+  bucketMs?: number;
+  limit?: number;
+  subjectTypes?: string[];
+  paths?: string[];
+  ops?: string[];
+}
+
+/**
+ * 按锚点 / 时间窗口 / 维度聚合查询状态变更。
+ * 一次查询拿到全部四种分组，三种视图共用同一份数据。
+ */
 export function useStateChanges(
   sessionId: string | null,
-  options: {
-    limit?: number;
-    offset?: number;
-    subjectType?: string;
-    subjectId?: string;
-    op?: string;
-    path?: string;
-  } = {},
+  params: StateChangesQueryParams = {},
+  options: { refetchInterval?: number | false } = {},
 ) {
   return useQuery({
-    queryKey: ["stateChanges", sessionId, options],
+    queryKey: ["stateChanges", sessionId, params],
     queryFn: () =>
-      mcpClient.callTool<ListStateChangesResult>("list_state_changes", {
+      mcpClient.callTool<QueryStateChangesResult>("query_state_changes", {
         session_id: sessionId ?? undefined,
-        limit: options.limit,
-        offset: options.offset,
-        subject_type: options.subjectType ?? "",
-        subject_id: options.subjectId ?? "",
-        op: options.op ?? "",
-        path: options.path ?? "",
+        anchor_type: params.anchorType ?? "",
+        anchor_id: params.anchorId ?? "",
+        window_before_ms: params.windowBeforeMs ?? 0,
+        window_after_ms: params.windowAfterMs ?? 0,
+        group_by: params.groupBy ?? "operation",
+        sort_by: params.sortBy ?? "first_change",
+        desc: params.desc ?? false,
+        bucket_ms: params.bucketMs ?? 0,
+        limit: params.limit ?? 0,
+        subject_types: params.subjectTypes ?? [],
+        paths: params.paths ?? [],
+        ops: params.ops ?? [],
       }),
     enabled: !!sessionId,
-    placeholderData: keepPreviousData, // 翻页不闪骨架屏，沿用上一页数据
-    refetchInterval: sessionId ? 2000 : false, // 抓包实时写入，轮询保持新鲜
+    placeholderData: keepPreviousData, // 换锚点/过滤时不闪骨架屏
+    // 抓包实时写入；时间视图依赖新鲜数据观察密度。
+    refetchInterval: options.refetchInterval ?? (sessionId ? 3000 : false),
+  });
+}
+
+/** get_state_change_detail 的查询参数（三者至少给一个）。 */
+export interface StateChangeDetailParams {
+  changeId?: string;
+  eventId?: string;
+  entity?: string;
+  path?: string;
+  windowBeforeMs?: number;
+  windowAfterMs?: number;
+}
+
+/** 查询一条变更 / 一条协议消息 / 一个实体的完整协议链与历史。 */
+export function useStateChangeDetail(
+  sessionId: string | null,
+  params: StateChangeDetailParams | null,
+) {
+  return useQuery({
+    queryKey: ["stateChangeDetail", sessionId, params],
+    queryFn: () =>
+      mcpClient.callTool<StateChangeDetailResult>("get_state_change_detail", {
+        session_id: sessionId ?? undefined,
+        change_id: params?.changeId ?? "",
+        event_id: params?.eventId ?? "",
+        entity: params?.entity ?? "",
+        path: params?.path ?? "",
+        window_before_ms: params?.windowBeforeMs ?? 0,
+        window_after_ms: params?.windowAfterMs ?? 0,
+      }),
+    enabled: !!sessionId && !!params,
+    placeholderData: keepPreviousData,
   });
 }
 

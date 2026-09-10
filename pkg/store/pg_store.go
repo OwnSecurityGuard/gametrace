@@ -4,14 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"gametrace/pkg/capture"
 	"gametrace/pkg/event"
 	"gametrace/pkg/schema"
-	"gametrace/pkg/capture"
 
 	"github.com/google/uuid"
 )
@@ -294,7 +295,7 @@ func (s *PGStore) queryEventsOrdered(ctx context.Context, sessionID string, limi
 func (s *PGStore) GetEventByID(ctx context.Context, id string) (*event.Event, error) {
 	q := `SELECT ` + eventColsPG + s.eventSelectSuffix() + ` FROM events WHERE id = $1`
 	e, err := scanEvent(s.db.QueryRowContext(ctx, q, id))
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -700,7 +701,20 @@ func (s *PGStore) QueryStateChanges(ctx context.Context, q StateChangeQuery) ([]
 	if q.Path != "" {
 		query += ` AND path = ` + a.next(q.Path)
 	}
-	query += ` ORDER BY timestamp ASC` + a.limitOffset(q.Limit, q.Offset)
+	if q.EventID != "" {
+		query += ` AND event_id = ` + a.next(q.EventID)
+	}
+	if q.ID != "" {
+		query += ` AND id = ` + a.next(q.ID)
+	}
+	if !q.From.IsZero() {
+		query += ` AND timestamp >= ` + a.next(q.From.UnixNano())
+	}
+	if !q.To.IsZero() {
+		query += ` AND timestamp <= ` + a.next(q.To.UnixNano())
+	}
+	// id 兜底排序：同一纳秒写入的多条变更也要有稳定顺序（序号/分页依赖它）。
+	query += ` ORDER BY timestamp ASC, id ASC` + a.limitOffset(q.Limit, q.Offset)
 	rows, err := s.db.QueryContext(ctx, query, a.slice()...)
 	if err != nil {
 		return nil, fmt.Errorf("query state changes: %w", err)

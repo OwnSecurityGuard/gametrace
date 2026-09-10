@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -156,7 +157,9 @@ func (s *SQLiteStore) GetEventByID(ctx context.Context, id string) (*event.Event
 	`
 
 	e, err := scanEvent(s.db.QueryRowContext(ctx, query, id))
-	if err == sql.ErrNoRows {
+	// scanEvent 会包装错误，必须用 errors.Is：写成 err == sql.ErrNoRows 永远为 false，
+	// 导致「查不到」被当成真错误往上抛（状态变更锚点解析会因此整条失败）。
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

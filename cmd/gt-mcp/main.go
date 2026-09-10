@@ -2892,6 +2892,9 @@ func main() {
 		mcp.WithString("flow_id", mcp.Description("Filter by flow ID")),
 	), capture.handleListStateChanges)
 
+	// 状态变更分析：三视图共用的聚合查询 + 完整协议链/历史详情。
+	registerStateTools(s, capture)
+
 	// 行为（behavior）与因果链（causation chain）工具。
 	s.AddTool(mcp.NewTool("begin_capture_run",
 		mcp.WithDescription("Mark the start of a user operation or behavior WITHOUT starting capture. It records a run window and returns run_id for later correlation (end_capture_run / get_run_status / trace_protocol_flow). plugin_name/device/filter/port are DESCRIPTIVE HINTS only and do NOT auto-start capture. To actually capture, call start_capture separately; if no capture is running this tool only returns a time_window_only uncertainty telling you to call start_capture first."),

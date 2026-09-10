@@ -72,7 +72,24 @@ FROM state_changes WHERE 1=1`
 		query += " AND path=?"
 		args = append(args, q.Path)
 	}
-	query += " ORDER BY timestamp ASC"
+	if q.EventID != "" {
+		query += " AND event_id=?"
+		args = append(args, q.EventID)
+	}
+	if q.ID != "" {
+		query += " AND id=?"
+		args = append(args, q.ID)
+	}
+	if !q.From.IsZero() {
+		query += " AND timestamp>=?"
+		args = append(args, q.From.UnixNano())
+	}
+	if !q.To.IsZero() {
+		query += " AND timestamp<=?"
+		args = append(args, q.To.UnixNano())
+	}
+	// id 兜底排序：同一纳秒写入的多条变更也要有稳定顺序（序号/分页依赖它）。
+	query += " ORDER BY timestamp ASC, id ASC"
 	query, args = applyLimitOffset(query, args, q.Limit, q.Offset)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

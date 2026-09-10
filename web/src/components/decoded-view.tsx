@@ -1,11 +1,11 @@
 // DecodedView — 「协议数据」页的三视图容器。
 //
-// 从单一事件表格升级为内部三分段：事件（表格）/ 关系（父子树+配对）/ 状态变更。
+// 从单一事件表格升级为内部三分段：事件（表格）/ 关系（父子树+配对）/ 状态变更（三视图分析）。
 // 沿用 App 顶部 segmented tab 样式，filter 仅影响事件与关系两个基于事件的子视图。
 import { useState } from "react";
 import { EventTable } from "@/components/event-table";
 import { RelationshipView } from "@/components/relationship-view";
-import { StateChangeTable } from "@/components/state-change-table";
+import { StateChangeExplorer } from "@/components/state-change-explorer";
 import { Table2, GitFork, TableProperties } from "lucide-react";
 
 interface DecodedViewProps {
@@ -59,7 +59,7 @@ export function DecodedView({ sessionId, filter, onFilterChange }: DecodedViewPr
         <EventTable sessionId={sessionId} filter={filter} onFilterChange={onFilterChange} />
       )}
       {subview === "relations" && <RelationshipView sessionId={sessionId} filter={filter} />}
-      {subview === "state" && <StateChangeTable sessionId={sessionId} />}
+      {subview === "state" && <StateChangeExplorer sessionId={sessionId} />}
     </div>
   );
 }
