@@ -50,8 +50,6 @@ interface ConnectionDetailViewProps {
   /** 连接列表中的序号（用于展示 Connection #001） */
   connSeq: number;
   onBack: () => void;
-  /** 点击 flow_id 后跳转到「行为」Tab 并预填 flow_id 构建行为链 */
-  onJumpToRun?: (flowId: string) => void;
 }
 
 type DetailTab = "timeline" | "streams" | "frames" | "events" | "raw";
@@ -151,10 +149,8 @@ function TimelineTab({ streams }: { streams: ConnectionStream[] }) {
 
 function StreamsTab({
   streams,
-  onJumpToRun,
 }: {
   streams: ConnectionStream[];
-  onJumpToRun?: (flowId: string) => void;
 }) {
   if (streams.length === 0) {
     return (
@@ -207,16 +203,6 @@ function StreamsTab({
                 <span className="font-mono text-xs font-semibold truncate" title={ev.msg_name}>
                   {ev.msg_name || ev.type || "(unknown)"}
                 </span>
-                {ev.flow_id && (
-                  <button
-                    type="button"
-                    className="ml-auto font-mono text-[10px] text-muted-foreground/70 truncate transition-colors hover:text-primary hover:underline"
-                    title={`构建行为链 flow_id=${ev.flow_id}`}
-                    onClick={() => onJumpToRun?.(ev.flow_id)}
-                  >
-                    flow: {ev.flow_id}
-                  </button>
-                )}
               </div>
             ))}
           </div>
@@ -488,10 +474,8 @@ function frameHex(frame: ConnectionFrame): string {
 
 function EventsTab({
   streams,
-  onJumpToRun,
 }: {
   streams: ConnectionStream[];
-  onJumpToRun?: (flowId: string) => void;
 }) {
   // 多行可同时展开：请求/响应要对着看，accordion 会逼着来回点。
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -554,27 +538,6 @@ function EventsTab({
             <span className="font-mono text-xs font-semibold truncate">
               {ev.msg_name || ev.type || "(unknown)"}
             </span>
-            {ev.flow_id && (
-              <span
-                role="button"
-                tabIndex={0}
-                className="ml-auto font-mono text-[10px] text-muted-foreground/70 hover:text-primary hover:underline cursor-pointer"
-                title={`构建行为链 flow_id=${ev.flow_id}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onJumpToRun?.(ev.flow_id);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onJumpToRun?.(ev.flow_id);
-                  }
-                }}
-              >
-                flow: {ev.flow_id}
-              </span>
-            )}
           </button>
           {expandedIds.has(ev.id) && (
             <div className="border-t border-border bg-muted/30 p-4 gt-fade-in">
@@ -705,7 +668,6 @@ export function ConnectionDetailView({
   connId,
   connSeq,
   onBack,
-  onJumpToRun,
 }: ConnectionDetailViewProps) {
   const [tab, setTab] = useState<DetailTab>("timeline");
 
@@ -789,11 +751,11 @@ export function ConnectionDetailView({
         )}
         {!streamsLoading && tab === "timeline" && <TimelineTab streams={streams} />}
         {!streamsLoading && tab === "streams" && (
-          <StreamsTab streams={streams} onJumpToRun={onJumpToRun} />
+          <StreamsTab streams={streams} />
         )}
         {tab === "frames" && <FramesTab sessionId={sessionId} connId={connId} />}
         {!streamsLoading && tab === "events" && (
-          <EventsTab streams={streams} onJumpToRun={onJumpToRun} />
+          <EventsTab streams={streams} />
         )}
         {tab === "raw" && <FramesTab sessionId={sessionId} connId={connId} rawOnly />}
       </div>

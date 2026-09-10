@@ -80,8 +80,6 @@ export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   // 从「下载探针」接入闭环带入的探针 id：打开「开始抓包」时预选这台机器。
   const [startCaptureProbeId, setStartCaptureProbeId] = useState<string | null>(null);
-  // 从连接详情点击 flow_id 跳转时预填到「行为」Tab 的 flow_id
-  const [tracePrefill, setTracePrefill] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // 服务器开启令牌校验且本地无有效凭证（401）：横幅提示并自动打开设置。
   const authError = useAuthError();
@@ -179,12 +177,6 @@ export default function App() {
   const handleSelectSession = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
     setFilter(""); // 切换 session 时清空 filter
-  }, []);
-
-  // 从连接详情点击 flow_id：「行为」Tab 预填 flow_id 并切换过去
-  const handleJumpToRun = useCallback((flowId: string) => {
-    setTracePrefill(flowId);
-    setActiveTab("runs");
   }, []);
 
   // 从代理抓包状态卡一键跳转：选中常驻会话切到「连接」页并关闭弹窗
@@ -574,15 +566,11 @@ export default function App() {
           )}
           {activeTab === "connections" && (
             <div className="h-full overflow-auto p-4 gt-scroll">
-              <ConnectionsPage sessionId={selectedSessionId} onJumpToRun={handleJumpToRun} />
+              <ConnectionsPage sessionId={selectedSessionId} />
             </div>
           )}
           {activeTab === "runs" && (
-            <RunsPanel
-              linkedRunId={linkedRunId}
-              linkedSessionId={linkedRunSessionId}
-              tracePrefill={tracePrefill}
-            />
+            <RunsPanel linkedRunId={linkedRunId} linkedSessionId={linkedRunSessionId} />
           )}
           {activeTab === "plugins" && <PluginPanel />}
           {activeTab === "raw" && (

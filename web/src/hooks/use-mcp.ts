@@ -38,7 +38,6 @@ import type {
   BeginCaptureRunResult,
   EndCaptureRunResult,
   RunStatusResult,
-  TraceProtocolFlowResult,
 } from "@/types/behavior";
 import type { ListConnectionsResult, GetConnectionDetailResult, ListConnectionStreamsResult, ListConnectionFramesResult } from "@/types/connection";
 import type {
@@ -716,18 +715,6 @@ export function useRunStatus(runId: string | null) {
     queryFn: () => mcpClient.callTool<RunStatusResult>("get_run_status", { run_id: runId! }),
     enabled: !!runId,
     refetchInterval: runId ? 3000 : false,
-  });
-}
-
-/** trace_protocol_flow：构建一次行为的时序执行链路。 */
-export function useTraceProtocolFlow() {
-  return useMutation({
-    mutationFn: (vars: { runId: string; flowId: string; featureName: string }) =>
-      mcpClient.callTool<TraceProtocolFlowResult>("trace_protocol_flow", {
-        run_id: vars.runId,
-        flow_id: vars.flowId,
-        feature_name: vars.featureName,
-      }),
   });
 }
 

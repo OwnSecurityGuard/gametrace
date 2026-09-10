@@ -2917,21 +2917,6 @@ func main() {
 		mcp.WithString("run_id", mcp.Required(), mcp.Description("Run ID to check")),
 	), capture.handleGetRunStatus)
 
-	s.AddTool(mcp.NewTool("trace_protocol_flow",
-		mcp.WithDescription("Build the chronological execution trace (causation chain) for one behavior. Stitches request/response/push/state_diff across the run window. Returns steps or file_path for large results."),
-		mcp.WithString("run_id", mcp.Required(), mcp.Description("Run ID from begin_capture_run")),
-		mcp.WithString("flow_id", mcp.Required(), mcp.Description("Flow ID to trace")),
-		mcp.WithString("feature_name", mcp.Required(), mcp.Description("Feature/behavior name for context")),
-		mcp.WithObject("noise_filter", mcp.Description("Noise filtering options"), mcp.Properties(map[string]any{
-			"drop_names":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"drop_heartbeats": map[string]any{"type": "boolean", "default": true},
-		})),
-		mcp.WithObject("entity_diff", mcp.Description("Entity diff options"), mcp.Properties(map[string]any{
-			"enabled":   map[string]any{"type": "boolean", "default": true},
-			"window_ms": map[string]any{"type": "number", "default": 500},
-		})),
-	), capture.handleTraceProtocolFlow)
-
 	s.AddTool(mcp.NewTool("get_capture_schema",
 		mcp.WithDescription("Describe available fields for decoded events, state_changes projections, aggregation metrics and current rules."),
 		mcp.WithString("session_id", mcp.Description("Optional session ID to query; defaults to current session")),

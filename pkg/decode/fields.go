@@ -3,7 +3,6 @@ package decode
 import (
 	"encoding/json"
 	"hash/fnv"
-	"strings"
 )
 
 // FlowIDFromEndpoints 返回方向无关的 flow 标识（纯五元组 hash，不混入 session_id）。
@@ -101,19 +100,4 @@ func getString(m map[string]any, key string) string {
 		return v
 	}
 	return ""
-}
-
-// StripReqRespSuffix 去掉消息名的 Req/Resp 后缀，返回基名。
-// "BuildingUpgradeReq" → "BuildingUpgrade"
-// "BuildingUpgradeResp" → "BuildingUpgrade"
-// "LoginRequest" → "Login"（支持 Request/Response 全称）
-// "BuildingUpgrade" → "BuildingUpgrade"（无后缀，原样返回）
-// 用于 trace_protocol_flow 的 request/response 配对。
-func StripReqRespSuffix(name string) string {
-	for _, suffix := range []string{"Req", "Resp", "Request", "Response"} {
-		if strings.HasSuffix(name, suffix) {
-			return strings.TrimSuffix(name, suffix)
-		}
-	}
-	return name
 }

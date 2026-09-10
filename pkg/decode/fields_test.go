@@ -26,26 +26,6 @@ func TestFlowIDFromEndpoints_DirectionAgnostic(t *testing.T) {
 	}
 }
 
-func TestStripReqRespSuffix(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"BuildingUpgradeReq", "BuildingUpgrade"},
-		{"BuildingUpgradeResp", "BuildingUpgrade"},
-		{"LoginRequest", "Login"},
-		{"LoginResponse", "Login"},
-		{"Heartbeat", "Heartbeat"}, // 无后缀
-		{"", ""},
-	}
-	for _, tt := range tests {
-		got := StripReqRespSuffix(tt.input)
-		if got != tt.want {
-			t.Errorf("StripReqRespSuffix(%q) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
 func TestInferDirectionFromJSON_HTTP(t *testing.T) {
 	tests := []struct {
 		json string

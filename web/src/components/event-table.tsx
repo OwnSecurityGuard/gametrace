@@ -200,6 +200,76 @@ function ChildPanel({
 }
 
 /**
+ * 配对并排视图：展开 pair 关系时左请求 / 右响应，允许在同一个展开行里对照两端的完整 JSON。
+ * 仅当当前事件处于某个配对组时使用；否则回退到单个 JSON 展示。
+ */
+function PairDetail({
+  request,
+  responses,
+}: {
+  request: DecodedEvent;
+  responses: DecodedEvent[];
+}) {
+  const reqMeta = useMemo(() => extractMeta(request.data), [request.data]);
+  const responseItems = useMemo(
+    () =>
+      responses.map((ev) => ({
+        ev,
+        meta: extractMeta(ev.data),
+      })),
+    [responses],
+  );
+
+  return (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      {/* 左：请求 */}
+      <div className="flex min-w-0 flex-col rounded-lg border border-border bg-background p-2">
+        <div className="mb-1.5 flex flex-wrap items-center gap-1.5 border-b border-border pb-1.5">
+          <DirectionIcon direction={reqMeta.direction} />
+          <MessageCell msgName={reqMeta.msgName} semantic={reqMeta.semantic} />
+          <span className="rounded bg-blue-50 px-1 py-px text-[10px] font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+            请求
+          </span>
+          <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
+            {formatTimestamp(request.timestamp)}
+          </span>
+        </div>
+        <div className="gt-json-view">
+          <HighlightedJson data={request.data} />
+        </div>
+      </div>
+
+      {/* 右：响应（可能多条，纵向堆叠） */}
+      <div className="flex min-w-0 flex-col gap-3">
+        {responseItems.length === 0 ? (
+          <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
+            无响应数据
+          </div>
+        ) : (
+          responseItems.map(({ ev, meta }) => (
+            <div key={ev.id} className="flex min-w-0 flex-col rounded-lg border border-border bg-background p-2">
+              <div className="mb-1.5 flex flex-wrap items-center gap-1.5 border-b border-border pb-1.5">
+                <DirectionIcon direction={meta.direction} />
+                <MessageCell msgName={meta.msgName} semantic={meta.semantic} />
+                <span className="rounded bg-emerald-50 px-1 py-px text-[10px] font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                  响应
+                </span>
+                <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
+                  {formatTimestamp(ev.timestamp)}
+                </span>
+              </div>
+              <div className="gt-json-view">
+                <HighlightedJson data={ev.data} />
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * 展开区头部：展开后内容是长 JSON，很容易忘记自己点开的是哪一行，
  * 所以先重复一遍身份信息，并把「复制 / 收起」放在手边。
  */
@@ -273,6 +343,20 @@ function ExpandedRow({
   onCollapse: () => void;
 }) {
   const meta = useMemo(() => extractMeta(event.data), [event.data]);
+
+  // 配对并排视图所需的请求/响应分组：
+  // - 当前事件无 causation_id → 它是请求，响应是 partners 里 causation_id 指向它的事件。
+  // - 当前事件有 causation_id → 它是响应，在 partners 里找到它的请求；找不到则不进入并排。
+  const { request, responses } = useMemo(() => {
+    if (event.causation_id) {
+      const req = partners.find((p) => p.id === event.causation_id);
+      return req ? { request: req, responses: [event] } : { request: event, responses: [] };
+    }
+    const resps = partners.filter((p) => p.causation_id === event.id);
+    return { request: event, responses: resps };
+  }, [event, partners]);
+  const showPair = responses.length > 0;
+
   return (
     <TableRow className="gt-fade-in">
       <TableCell colSpan={colSpan} className="bg-muted/30 p-4">
@@ -284,9 +368,13 @@ function ExpandedRow({
           onLocatePair={onLocatePair}
         />
         <ChildPanel children={children} onJumpToChild={onJumpToChild} />
-        <div className="gt-json-view">
-          <HighlightedJson data={event.data} />
-        </div>
+        {showPair ? (
+          <PairDetail request={request} responses={responses} />
+        ) : (
+          <div className="gt-json-view">
+            <HighlightedJson data={event.data} />
+          </div>
+        )}
       </TableCell>
     </TableRow>
   );

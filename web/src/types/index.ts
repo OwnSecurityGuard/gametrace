@@ -36,15 +36,6 @@ export type {
   RunSummary,
   EndCaptureRunResult,
   RunStatusResult,
-  TraceKeyFields,
-  TraceRequestSummary,
-  TraceResponseSummary,
-  TracePushSummary,
-  TraceEntityDiff,
-  TraceStep,
-  TraceCloseInfo,
-  TraceTimeWindow,
-  TraceProtocolFlowResult,
 } from "./behavior";
 export type {
   CaptureContext,
