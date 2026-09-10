@@ -63,6 +63,10 @@ export interface ConnectionEvent {
   flow_id: string;
   msg_name: string;
   data: Record<string, unknown>;
+  /** v0.8.0：独立元信息（direction/msg_name/role/is_push）。 */
+  meta?: Record<string, unknown>;
+  /** v0.8.0：独立分析数据（_state_changes/entity 等）。 */
+  analysis?: Record<string, unknown>;
 }
 
 /** 连接内一条流（按 correlation_id 分组；未关联事件各自成流）。 */

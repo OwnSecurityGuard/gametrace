@@ -76,9 +76,9 @@ plugins/my-http/
 package main
 
 import (
-	"github.com/OwnSecurityGuard/gta-plugin-sdk"
-	"github.com/OwnSecurityGuard/gta-plugin-sdk/framing"
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/framing"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 )
 
 // ra 在插件进程内只创建一次，跨所有会话/包复用。
@@ -209,7 +209,7 @@ states:
 | 层 | 声明段 | 作用 | 运行期载体 |
 |----|--------|------|-----------|
 | Schema | `schemas[]` | payload 字段类型/语义/查询位；`get_capture_schema` 与事件校验的真源 | 事件 `schema_id` + payload |
-| State | `states[]` | 实体状态投影白名单（subject/path） | payload 保留键 `_state_changes` |
+| State | `states[]` | 实体状态投影白名单（subject/path） | Analysis 保留键 `_state_changes`（经 `analysis_msgpack` 独立传输） |
 
 - `schema_id` 必须在 `schemas` 中声明，否则 verify 报 `gta.schema.undeclared`。
 - `event_type` / `schema_id` 不得使用保留前缀 `gametrace.`。
@@ -248,45 +248,58 @@ message DecodeRequest {
 
 ```protobuf
 message DecodeResponseV2 {
-  string input_id          = 1; // 对应 DecodeRequest.input_id
-  bool   done              = 2; // true = 该 input_id 结果已全部发完
-  string event_type        = 3; // 事件类型，done=true 时为空
-  string schema_id         = 4; // Schema 版本，如 "http.request.v1"
-  bytes  payload_msgpack   = 5; // MsgPack 编码的 event.Value
-  string error             = 6; // 错误信息（设置后代表解码失败）
-  string correlation_key   = 7; // 业务关联键
-  string causation_input_id = 8;// 指向导致本结果的 input_id
+  string input_id           = 1; // 对应 DecodeRequest.input_id
+  bool   done               = 2; // true = 该 input_id 结果已全部发完
+  string event_type         = 3; // 事件类型，done=true 时为空
+  string schema_id          = 4; // Schema 版本，如 "http.request.v1"
+  bytes  payload_msgpack    = 5; // MsgPack 编码的 event.Value（纯业务载荷）
+  string error              = 6; // 错误信息（设置后代表解码失败）
+  string correlation_key    = 7; // 业务关联键
+  string causation_input_id = 8; // 指向导致本结果的 input_id
+  bytes  meta_msgpack       = 9; // 可选：MsgPack 编码的 Meta Value（direction/msg_name/role/is_push 等元信息）
+  bytes  analysis_msgpack   = 10;// 可选：MsgPack 编码的 Analysis Value（_state_changes/entity 等分析数据）
 }
 ```
 
-### 事件编码约定（v2：MsgPack，不再是 JSON `data`/`_fields`）
+### 事件编码约定（v2：Payload ≠ Meta ≠ Analysis，三段分离）
 
-v2 **不再使用** `data`/`_fields` 顶层 JSON。每个事件是一个 `event.Value`（MsgPack 编码）写入 `payload_msgpack`。系统保留字段以 `_` 开头：`_meta`（方向、flow_id、msg_name 等）、`_state_changes`（状态变更声明）。
+> 这是 v0.8.0 之后最重要的模型约束：**Payload（业务数据）、Meta（元信息）、Analysis（分析数据）从模型层强制分离**，
+> 不要再把平台推导的东西（`_meta`、`_state_changes` 等）塞回业务 payload。前端/MCP/分析全部依赖这个分离。
+
+v2 **不再使用** `data`/`_fields` 顶层 JSON。插件通过 `event.Draft` 构造事件，宿主负责补齐身份（EventID/SessionID/Timestamp 等）：
+
+| 字段 | 含义 | 传输载体 |
+|------|------|----------|
+| `Value` | 纯业务载荷（根必须是 object），如 `{playerId, x, y}` | `payload_msgpack` |
+| `Meta` | 元信息（可选）：`direction`、`msg_name`、`role`、`is_push` 等系统附加字段 | `meta_msgpack`（`IsNull()` 时不传输） |
+| `Analysis` | 分析数据（可选）：`_state_changes`、`entity`、`entity_type`、`entity_id`、`change_count` 等平台投影所需数据 | `analysis_msgpack`（`IsNull()` 时不传输） |
+| `CorrelationKey` | 业务关联键 → `Trace.CorrelationID` | `correlation_key` |
+| `CausationInputID` | 因果输入 id（请求→响应配对）→ `Trace.CausationID` | `causation_input_id` |
 
 ```go
-import "github.com/OwnSecurityGuard/gta-plugin-sdk/event"
+import "github.com/OwnSecurityGuard/gt-plugin-sdk/event"
 
-func emitEvent(stream pb.Decoder_DecodeV2Server, inputID string, m httpMsg) error {
-	val := event.ValueFromAny(map[string]any{
-		"type":   "http_request",
+draft := event.Draft{
+	Type:      "http.request",
+	SchemaRef: "http.request.v1",
+	Value:     event.ValueFromMap(map[string]any{
 		"method": m.Method,
 		"path":   m.Path,
 		"headers": map[string]any{"host": m.Host},
-		// 系统保留字段以下划线开头：
-		"_meta": map[string]any{"direction": "client->server"},
-	})
-	mp, err := val.MarshalMsgpack()
-	if err != nil {
-		return err
-	}
-	return stream.Send(&pb.DecodeResponseV2{
-		InputId:        inputID,
-		EventType:      "http.request",
-		SchemaId:       "http.request.v1",
-		PayloadMsgpack: mp,
-	})
+	}),
+	Meta: event.ValueFromMap(map[string]any{
+		"direction": "client->server",
+		"msg_name":  "Request",
+		"role":      "request",
+	}),
+	CorrelationKey: flowID,
 }
+resp, err := draft.ToResponse(inputID) // → *pb.DecodeResponseV2
 ```
+
+> 旧插件兼容：宿主在收到不含 `meta_msgpack`/`analysis_msgpack` 的旧响应时，会用保留键
+> （`_meta`、`_state_changes`、`entity*`、`change_count` 等）从扁平 payload 自动拆分兜底。
+> 新插件请直接使用三段分离，不要混用两种写法。
 
 **限制**：每次 `DecodeRequest` 至少回传一个 `{input_id, done:true}` 消息；无业务事件时只回传该空结果（不要静默不回传，否则 pipeline 会一直等待）。
 
@@ -377,10 +390,10 @@ import (
 	"bytes"
 	"net/http"
 
-	"github.com/OwnSecurityGuard/gta-plugin-sdk"
-	"github.com/OwnSecurityGuard/gta-plugin-sdk/event"
-	"github.com/OwnSecurityGuard/gta-plugin-sdk/framing"
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/framing"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 )
 
 var ra = framing.NewReassembler()
@@ -420,23 +433,27 @@ func parseHTTP(raw []byte) (*http.Request, int) {
 }
 
 func emitHTTP(stream pb.Decoder_DecodeV2Server, inputID string, r *http.Request) error {
-	val := event.ValueFromAny(map[string]any{
-		"type":      "http_request",
-		"method":    r.Method,
-		"path":      r.URL.Path,
-		"host":      r.Host,
-		"_meta":     map[string]any{"direction": "client->server"},
-	})
-	mp, err := val.MarshalMsgpack()
+	draft := event.Draft{
+		Type:      "http.request",
+		SchemaRef: "http.request.v1",
+		Value: event.ValueFromMap(map[string]any{
+			"method": r.Method,
+			"path":   r.URL.Path,
+			"host":   r.Host,
+		}),
+		// 元信息与业务 payload 分离，前端独立展示，不混入业务数据。
+		Meta: event.ValueFromMap(map[string]any{
+			"direction": "client->server",
+			"msg_name":  "Request",
+			"role":      "request",
+			"is_push":   false,
+		}),
+	}
+	resp, err := draft.ToResponse(inputID)
 	if err != nil {
 		return err
 	}
-	return stream.Send(&pb.DecodeResponseV2{
-		InputId:        inputID,
-		EventType:      "http.request",
-		SchemaId:       "http.request.v1",
-		PayloadMsgpack: mp,
-	})
+	return stream.Send(resp)
 }
 
 func main() {
@@ -569,29 +586,44 @@ if !ok || len(seg.Payload) == 0 {
 }
 ```
 
-### 10.4 事件编码用 event.Value + MsgPack
+### 10.4 事件编码用 event.Draft + MsgPack（三段分离）
 
 ```go
-import "github.com/OwnSecurityGuard/gta-plugin-sdk/event"
+import "github.com/OwnSecurityGuard/gt-plugin-sdk/event"
 
-val := event.ValueFromAny(map[string]any{
-	"type": "game.login",
-	"uid":  12345,
-	"_meta": map[string]any{"flow_id": req.GetFlowId()},
-})
-mp, _ := val.MarshalMsgpack()
-stream.Send(&pb.DecodeResponseV2{
-	InputId:        req.GetInputId(),
-	EventType:      "game.login",
-	SchemaId:       "game.login.v1",
-	PayloadMsgpack: mp,
-})
+draft := event.Draft{
+	Type:      "game.login",
+	SchemaRef: "game.login.v1",
+	Value:     event.ValueFromMap(map[string]any{"uid": 12345}),
+	// 元信息独立上报：direction / msg_name / role / is_push 等
+	Meta: event.ValueFromMap(map[string]any{
+		"direction": req.GetDirection(),
+		"msg_name":  "Login",
+		"role":      "request",
+	}),
+	// 状态变更投影走 Analysis（可选）：
+	Analysis: event.ValueFromMap(map[string]any{
+		"_state_changes": []any{map[string]any{
+			"subject_type": "player",
+			"subject_id":   "12345",
+			"op":           "set",
+			"path":         "online",
+			"after":        true,
+		}},
+	}),
+	CorrelationKey: req.GetFlowId(),
+}
+resp, err := draft.ToResponse(req.GetInputId())
+if err != nil {
+	return err
+}
+stream.Send(resp)
 ```
 
 ### 10.5 复用 SDK 提供的工具
 
 ```go
-import "github.com/OwnSecurityGuard/gta-plugin-sdk"
+import "github.com/OwnSecurityGuard/gt-plugin-sdk"
 
 // 读取 manifest（自动校验）
 manifestBytes, err := sdk.ReadManifest()
@@ -627,4 +659,5 @@ addr := sdk.ResolveRegistryAddr()
 > - **payload 是完整帧**，先 `ExtractL7` 再 `Reassembler`。
 > - 只有 `ProxyPayload`(1001) / `TLSPlaintext`(1002) 是纯 L7。
 > - 0 事件先 `sample_bytes_plugin`，再 `verify_plugin`。
-> - v2 事件用 `event.Value` + MsgPack，顶层不再有 `data`/`_fields`。
+> - v2 事件用 `event.Draft` + MsgPack，**Payload ≠ Meta ≠ Analysis 三段分离**：业务字段进 `Value`，
+>   元信息（direction/msg_name/role/is_push）进 `Meta`，状态变更/实体投影进 `Analysis`，不要混写。

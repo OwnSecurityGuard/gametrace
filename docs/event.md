@@ -98,8 +98,11 @@ After creation:
 
 ```
 Identity
-Relation
+Trace
+Context
 Payload
+Meta
+Analysis
 ```
 
 cannot be changed.
@@ -145,17 +148,28 @@ Lifecycle belongs to Operator execution.
 
 # 4. Event Structure
 
-The Event consists of three parts:
+The Event consists of six parts:
 
 ```
 Event
 
 ├── Identity
 │
-├── Relation
+├── Trace
 │
-└── Payload
+├── Context
+│
+├── Payload
+│
+├── Meta
+│
+└── Analysis
 ```
+
+核心不变式：**Payload ≠ Meta ≠ Analysis**（三段分离）。Payload 只承载纯业务字段；
+Meta 承载系统附加的元信息（direction/msg_name/role/is_push 等）；Analysis 承载平台
+推导/投影的数据（_state_changes/entity 等）。三者从模型层强制分离，前端/MCP/分析
+全部依赖该分离，任何模块都不得把平台推导的东西塞回 Payload。
 
 ---
 
@@ -416,7 +430,7 @@ Purpose:
 
 # 7. Payload
 
-Payload contains event data.
+Payload contains the event's business data.
 
 Structure:
 
@@ -428,6 +442,26 @@ type Payload struct {
     Value Value
 }
 ```
+
+## 7.1 Payload / Meta / Analysis 三段分离
+
+事件除 `Payload`（纯业务字段）外，还有两个与 Payload 同级的可选部分（对应实现中的
+`Event.Meta` / `Event.Analysis`，均为 `Value`）：
+
+```
+Payload   纯业务字段，如 {playerId, x, y}                     → 传输载体 payload_msgpack
+Meta      元信息：direction、msg_name、role、is_push 等系统附加字段 → 传输载体 meta_msgpack
+Analysis  分析数据：_state_changes、entity、entity_type、
+           entity_id、change_count 等平台投影所需数据           → 传输载体 analysis_msgpack
+```
+
+规则：
+
+- 插件侧通过 `event.Draft{Value, Meta, Analysis, CorrelationKey, CausationInputID}` 构造，
+  `Draft.ToResponse` 负责编码为 `DecodeResponseV2` 三段。
+- 宿主存储时三段合并为扁平 MsgPack 落 `events.payload`（旧数据兼容）；读取时按保留键
+  （`_meta`、`_state_changes`、`entity*`、`change_count`）拆分回填 `Meta`/`Analysis`。
+- 旧插件未上报 Meta/Analysis 时，宿主从扁平 payload 自动拆分兜底。
 
 ---
 
@@ -827,53 +861,27 @@ ON events(causation_id);
 # 17. Final Event Model
 
 ```
-                         Event
+                            Event
 
-                           |
-          +----------------+----------------+
+             ┌──────────────┼──────────────┐
+             │              │              │
+        Identity         Trace          Context
+             │              │              │
+        ID EventID    CausationID    (网络上下文)
+        SessionID     CorrelationID
+        Type          OriginID
+        SchemaID
+        Source
+        Timestamp
 
-          |                                 |
-
-      Identity                          Relation
-
-          |                                 |
-
-          |                           CausationID
-
-          |                           CorrelationID
-
-          |                           OriginID
-
-          |
-
-     ID
-
-     SessionID
-
-     Type
-
-     SchemaID
-
-     Source
-
-     Timestamp
-
-
-                           |
-
-                           v
-
-                        Payload
-
-                           |
-
-                    SchemaID + Value
-
-
-                           |
-
-              Object / Array / Scalar / Bytes
-
+             ├──────────────┼──────────────┐
+             │              │              │
+        Payload          Meta           Analysis
+             │              │              │
+     SchemaID + Value  direction      _state_changes
+     (纯业务字段)       msg_name       entity / entity_type
+                       role           entity_id / change_count
+                       is_push
 ```
 
 ---
@@ -907,8 +915,11 @@ GameTrace Event Model is based on:
 The core contract is:
 
 ```
-Event = Identity + Relation + Payload
+Event = Identity + Trace + Context + Payload + Meta + Analysis
 ```
+
+其中 **Payload ≠ Meta ≠ Analysis**（三段分离）：Payload 为纯业务字段，Meta 为系统元信息，
+Analysis 为平台推导/投影数据。任何模块都不得把后两者塞回 Payload。
 
 All future modules should be designed around this model.
 

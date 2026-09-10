@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, Fragment, memo } from "react";
+import { useState, useEffect, useMemo, Fragment, memo, useRef } from "react";
 import { useDecodedData } from "@/hooks/use-mcp";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,10 @@ import {
   GitFork,
   Copy,
   ChevronUp,
+  Box,
+  Activity,
+  Hash,
+  FileCode2,
 } from "lucide-react";
 import type { DecodedEvent } from "@/types/event";
 import type { CaptureContext } from "@/types/connection";
@@ -27,8 +31,14 @@ import {
   formatTimestamp,
   formatSize,
   DirectionIcon,
+  DirectionChip,
   MessageCell,
   HighlightedJson,
+  StructuredFields,
+  classifyPayload,
+  businessPayload,
+  analysisOf,
+  OpBadge,
   type EventMeta,
 } from "@/lib/event-display";
 
@@ -120,7 +130,7 @@ function PairPanel({
       </span>
       {partners.length > 0 ? (
         partners.map((p) => {
-          const pMeta = extractMeta(p.data);
+          const pMeta = extractMeta(p.data, p.meta);
           const isResponse = p.causation_id === event.id;
           return (
             <button
@@ -174,7 +184,7 @@ function ChildPanel({
       </div>
       <ul className="space-y-1">
         {children.map((child) => {
-          const cMeta = extractMeta(child.data);
+          const cMeta = extractMeta(child.data, child.meta);
           return (
             <li key={child.id} className="flex items-center gap-2">
               <span className="text-[10px] text-muted-foreground/50">
@@ -200,8 +210,8 @@ function ChildPanel({
 }
 
 /**
- * 配对并排视图：展开 pair 关系时左请求 / 右响应，允许在同一个展开行里对照两端的完整 JSON。
- * 仅当当前事件处于某个配对组时使用；否则回退到单个 JSON 展示。
+ * 配对并排视图：展开 pair 关系时左请求 / 右响应，左右并列展示双方原始 JSON payload。
+ * 仅当当前事件处于某个配对组时使用；否则回退到单事件展示。
  */
 function PairDetail({
   request,
@@ -210,15 +220,26 @@ function PairDetail({
   request: DecodedEvent;
   responses: DecodedEvent[];
 }) {
-  const reqMeta = useMemo(() => extractMeta(request.data), [request.data]);
+  const reqMeta = useMemo(() => extractMeta(request.data, request.meta), [request.data, request.meta]);
+  const reqBiz = useMemo(() => businessPayload(request), [request]);
   const responseItems = useMemo(
     () =>
       responses.map((ev) => ({
         ev,
-        meta: extractMeta(ev.data),
+        meta: extractMeta(ev.data, ev.meta),
+        business: businessPayload(ev),
       })),
     [responses],
   );
+
+  const renderPayload = (biz: Record<string, unknown>) =>
+    Object.keys(biz).length > 0 ? (
+      <div className="gt-json-view">
+        <HighlightedJson data={biz} />
+      </div>
+    ) : (
+      <p className="px-1 py-2 text-center text-xs text-muted-foreground">（无业务 payload 字段）</p>
+    );
 
   return (
     <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -234,9 +255,7 @@ function PairDetail({
             {formatTimestamp(request.timestamp)}
           </span>
         </div>
-        <div className="gt-json-view">
-          <HighlightedJson data={request.data} />
-        </div>
+        {renderPayload(reqBiz)}
       </div>
 
       {/* 右：响应（可能多条，纵向堆叠） */}
@@ -246,7 +265,7 @@ function PairDetail({
             无响应数据
           </div>
         ) : (
-          responseItems.map(({ ev, meta }) => (
+          responseItems.map(({ ev, meta, business }) => (
             <div key={ev.id} className="flex min-w-0 flex-col rounded-lg border border-border bg-background p-2">
               <div className="mb-1.5 flex flex-wrap items-center gap-1.5 border-b border-border pb-1.5">
                 <DirectionIcon direction={meta.direction} />
@@ -258,9 +277,7 @@ function PairDetail({
                   {formatTimestamp(ev.timestamp)}
                 </span>
               </div>
-              <div className="gt-json-view">
-                <HighlightedJson data={ev.data} />
-              </div>
+              {renderPayload(business)}
             </div>
           ))
         )}
@@ -269,22 +286,194 @@ function PairDetail({
   );
 }
 
+// ─── 分析 / 业务数据面板（两栏） ───────────────────────────────
+// 心智：业务数据（左）| GameTrace 分析（右）。_meta 与原始 JSON 收进「高级信息」。
+
+function SectionCard({
+  icon,
+  title,
+  children,
+}: {
+  icon?: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-background p-2">
+      <div className="mb-1.5 flex items-center gap-1.5 border-b border-border pb-1.5">
+        {icon}
+        <span className="text-xs font-semibold text-foreground">{title}</span>
+      </div>
+      <div className="space-y-1">{children}</div>
+    </div>
+  );
+}
+
+function RenderTable({ rows }: { rows: { k: string; v: React.ReactNode }[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <dl className="divide-y divide-border/60 rounded-md border border-border bg-background text-xs">
+      {rows.map((r) => (
+        <div key={r.k} className="flex items-start gap-2 px-2 py-1">
+          <dt className="shrink-0 pt-px font-mono text-muted-foreground">{r.k}</dt>
+          <dd className="min-w-0 break-all text-foreground/90">{r.v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** 「GameTrace 分析」：实体、状态变更、correlation、配对、父子聚合区。 */
+function AnalysisPanel({
+  event,
+  partners,
+  children,
+  analysis,
+  onJumpToPartner,
+  onLocatePair,
+  onJumpToChild,
+}: {
+  event: DecodedEvent;
+  partners: DecodedEvent[];
+  children: DecodedEvent[];
+  analysis: Record<string, unknown>;
+  onJumpToPartner: (id: string) => void;
+  onLocatePair: (event: DecodedEvent) => void;
+  onJumpToChild: (id: string) => void;
+}) {
+  const sc = Array.isArray(analysis._state_changes) ? analysis._state_changes : [];
+  const entityRows: { k: string; v: React.ReactNode }[] = [];
+  if (analysis.entity_type != null) entityRows.push({ k: "entity_type", v: String(analysis.entity_type) });
+  if (analysis.entity_id != null) entityRows.push({ k: "entity_id", v: String(analysis.entity_id) });
+  if (analysis.entity != null) entityRows.push({ k: "entity", v: String(analysis.entity) });
+  if (analysis.change_count != null) entityRows.push({ k: "change_count", v: String(analysis.change_count) });
+
+  const correlationRows: { k: string; v: React.ReactNode }[] = [];
+  if (event.correlation_id) correlationRows.push({ k: "correlation_id", v: event.correlation_id });
+  if (analysis.flow_id != null) correlationRows.push({ k: "flow_id", v: String(analysis.flow_id) });
+  if (event.causation_id) correlationRows.push({ k: "causation_id", v: event.causation_id });
+  if (event.parent_id) correlationRows.push({ k: "parent_id", v: event.parent_id });
+
+  return (
+    <div className="space-y-2">
+      <PairPanel
+        event={event}
+        partners={partners}
+        onJumpToPartner={onJumpToPartner}
+        onLocatePair={onLocatePair}
+      />
+      <ChildPanel children={children} onJumpToChild={onJumpToChild} />
+
+      {entityRows.length > 0 && (
+        <SectionCard icon={<Box className="h-3.5 w-3.5" />} title="实体">
+          <RenderTable rows={entityRows} />
+        </SectionCard>
+      )}
+
+      {sc.length > 0 && (
+        <SectionCard icon={<Activity className="h-3.5 w-3.5" />} title={`状态变更 · ${sc.length}`}>
+          <ul className="space-y-1">
+            {sc.map((item, i) => {
+              const it = item as Record<string, unknown> | null;
+              if (!it) return null;
+              return (
+                <li key={i} className="flex items-center gap-1.5 text-xs">
+                  <OpBadge op={String(it.op ?? "")} />
+                  <span className="truncate font-mono text-muted-foreground">{String(it.path ?? "")}</span>
+                  <span className="truncate text-foreground/70">
+                    {fmtBrief(it.before)} → {fmtBrief(it.after)}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </SectionCard>
+      )}
+
+      {correlationRows.length > 0 && (
+        <SectionCard icon={<Hash className="h-3.5 w-3.5" />} title="关联">
+          <RenderTable rows={correlationRows} />
+        </SectionCard>
+      )}
+    </div>
+  );
+}
+
+function fmtBrief(v: unknown): string {
+  if (v === null || v === undefined) return "null";
+  if (typeof v === "object") return JSON.stringify(v).slice(0, 24);
+  return String(v);
+}
+
 /**
- * 展开区头部：展开后内容是长 JSON，很容易忘记自己点开的是哪一行，
- * 所以先重复一遍身份信息，并把「复制 / 收起」放在手边。
+ * 元信息小窗口：点击「元信息」按钮弹出 _meta 内容（结构化字段），
+ * 让 payload 区保持原始 JSON 干净，meta 只在需要时看。
+ */
+function MetaPopover({ meta }: { meta: Record<string, unknown> }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const metaObj = meta;
+  const hasMeta = Object.keys(metaObj).length > 0;
+
+  return (
+    <span className="relative inline-block" ref={wrapRef}>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        aria-expanded={open}
+        className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+      >
+        <FileCode2 className="h-3 w-3" />
+        元信息
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1 max-h-80 w-80 overflow-auto rounded-lg border border-border bg-card p-2 shadow-lg">
+          {hasMeta ? (
+            <StructuredFields obj={metaObj} />
+          ) : (
+            <p className="px-2 py-1.5 text-xs text-muted-foreground">（无 _meta 数据）</p>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
+/**
+ * 展开区头部：展开后内容较长，很容易忘记自己点开的是哪一行，
+ * 所以先重复一遍身份信息，并把「元信息 / 分析 / 复制 / 收起」放在手边。
  */
 function ExpandedHeader({
   event,
   meta,
+  metaRaw,
+  showAnalysis,
+  onToggleAnalysis,
   onCollapse,
 }: {
   event: DecodedEvent;
   meta: EventMeta;
+  metaRaw: Record<string, unknown>;
+  showAnalysis: boolean;
+  onToggleAnalysis: () => void;
   onCollapse: () => void;
 }) {
   return (
     <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-border pb-2">
-      <DirectionIcon direction={meta.direction} />
+      <DirectionChip direction={meta.direction} />
       <span className="font-mono text-sm font-semibold">{meta.msgName || "(unknown)"}</span>
       <span className="font-mono text-xs text-muted-foreground">
         {formatTimestamp(event.timestamp)}
@@ -296,6 +485,23 @@ function ExpandedHeader({
       )}
       <span className="text-xs text-muted-foreground">{formatSize(event.raw_len)}</span>
       <span className="ml-auto flex items-center gap-1.5">
+        <MetaPopover meta={metaRaw} />
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleAnalysis();
+          }}
+          aria-expanded={showAnalysis}
+          className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors ${
+            showAnalysis
+              ? "border-primary/40 bg-primary/10 text-primary"
+              : "border-border text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+          }`}
+        >
+          <Activity className="h-3 w-3" />
+          分析
+        </button>
         <button
           type="button"
           onClick={(e) => {
@@ -342,7 +548,17 @@ function ExpandedRow({
   onJumpToChild: (id: string) => void;
   onCollapse: () => void;
 }) {
-  const meta = useMemo(() => extractMeta(event.data), [event.data]);
+  const meta = useMemo(() => extractMeta(event.data, event.meta), [event.data, event.meta]);
+  const classes = useMemo(
+    () => ({
+      // v0.8.0 契约：data 已是纯业务，meta/analysis 走独立字段；旧数据兜底拆分。
+      meta: event.meta ?? classifyPayload(event.data).meta,
+      business: businessPayload(event),
+      analysis: analysisOf(event),
+    }),
+    [event],
+  );
+  const [showAnalysis, setShowAnalysis] = useState(false);
 
   // 配对并排视图所需的请求/响应分组：
   // - 当前事件无 causation_id → 它是请求，响应是 partners 里 causation_id 指向它的事件。
@@ -359,20 +575,43 @@ function ExpandedRow({
 
   return (
     <TableRow className="gt-fade-in">
-      <TableCell colSpan={colSpan} className="bg-muted/30 p-4">
-        <ExpandedHeader event={event} meta={meta} onCollapse={onCollapse} />
-        <PairPanel
+      <TableCell colSpan={colSpan} className="bg-muted/30 p-3">
+        <ExpandedHeader
           event={event}
-          partners={partners}
-          onJumpToPartner={onJumpToPartner}
-          onLocatePair={onLocatePair}
+          meta={meta}
+          metaRaw={classes.meta}
+          showAnalysis={showAnalysis}
+          onToggleAnalysis={() => setShowAnalysis((o) => !o)}
+          onCollapse={onCollapse}
         />
-        <ChildPanel children={children} onJumpToChild={onJumpToChild} />
+
+        {/* 第一眼：业务 payload 原始 JSON（剥离 _meta 与分析字段）；pair 时左右并列请求/响应 */}
         {showPair ? (
           <PairDetail request={request} responses={responses} />
+        ) : Object.keys(classes.business).length > 0 ? (
+          <div className="rounded-lg border border-border bg-background p-2">
+            <div className="gt-json-view">
+              <HighlightedJson data={classes.business} />
+            </div>
+          </div>
         ) : (
-          <div className="gt-json-view">
-            <HighlightedJson data={event.data} />
+          <div className="rounded-lg border border-dashed border-border bg-background p-4 text-center text-xs text-muted-foreground">
+            该事件没有业务 payload 字段，元信息与分析见头部「元信息 / 分析」按钮
+          </div>
+        )}
+
+        {/* 分析区：折叠，需要时展开 */}
+        {showAnalysis && (
+          <div className="mt-3">
+            <AnalysisPanel
+              event={event}
+              partners={partners}
+              children={children}
+              analysis={classes.analysis}
+              onJumpToPartner={onJumpToPartner}
+              onLocatePair={onLocatePair}
+              onJumpToChild={onJumpToChild}
+            />
           </div>
         )}
       </TableCell>
@@ -407,7 +646,7 @@ const EventRow = memo(function EventRow({
   onJumpToChild: (id: string) => void;
   onCollapse: (id: string) => void;
 }) {
-  const meta = useMemo(() => extractMeta(event.data), [event.data]);
+  const meta = useMemo(() => extractMeta(event.data, event.meta), [event.data, event.meta]);
   const summary = useMemo(() => summarizePayload(event.data, meta), [event.data, meta]);
   const colSpan = showCapture ? 6 : 5;
 
@@ -420,26 +659,26 @@ const EventRow = memo(function EventRow({
         aria-expanded={isExpanded}
       >
         {/* 展开指示：没有它用户看不出行是可点的 */}
-        <TableCell className="w-8 pl-2 pr-0 text-muted-foreground/60">
+        <TableCell className="w-8 py-1.5 pl-2 pr-0 text-muted-foreground/60">
           <ChevronRight
             className={`h-3.5 w-3.5 transition-transform ${isExpanded ? "rotate-90" : ""}`}
           />
         </TableCell>
 
         {/* 时间 */}
-        <TableCell className="w-28 font-mono text-xs whitespace-nowrap tabular-nums">
+        <TableCell className="w-28 py-1.5 font-mono text-[11px] whitespace-nowrap tabular-nums">
           {formatTimestamp(event.timestamp)}
         </TableCell>
 
-        {/* 消息名：方向图标 + 名称 + 语义标签 + 子事件/配对角标 */}
-        <TableCell className="min-w-[220px] max-w-[320px]">
+        {/* 消息名：方向文字 + 名称 + 语义标签 + 子事件/配对角标 */}
+        <TableCell className="min-w-[220px] max-w-[340px] py-1.5">
           <div className="flex items-center gap-1.5 min-w-0">
             {event.parent_id && (
               <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60" title={`父事件 ${event.parent_id}`}>
                 ⊢
               </span>
             )}
-            <DirectionIcon direction={meta.direction} />
+            <DirectionChip direction={meta.direction} />
             <MessageCell msgName={meta.msgName} semantic={meta.semantic} />
             {children.length > 0 && (
               <span className="ml-0.5 shrink-0 inline-flex items-center gap-0.5 text-muted-foreground/70" title={`${children.length} 个 extract 子事件`}>
@@ -457,24 +696,24 @@ const EventRow = memo(function EventRow({
 
         {/* 捕获上下文（代理抓包特有）：非代理抓包整列不渲染，把宽度让给消息与摘要 */}
         {showCapture && (
-          <TableCell className="w-40 max-w-[180px]">
+          <TableCell className="w-40 max-w-[180px] py-1.5">
             {event.capture ? (
               <CaptureCell capture={event.capture} />
             ) : (
-              <span className="text-xs text-muted-foreground/50">-</span>
+              <span className="text-[11px] text-muted-foreground/50">-</span>
             )}
           </TableCell>
         )}
 
         {/* Payload 摘要 */}
-        <TableCell className="max-w-[28rem]">
-          <span className="block truncate text-xs text-foreground/70" title={summary}>
+        <TableCell className="max-w-[28rem] py-1.5">
+          <span className="block truncate text-[11px] text-foreground/70" title={summary}>
             {summary}
           </span>
         </TableCell>
 
         {/* 原始包大小 */}
-        <TableCell className="w-16 text-right tabular-nums text-xs text-muted-foreground whitespace-nowrap">
+        <TableCell className="w-16 py-1.5 text-right tabular-nums text-[11px] text-muted-foreground whitespace-nowrap">
           {formatSize(event.raw_len)}
         </TableCell>
       </TableRow>

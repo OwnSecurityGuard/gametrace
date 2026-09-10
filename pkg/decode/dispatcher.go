@@ -292,6 +292,30 @@ func (d *Dispatcher) convertResultsToEvents(req *pb.DecodeRequest, results []*pb
 			continue
 		}
 
+		// v0.8.0 契约：Meta/Analysis 独立传输（可选字段）。
+		var metaValue, analysisValue event.Value
+		if len(r.MetaMsgpack) > 0 {
+			if v, err := event.UnmarshalValueMsgpack(r.MetaMsgpack); err == nil {
+				metaValue = v
+			} else {
+				d.logger.Warn("unmarshal msgpack meta", "error", err)
+			}
+		}
+		if len(r.AnalysisMsgpack) > 0 {
+			if v, err := event.UnmarshalValueMsgpack(r.AnalysisMsgpack); err == nil {
+				analysisValue = v
+			} else {
+				d.logger.Warn("unmarshal msgpack analysis", "error", err)
+			}
+		}
+		// 旧插件未上报新字段时，从扁平 payload 拆分兜底。
+		if metaValue.IsNull() && analysisValue.IsNull() {
+			biz, m, a := event.SplitReservedKeys(payloadValue)
+			payloadValue = biz
+			metaValue = m
+			analysisValue = a
+		}
+
 		schemaID := r.SchemaId
 		if schemaID != "" {
 			if _, ok := d.schemaReg.Lookup(schemaID); !ok {
@@ -308,7 +332,7 @@ func (d *Dispatcher) convertResultsToEvents(req *pb.DecodeRequest, results []*pb
 			ConnID:         connID,
 			Source:         source,
 		}
-		if dirOverride, ok := extractDirectionOverride(payloadValue); ok {
+		if dirOverride, ok := extractDirectionOverride(metaValue, payloadValue); ok {
 			ctx.Direction = dirOverride
 		}
 
@@ -321,6 +345,7 @@ func (d *Dispatcher) convertResultsToEvents(req *pb.DecodeRequest, results []*pb
 			time.Unix(0, req.TimestampNs),
 			ctx,
 		)
+		ev = ev.WithMeta(metaValue).WithAnalysis(analysisValue)
 
 		if r.CorrelationKey != "" {
 			ev = ev.WithCorrelation(r.CorrelationKey)
@@ -381,9 +406,17 @@ func inferDirection(srcPort, dstPort uint16, serverPort int) string {
 	return "unknown"
 }
 
-// extractDirectionOverride 从 payload _meta.direction 中提取方向覆盖值。
-func extractDirectionOverride(v event.Value) (string, bool) {
-	obj, ok := v.AsObject()
+// extractDirectionOverride 优先从 Meta 的 direction 提取方向覆盖值，
+// 兜底读 payload _meta.direction（兼容旧插件）。
+func extractDirectionOverride(metaValue, payloadValue event.Value) (string, bool) {
+	if metaObj, ok := metaValue.AsObject(); ok {
+		if d, ok := metaObj["direction"]; ok {
+			if s, ok := d.AsString(); ok {
+				return s, true
+			}
+		}
+	}
+	obj, ok := payloadValue.AsObject()
 	if !ok {
 		return "", false
 	}

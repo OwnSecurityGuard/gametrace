@@ -44,8 +44,9 @@ func (s *SQLiteStore) AppendEvents(ctx context.Context, events []*event.Event) e
 			return fmt.Errorf("marshal context for event[%d]: %w", i, err)
 		}
 
-		// 编码 Payload 为 MsgPack
-		payloadBytes, err := e.Payload.Value.MarshalMsgpack()
+		// 编码 Payload 为 MsgPack（存储保持扁平：业务 + Meta + Analysis 合并，
+		// 与旧数据字节兼容，无需 schema 迁移；读取时再拆分）。
+		payloadBytes, err := event.MergeReservedKeys(e.Payload.Value, e.Meta, e.Analysis).MarshalMsgpack()
 		if err != nil {
 			return fmt.Errorf("marshal payload for event[%d]: %w", i, err)
 		}

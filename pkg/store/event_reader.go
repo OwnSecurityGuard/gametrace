@@ -56,6 +56,9 @@ func scanEvent(sc eventScanner) (*event.Event, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unmarshal payload: %w", err)
 	}
+	// 拆分填充 Meta/Analysis（存储为扁平值，读取时供 MCP/前端使用）。
+	// Payload.Value 保持原样，保留下游 projection/state 从保留键读取的能力。
+	_, metaValue, analysisValue := event.SplitReservedKeys(payloadValue)
 
 	ctx, err := event.UnmarshalContextMsgpack(contextBytes)
 	if err != nil {
@@ -78,6 +81,8 @@ func scanEvent(sc eventScanner) (*event.Event, error) {
 			SchemaID: schemaID,
 			Value:    payloadValue,
 		},
+		Meta:     metaValue,
+		Analysis: analysisValue,
 	}
 
 	if causationID.Valid {

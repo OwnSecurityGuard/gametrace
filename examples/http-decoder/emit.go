@@ -95,13 +95,9 @@ func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string,
 	payload := map[string]any{
 		"flow_id":        flowID,
 		"cmd":            sem.Cmd,
-		"msg_name":       sem.MsgName,
-		"role":           role,
-		"is_push":        isPush,
 		"seq":            sem.Seq,
 		"body_text":      string(m.body),
 		"body_truncated": m.bodyTruncated,
-		"_meta":          meta,
 	}
 
 	var draft event.Draft
@@ -110,21 +106,24 @@ func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string,
 		payload["method"] = m.method
 		payload["path"] = m.path
 		payload["requests"] = c.requests
-		payload["_state_changes"] = []any{
-			map[string]any{
-				"subject_type": "http_request",
-				"subject_id":   flowID,
-				"op":           "set",
-				"path":         "requests",
-				"before":       c.requests - 1,
-				"after":        c.requests,
-				"version":      c.requests + c.responses,
-			},
-		}
 		draft = event.Draft{
-			Type:           "http.request",
-			SchemaRef:      "http.request.v1",
-			Value:          event.ValueFromMap(payload),
+			Type:      "http.request",
+			SchemaRef: "http.request.v1",
+			Value:     event.ValueFromMap(payload),
+			Meta:      event.ValueFromMap(meta),
+			Analysis: event.ValueFromMap(map[string]any{
+				"_state_changes": []any{
+					map[string]any{
+						"subject_type": "http_request",
+						"subject_id":   flowID,
+						"op":           "set",
+						"path":         "requests",
+						"before":       c.requests - 1,
+						"after":        c.requests,
+						"version":      c.requests + c.responses,
+					},
+				},
+			}),
 			CorrelationKey: flowID,
 		}
 	} else {
@@ -133,21 +132,24 @@ func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string,
 		payload["responses"] = c.responses
 		payload["error_code"] = sem.ErrorCode
 		payload["is_error"] = sem.IsError
-		payload["_state_changes"] = []any{
-			map[string]any{
-				"subject_type": "http_response",
-				"subject_id":   flowID,
-				"op":           "set",
-				"path":         "responses",
-				"before":       c.responses - 1,
-				"after":        c.responses,
-				"version":      c.requests + c.responses,
-			},
-		}
 		draft = event.Draft{
-			Type:           "http.response",
-			SchemaRef:      "http.response.v1",
-			Value:          event.ValueFromMap(payload),
+			Type:      "http.response",
+			SchemaRef: "http.response.v1",
+			Value:     event.ValueFromMap(payload),
+			Meta:      event.ValueFromMap(meta),
+			Analysis: event.ValueFromMap(map[string]any{
+				"_state_changes": []any{
+					map[string]any{
+						"subject_type": "http_response",
+						"subject_id":   flowID,
+						"op":           "set",
+						"path":         "responses",
+						"before":       c.responses - 1,
+						"after":        c.responses,
+						"version":      c.requests + c.responses,
+					},
+				},
+			}),
 			CorrelationKey: flowID,
 		}
 	}

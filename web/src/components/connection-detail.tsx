@@ -553,7 +553,7 @@ function EventsTab({
                   <button
                     type="button"
                     onClick={() =>
-                      void copyText(" JSON", JSON.stringify(unpackJsonStrings(ev.data), null, 2))
+                      void copyText(" JSON", JSON.stringify(unpackJsonStrings({ ...ev.data, ...(ev.meta && Object.keys(ev.meta).length > 0 ? { _meta: ev.meta } : {}), ...(ev.analysis ?? {}) }), null, 2))
                     }
                     className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
                   >
@@ -570,7 +570,7 @@ function EventsTab({
                   </button>
                 </span>
               </div>
-              <JsonView data={ev.data} />
+              <JsonView data={{ ...ev.data, ...(ev.meta && Object.keys(ev.meta).length > 0 ? { _meta: ev.meta } : {}), ...(ev.analysis ?? {}) }} />
             </div>
           )}
         </div>

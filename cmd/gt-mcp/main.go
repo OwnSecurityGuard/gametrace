@@ -1524,11 +1524,28 @@ func lookupRawLens(ctx context.Context, reader captureReader, events []*event.Ev
 	return rawLenMap
 }
 
-// decodedEventMap 构造 list_decoded_data 输出的事件 map（字段契约与旧实现一致）。
+// decodedEventMap 构造 list_decoded_data 输出的事件 map（v0.8.0 契约）：
+// data 为纯业务 payload，meta/analysis 独立字段；读取路径上
+// ev.Meta/ev.Analysis 由 scanEvent 拆分填充，兜底再拆一次扁平 payload。
 func decodedEventMap(ev *event.Event, captureIdx map[string]captureContextJSON, rawLenMap map[string]int) map[string]any {
-	dataContent := ev.Payload.Value.ToAny()
+	biz, flatMeta, flatAnalysis := event.SplitReservedKeys(ev.Payload.Value)
+	dataContent := biz.ToAny()
 	if dataContent == nil {
 		dataContent = map[string]any{}
+	}
+	metaContent := ev.Meta.ToAny()
+	if metaContent == nil {
+		metaContent = flatMeta.ToAny()
+	}
+	if metaContent == nil {
+		metaContent = map[string]any{}
+	}
+	analysisContent := ev.Analysis.ToAny()
+	if analysisContent == nil {
+		analysisContent = flatAnalysis.ToAny()
+	}
+	if analysisContent == nil {
+		analysisContent = map[string]any{}
 	}
 	rawLen := 0
 	if ev.Context.RawPacketID != "" {
@@ -1543,6 +1560,8 @@ func decodedEventMap(ev *event.Event, captureIdx map[string]captureContextJSON, 
 		"correlation_id": ev.Trace.CorrelationID,
 		"causation_id":   string(ev.Trace.CausationID),
 		"data":           dataContent,
+		"meta":           metaContent,
+		"analysis":       analysisContent,
 	}
 	if cc, ok := captureIdx[string(ev.Identity.ID)]; ok {
 		eventMap["capture"] = cc
@@ -2055,6 +2074,8 @@ func queryEnv() map[string]any {
 		"correlation_id": "",
 		"causation_id":   "",
 		"data":           map[string]any{},
+		"meta":           map[string]any{},
+		"analysis":       map[string]any{},
 	}
 }
 

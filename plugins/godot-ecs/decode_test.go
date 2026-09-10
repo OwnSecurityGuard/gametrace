@@ -136,7 +136,7 @@ func TestDecodeUplink(t *testing.T) {
 	}
 
 	p := payloadOf(t, got[0])
-	if d, _ := metaStr(p, "direction"); d != "client_to_server" {
+	if d, _ := metaStr(t, got[0], "direction"); d != "client_to_server" {
 		t.Errorf("direction = %q, want client_to_server", d)
 	}
 	if x, ok := p["x"].AsFloat(); !ok || x != 1.5 {
@@ -165,7 +165,7 @@ func TestDecodeDownlink(t *testing.T) {
 		t.Fatalf("unexpected events: %+v", got)
 	}
 	p := payloadOf(t, got[0])
-	if d, _ := metaStr(p, "direction"); d != "server_to_client" {
+	if d, _ := metaStr(t, got[0], "direction"); d != "server_to_client" {
 		t.Errorf("direction = %q, want server_to_client", d)
 	}
 	if id, ok := p["id"].AsInt(); !ok || id != 3 {
@@ -287,8 +287,7 @@ func TestDecodeProxyPayloadFallsBackToTypeInference(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("want 1 event, got %d", len(got))
 	}
-	p := payloadOf(t, got[0])
-	if d, _ := metaStr(p, "direction"); d != "server_to_client" {
+	if d, _ := metaStr(t, got[0], "direction"); d != "server_to_client" {
 		t.Errorf("direction = %q, want server_to_client (inferred from t=state)", d)
 	}
 }
@@ -382,16 +381,22 @@ func TestDecodedEventsConformToManifest(t *testing.T) {
 // 小工具
 // ---------------------------------------------------------------------------
 
-func metaStr(p map[string]event.Value, key string) (string, bool) {
-	meta, ok := p["_meta"].AsObject()
+// metaStr 从响应 v0.8.0 独立 MetaMsgpack 中读取元信息字段。
+func metaStr(t *testing.T, r *pb.DecodeResponseV2, key string) (string, bool) {
+	t.Helper()
+	v, err := event.UnmarshalValueMsgpack(r.GetMetaMsgpack())
+	if err != nil {
+		return "", false
+	}
+	meta, ok := v.AsObject()
 	if !ok {
 		return "", false
 	}
-	v, ok := meta[key]
+	val, ok := meta[key]
 	if !ok {
 		return "", false
 	}
-	return v.AsString()
+	return val.AsString()
 }
 
 func events(rs []*pb.DecodeResponseV2) int {

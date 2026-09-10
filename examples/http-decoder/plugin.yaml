@@ -48,17 +48,6 @@ schemas:
         type: int64
         queryable: true
         description: Message id extracted from header.cmd (1001 LoginRequest, 2001 PlayerNotify).
-      msg_name:
-        type: string
-        queryable: true
-        description: Symbolic message name mapped from cmd (LoginRequest / PlayerNotify / unknown).
-      role:
-        type: string
-        queryable: true
-        description: Communication role (request | push).
-      is_push:
-        type: bool
-        description: True when cmd==2001 or seq==0 (push rule).
       seq:
         type: int64
         queryable: true
@@ -92,17 +81,6 @@ schemas:
         type: int64
         queryable: true
         description: Message id extracted from header.cmd (1002 LoginResponse, 2001 PlayerNotify).
-      msg_name:
-        type: string
-        queryable: true
-        description: Symbolic message name mapped from cmd (LoginResponse / PlayerNotify / unknown).
-      role:
-        type: string
-        queryable: true
-        description: Communication role (response | push).
-      is_push:
-        type: bool
-        description: True when cmd==2001 or seq==0 (push rule).
       seq:
         type: int64
         queryable: true

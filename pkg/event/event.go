@@ -223,7 +223,7 @@ func UnmarshalContextMsgpack(data []byte) (EventContext, error) {
 }
 
 // Event 是事件模型，遵循 Event Sourcing 原则：
-// Event = Identity + Trace + Context + Payload
+// Event = Identity + Trace + Context + Payload + Meta + Analysis
 //
 // 核心原则：
 // 1. 不可变性（Immutable）：创建后不可修改
@@ -239,8 +239,14 @@ type Event struct {
 	// Context 描述事件的网络上下文
 	Context EventContext
 
-	// Payload 包含事件的实际数据
+	// Payload 包含事件的实际数据（纯业务字段）
 	Payload Payload
+
+	// Meta 是元信息（可选）：direction、msg_name、role、is_push 等由系统附加的结构化字段。
+	Meta Value
+
+	// Analysis 是分析（可选）：_state_changes、entity 等平台推导/投影所需的数据。
+	Analysis Value
 }
 
 // NewEvent 创建新的 Event
@@ -323,6 +329,8 @@ func (e *Event) WithTrace(trace TraceContext) *Event {
 		Trace:    trace,
 		Context:  e.Context,
 		Payload:  e.Payload,
+		Meta:     e.Meta,
+		Analysis: e.Analysis,
 	}
 }
 
@@ -336,25 +344,51 @@ func (e *Event) WithCorrelation(correlationID string) *Event {
 	return e.WithTrace(e.Trace.WithCorrelation(correlationID))
 }
 
+// WithMeta 设置元信息，返回新的 Event（不可变性）。
+func (e *Event) WithMeta(meta Value) *Event {
+	cp := *e
+	cp.Meta = meta
+	return &cp
+}
+
+// WithAnalysis 设置分析数据，返回新的 Event（不可变性）。
+func (e *Event) WithAnalysis(analysis Value) *Event {
+	cp := *e
+	cp.Analysis = analysis
+	return &cp
+}
+
 // WithOrigin 设置原始来源事件 ID，返回新的 Event
 func (e *Event) WithOrigin(originID EventID) *Event {
 	return e.WithTrace(e.Trace.WithOrigin(originID))
 }
 
-// ExtractStateChanges 从 Payload 的 _state_changes 字段提取状态变更。
+// ExtractStateChanges 从 Analysis 的 _state_changes 字段提取状态变更；
+// Analysis 为空时兜底读取 Payload.Value 的保留键（兼容旧模型）。
 func (e *Event) ExtractStateChanges() []StateChange {
 	if e == nil {
 		return nil
 	}
+	if scs := ExtractStateChanges(e.Analysis); scs != nil {
+		return scs
+	}
 	return ExtractStateChanges(e.Payload.Value)
 }
 
-// MetaValue 返回 _meta 中指定键的值，不存在时返回 false。
-// _meta 用于存放 direction、flow_id、msg_name 等由系统附加的结构化字段。
+// MetaValue 返回元信息中指定键的值，不存在时返回 false。
+// 优先读 Meta（新模型），兜底读 Payload._meta（旧模型）。
+// 元信息用于存放 direction、msg_name、role 等由系统附加的结构化字段。
 func (e *Event) MetaValue(key string) (Value, bool) {
 	if e == nil {
 		return Value{}, false
 	}
+	// 优先读 Meta（新模型）。
+	if metaObj, ok := e.Meta.AsObject(); ok {
+		if v, ok2 := metaObj[key]; ok2 {
+			return v, true
+		}
+	}
+	// 兜底读 Payload._meta（旧模型）。
 	obj, ok := e.Payload.Value.AsObject()
 	if !ok {
 		return Value{}, false

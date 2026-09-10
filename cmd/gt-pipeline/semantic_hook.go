@@ -116,7 +116,10 @@ func (e *semanticEngine) enrichSemantics(ev *event.Event) []*event.Event {
 		return nil
 	}
 
-	sdkVal, err := toSDKValue(ev.Payload.Value)
+	// 规则求值视图：payload 合并 _meta。新模型下 Meta 独立传输（不在 payload），
+	// 合并后规则仍可引用 _meta.msg_name 等路径，与旧插件（payload 内 _meta）行为一致。
+	evalVal := withMetaObject(ev.Payload.Value, ev.Meta)
+	sdkVal, err := toSDKValue(evalVal)
 	if err != nil {
 		e.logger.Debug("semantic: convert payload", "event_id", ev.Identity.ID, "error", err)
 		return nil
@@ -132,8 +135,28 @@ func (e *semanticEngine) enrichSemantics(ev *event.Event) []*event.Event {
 	return e.buildChildren(ev, res.Children)
 }
 
-// applySemantics 把 annotate 命中的语义标签写进 payload._meta.semantic。
-// 已有 _meta 时保留其它字段，只覆盖 semantic 键。
+// withMetaObject 把独立的 Meta（新模型）并进求值视图的 _meta 键。
+// 旧插件（payload 已含 _meta）或 Meta 为空时原样返回，不覆盖、不新增空 _meta。
+func withMetaObject(payload, meta event.Value) event.Value {
+	if payload.Kind != event.Object {
+		return payload
+	}
+	if _, has := payload.Object["_meta"]; has {
+		return payload
+	}
+	if meta.Kind != event.Object || len(meta.Object) == 0 {
+		return payload
+	}
+	merged := make(map[string]event.Value, len(payload.Object)+1)
+	for k, v := range payload.Object {
+		merged[k] = v
+	}
+	merged["_meta"] = meta
+	return event.ValueObject(merged)
+}
+
+// applySemantics 把 annotate 命中的语义标签写进独立 Meta（新模型）。
+// 旧插件 payload 里已有 _meta 时同步写入，保证旧数据展示不受影响。
 func (e *semanticEngine) applySemantics(ev *event.Event, sems []rule.Semantic) {
 	if len(sems) == 0 {
 		return
@@ -143,22 +166,32 @@ func (e *semanticEngine) applySemantics(ev *event.Event, sems []rule.Semantic) {
 		labels = append(labels, event.ValueString(string(s)))
 	}
 
+	// 新模型：语义标签写入 ev.Meta.semantic。
 	meta := map[string]event.Value{}
-	if cur, ok := ev.Payload.Value.Get("_meta"); ok && cur.Object != nil {
-		for k, v := range cur.Object {
+	if cur, ok := ev.Meta.AsObject(); ok {
+		for k, v := range cur {
 			meta[k] = v
 		}
 	}
 	meta[metaKeySemantic] = event.ValueArray(labels)
+	ev.Meta = event.ValueObject(meta)
 
-	root := map[string]event.Value{}
-	if ev.Payload.Value.Object != nil {
-		for k, v := range ev.Payload.Value.Object {
-			root[k] = v
+	// 旧模型兼容：payload 已带 _meta 时同步写 semantic 键。
+	if cur, ok := ev.Payload.Value.Get("_meta"); ok && cur.Object != nil {
+		oldMeta := make(map[string]event.Value, len(cur.Object)+1)
+		for k, v := range cur.Object {
+			oldMeta[k] = v
 		}
+		oldMeta[metaKeySemantic] = event.ValueArray(labels)
+		root := make(map[string]event.Value, len(ev.Payload.Value.Object)+1)
+		if ev.Payload.Value.Object != nil {
+			for k, v := range ev.Payload.Value.Object {
+				root[k] = v
+			}
+		}
+		root["_meta"] = event.ValueObject(oldMeta)
+		ev.Payload.Value = event.ValueObject(root)
 	}
-	root["_meta"] = event.ValueObject(meta)
-	ev.Payload.Value = event.ValueObject(root)
 }
 
 // applyPairs 处理 pair 命中：与本规则下等待中的对侧事件配对，

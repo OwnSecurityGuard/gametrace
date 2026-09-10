@@ -2,8 +2,8 @@
 //
 // 从 event-table.tsx 抽出，供事件表格、会话级关系树、状态变更等视图复用，
 // 避免在多处复制 extractMeta / MessageCell / JSON 高亮等逻辑。
-import { useMemo } from "react";
-import { ArrowRight, ArrowLeft } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ArrowRight, ArrowLeft, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { unpackJsonStrings } from "@/lib/utils";
 
@@ -20,12 +20,16 @@ export interface EventMeta {
   blocks?: number;
 }
 
-/** 安全提取 data 里的 _meta/Blocks 字段，缺失时返回空默认值。 */
-export function extractMeta(data: Record<string, unknown>): EventMeta {
-  const meta = data._meta as Record<string, unknown> | undefined;
-  if (!meta || typeof meta !== "object") {
-    return { direction: "", msgName: "", semantic: [] };
-  }
+/** 安全提取 _meta/Blocks 字段，缺失时返回空默认值。
+ *  v0.8.0 起 MCP 返回独立 meta 字段（优先读取）；旧数据兜底读 data._meta。 */
+export function extractMeta(
+  data: Record<string, unknown>,
+  standaloneMeta?: Record<string, unknown>,
+): EventMeta {
+  const meta =
+    standaloneMeta && typeof standaloneMeta === "object"
+      ? standaloneMeta
+      : ((data._meta as Record<string, unknown> | undefined) ?? {});
   const direction = String(meta.direction ?? "");
   const msgName = String(meta.msg_name ?? "");
   const semantic = Array.isArray(meta.semantic)
@@ -42,6 +46,77 @@ export function extractMeta(data: Record<string, unknown>): EventMeta {
   }
 
   return { direction, msgName, semantic, blocks };
+}
+
+// ─── 信息分层：业务数据 / Metadata / 分析 ──────────────────────
+// 产品心智：Payload ≠ Metadata ≠ Analysis。
+// 前端把事件 data 拆成三份，避免把平台推导出的分析字段混进业务数据展示。
+
+/** payload 顶层被归为「GameTrace 分析」的键（其余非 _meta 字段归「业务数据」）。 */
+export const ANALYSIS_KEYS = new Set<string>([
+  "_state_changes",
+  "entity",
+  "entity_type",
+  "entity_id",
+  "change_count",
+  "correlation_id",
+  "flow_id",
+  "causation_id",
+  "parent_id",
+  "relation",
+]);
+
+/** 与 _meta 内容重复的顶层冗余元信息键：解码器会同时写 _meta 与顶层，归 Metadata 而非业务数据。 */
+export const META_REDUNDANT_KEYS = new Set<string>(["msg_name", "role", "is_push"]);
+
+export interface PayloadClasses {
+  /** _meta（direction/msg_name/semantic/role/is_push…）+ 顶层冗余元信息键——Metadata，默认不直接展示。 */
+  meta: Record<string, unknown>;
+  /** 业务字段：如 playerId/reason、http 的 method/path/status。 */
+  business: Record<string, unknown>;
+  /** 分析字段：实体、状态变更、correlation、relation…——进「GameTrace 分析」区。 */
+  analysis: Record<string, unknown>;
+}
+
+/** 把事件 data 按 key 拆成 meta / business / analysis 三份。 */
+export function classifyPayload(data: Record<string, unknown>): PayloadClasses {
+  const meta: Record<string, unknown> = {};
+  const business: Record<string, unknown> = {};
+  const analysis: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(data)) {
+    if (k === "_meta" || META_REDUNDANT_KEYS.has(k)) meta[k] = v;
+    else if (ANALYSIS_KEYS.has(k)) analysis[k] = v;
+    else business[k] = v;
+  }
+  return { meta, business, analysis };
+}
+
+/** v0.8.0 起 MCP 的 data 已是纯业务 payload；旧数据（无独立 meta/analysis 字段）兜底拆分。 */
+export function businessPayload(ev: {
+  data: Record<string, unknown>;
+  meta?: Record<string, unknown>;
+}): Record<string, unknown> {
+  return ev.meta !== undefined ? ev.data : classifyPayload(ev.data).business;
+}
+
+/** v0.8.0 起 MCP 返回独立 analysis 字段；旧数据兜底从 data 分类。 */
+export function analysisOf(ev: {
+  data: Record<string, unknown>;
+  analysis?: Record<string, unknown>;
+}): Record<string, unknown> {
+  return ev.analysis ?? classifyPayload(ev.data).analysis;
+}
+
+/** direction 枚举 → 人话方向文本（未知返回空串）。 */
+export function directionText(direction: string): string {
+  switch (direction) {
+    case "client_to_server":
+      return "客户端 → 服务端";
+    case "server_to_client":
+      return "服务端 → 客户端";
+    default:
+      return "";
+  }
 }
 
 // ─── 格式化工具 ─────────────────────────────────────────────
@@ -99,6 +174,31 @@ export function DirectionIcon({ direction }: { direction: string }) {
   return (
     <span className="shrink-0 rounded bg-muted px-1 py-px text-muted-foreground" title="方向未知">
       <ArrowRight className="h-3 w-3 text-muted-foreground/50" />
+    </span>
+  );
+}
+
+/** 方向文字 chip：箭头已表达方向，只标注缩写端点，不再写全两端中文。 */
+export function DirectionChip({ direction }: { direction: string }) {
+  const text = directionText(direction);
+  if (!text) {
+    return (
+      <span className="shrink-0 rounded bg-muted px-1.5 py-px text-[10px] text-muted-foreground/60" title="方向未知">
+        方向未知
+      </span>
+    );
+  }
+  const label = direction === "client_to_server" ? "C→S" : "S→C";
+  const color =
+    direction === "client_to_server"
+      ? "text-blue-600 dark:text-blue-400"
+      : "text-emerald-600 dark:text-emerald-400";
+  return (
+    <span
+      className={`shrink-0 rounded bg-muted px-1.5 py-px font-mono text-[10px] font-semibold whitespace-nowrap ${color}`}
+      title={text}
+    >
+      {label}
     </span>
   );
 }
@@ -216,6 +316,76 @@ export function HighlightedJson({ data }: { data: unknown }) {
     <pre className="gt-json-pre max-h-[400px] overflow-auto">
       <HighlightedText text={formatted} />
     </pre>
+  );
+}
+
+// ─── 结构化字段视图 ───────────────────────────────────────────
+// 默认把业务字段按 key → value 逐行渲染（而非整段 JSON），嵌套对象/数组折叠成
+// 摘要行可展开；深层不做全量树，展开后以单行 JSON 高亮兜底。
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function scalarText(v: unknown): string {
+  if (v === null) return "null";
+  if (typeof v === "string") return v;
+  return String(v);
+}
+
+/** 嵌套值的折叠摘要：数组显示项数，对象显示前几个键名。 */
+function nestedSummary(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.length} 项]`;
+  if (isPlainObject(v)) {
+    const keys = Object.keys(v);
+    return keys.length > 0 ? `{ ${keys.slice(0, 3).join(", ")}${keys.length > 3 ? ", …" : ""} }` : "{}";
+  }
+  return scalarText(v);
+}
+
+function FieldValue({ value }: { value: unknown }) {
+  const [open, setOpen] = useState(false);
+  const nested = Array.isArray(value) || isPlainObject(value);
+
+  if (!nested) {
+    return <dd className="min-w-0 break-all text-foreground/90">{scalarText(value)}</dd>;
+  }
+
+  return (
+    <dd className="min-w-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-1.5 text-left"
+        aria-expanded={open}
+      >
+        <ChevronRight className={`h-3 w-3 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`} />
+        <span className="truncate text-muted-foreground">{nestedSummary(value)}</span>
+      </button>
+      {open && (
+        <pre className="gt-json-pre mt-1 max-h-64 overflow-auto rounded border border-border/60 p-2">
+          <HighlightedText text={JSON.stringify(unpackJsonStrings(value), null, 2)} />
+        </pre>
+      )}
+    </dd>
+  );
+}
+
+/** 结构化字段视图：逐行 key → value；嵌套值折叠为摘要行、可展开看完整 JSON。 */
+export function StructuredFields({ obj }: { obj: Record<string, unknown> }) {
+  const entries = useMemo(() => Object.entries(obj), [obj]);
+  if (entries.length === 0) {
+    return <p className="px-2 py-1.5 text-xs text-muted-foreground">（空）</p>;
+  }
+  return (
+    <dl className="divide-y divide-border/60 rounded-md border border-border bg-background text-xs">
+      {entries.map(([k, v]) => (
+        <div key={k} className="flex items-start gap-2 px-2 py-1">
+          <dt className="shrink-0 pt-px font-mono text-muted-foreground">{k}</dt>
+          <FieldValue value={v} />
+        </div>
+      ))}
+    </dl>
   );
 }
 

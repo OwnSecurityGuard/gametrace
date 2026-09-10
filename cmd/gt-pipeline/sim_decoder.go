@@ -127,24 +127,21 @@ func decodeSimFrame(stream grpc.BidiStreamingServer[pb.DecodeRequest, pb.DecodeR
 		})
 	}
 
-	payload := map[string]any{
-		"flow_id":        req.FlowId,
-		"correlation_id": fr.CID,
-		"msg_name":       fr.Msg,
-		"role":           role,
-		"is_push":        isPush,
+	business := simBusinessFields(fr, subjectType, subjectID)
+	analysis := map[string]any{
 		"entity":         fr.Entity,
 		"entity_type":    subjectType,
 		"entity_id":      subjectID,
 		"change_count":   len(fr.Changes),
-		"_meta":          meta,
 		"_state_changes": sc,
 	}
 
 	draft := sdkEvent.Draft{
 		Type:             "sim.event",
 		SchemaRef:        "sim_game.event.v1",
-		Value:            sdkEvent.ValueFromMap(payload),
+		Value:            sdkEvent.ValueFromMap(business), // 纯业务 payload
+		Meta:             sdkEvent.ValueFromMap(meta),     // direction/msg_name/role/is_push
+		Analysis:         sdkEvent.ValueFromMap(analysis), // entity/_state_changes 等分析
 		CorrelationKey:   fr.CID,
 		CausationInputID: causeInput,
 	}
@@ -170,6 +167,63 @@ func classifyDir(dir string) (role string, isPush bool, direction string) {
 	default: // push
 		return "push", true, "server_to_client"
 	}
+}
+
+// simBusinessFields 按消息名生成纯业务 payload 字段（供前端「业务数据」第一眼展示）。
+// playerId 取实体 id（如 Player:1001 → 1001）；changes 的 after 值并入对应字段。
+func simBusinessFields(fr simFrame, subjectType, subjectID string) map[string]any {
+	pid := subjectID
+	b := map[string]any{}
+	setAfter := func(keys ...string) {
+		for _, c := range fr.Changes {
+			for _, k := range keys {
+				if c.Path == k {
+					b[k] = c.After
+				}
+			}
+		}
+	}
+	switch fr.Msg {
+	case "Login":
+		b["playerId"] = pid
+		b["username"] = "player_" + pid
+		b["platform"] = "pc"
+	case "LoginAck":
+		b["playerId"] = pid
+		setAfter("hp", "level", "gold")
+	case "Move", "MoveAck":
+		b["playerId"] = pid
+		setAfter("x", "y")
+	case "CastSkill":
+		b["playerId"] = pid
+		b["skillId"] = "skill_fireball"
+		b["targetId"] = "Mob:2001"
+		b["manaCost"] = 20
+		setAfter("mana")
+	case "CastAck":
+		b["playerId"] = pid
+		b["skillId"] = "skill_fireball"
+	case "Damage":
+		b["targetId"] = pid
+		b["damage"] = 50
+		setAfter("hp")
+	case "MobDied":
+		b["targetId"] = pid
+	case "Loot":
+		b["playerId"] = pid
+		setAfter("gold")
+	case "LevelUp":
+		b["playerId"] = pid
+		setAfter("level")
+	case "Logout":
+		b["playerId"] = pid
+		b["reason"] = "client_quit"
+	case "PlayerJoined", "PlayerLeft", "LogoutAck":
+		b["playerId"] = pid
+	default:
+		b["playerId"] = pid
+	}
+	return b
 }
 
 // startSimDecoder 在 unix socket 上起一个真实的解码 gRPC 服务，并注册到 in-process 注册表。

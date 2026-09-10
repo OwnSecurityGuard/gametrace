@@ -19,7 +19,7 @@ func main() {
 		// token 来源：优先 GT_AUTH_TOKEN 环境变量（gt-agent 托管模式会注入）；
 		// 回退到 zzz 的自助注册 token——IDE go run 不好传 env，先保住插件归属，
 		// 换正式身份/改用脚本启动时删掉回退值。（SDK 侧同样有 env 回退逻辑。）
-		AuthToken: envOr("GT_AUTH_TOKEN", "gt_tok_change_me"),
+		AuthToken: envOr("GT_AUTH_TOKEN", "gt_1cee1e53d7492c0cb2df60417508a0dbd481aba61335a20e"),
 	})
 }
 
@@ -45,14 +45,10 @@ func decodePacket(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error
 	}
 
 	for _, e := range events {
-		combined := make(map[string]any, len(e.Payload)+1)
-		for k, v := range e.Payload {
-			combined[k] = v
-		}
-		if len(e.Meta) > 0 {
-			combined["_meta"] = e.Meta // 保留键，宿主解析进 Context 后剔除
-		}
-		mp, mErr := valueFromMap(combined).MarshalMsgpack()
+		// v0.8.0 契约：Payload（纯业务）与 Meta 分开传输，宿主据此填充
+		// Event.Meta，前端「元信息」独立展示，不再混入业务 payload。
+		payloadVal := valueFromMap(e.Payload)
+		mp, mErr := payloadVal.MarshalMsgpack()
 		if mErr != nil {
 			return stream.Send(&pb.DecodeResponseV2{
 				InputId: req.GetInputId(),
@@ -60,11 +56,24 @@ func decodePacket(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error
 				Error:   "marshal: " + mErr.Error(),
 			})
 		}
+		var metaData []byte
+		if len(e.Meta) > 0 {
+			metaVal := valueFromMap(e.Meta)
+			metaData, mErr = metaVal.MarshalMsgpack()
+			if mErr != nil {
+				return stream.Send(&pb.DecodeResponseV2{
+					InputId: req.GetInputId(),
+					Done:    true,
+					Error:   "marshal meta: " + mErr.Error(),
+				})
+			}
+		}
 		if err := stream.Send(&pb.DecodeResponseV2{
 			InputId:          req.GetInputId(),
 			EventType:        e.EventType,
 			SchemaId:         e.SchemaID,
 			PayloadMsgpack:   mp,
+			MetaMsgpack:      metaData,
 			CorrelationKey:   e.CorrelationKey,
 			CausationInputId: e.CausationInputID,
 		}); err != nil {

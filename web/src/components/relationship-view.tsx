@@ -184,7 +184,7 @@ export function RelationshipView({ sessionId, filter }: RelationshipViewProps) {
               ) : (
                 <ul className="space-y-2">
                   {requestWithResponses.map((req) => {
-                    const rMeta = extractMeta(req.data);
+                    const rMeta = extractMeta(req.data, req.meta);
                     const responses = responsesOf.get(req.id) ?? [];
                     return (
                       <li key={req.id} className="rounded-lg border border-border bg-background p-2">
@@ -199,7 +199,7 @@ export function RelationshipView({ sessionId, filter }: RelationshipViewProps) {
                         </div>
                         <ul className="mt-1 space-y-0.5 pl-6">
                           {responses.map((res) => {
-                            const sMeta = extractMeta(res.data);
+                            const sMeta = extractMeta(res.data, res.meta);
                             return (
                               <li key={res.id} className="flex items-center gap-2">
                                 <span className="text-[10px] text-muted-foreground/50">↳</span>
@@ -239,7 +239,7 @@ function EventTreeNode({
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [showJson, setShowJson] = useState(false);
-  const meta = useMemo(() => extractMeta(event.data), [event.data]);
+  const meta = useMemo(() => extractMeta(event.data, event.meta), [event.data, event.meta]);
   const children = childrenOf.get(event.id) ?? [];
   const hasChildren = children.length > 0;
 

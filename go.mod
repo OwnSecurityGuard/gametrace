@@ -19,8 +19,10 @@ require (
 )
 
 // 契约单向流动：SDK 定义，gametrace 消费。
-// 已切换为已发布的远程模块 gt-plugin-sdk v0.7.1（无 replace），
-// 任何人 clone 后可直接构建。本地开发调试 SDK 时再临时加 replace。
+// 本地开发调试 SDK（v0.8.0，Payload/Meta/Analysis 分离）时临时加 replace，
+// SDK 正式发布后切回远程版本。
+
+replace github.com/OwnSecurityGuard/gt-plugin-sdk => E:\ai_workspace\gt-plugin-sdk
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

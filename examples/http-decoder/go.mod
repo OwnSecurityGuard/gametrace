@@ -10,6 +10,10 @@ require (
 	google.golang.org/grpc v1.71.0
 )
 
+// 本地开发调试 SDK（v0.8.0，Payload/Meta/Analysis 分离）时临时加 replace，
+// SDK 正式发布后切回远程版本。
+replace github.com/OwnSecurityGuard/gt-plugin-sdk => E:\ai_workspace\gt-plugin-sdk
+
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
