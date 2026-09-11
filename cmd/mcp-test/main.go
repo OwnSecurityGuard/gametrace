@@ -55,6 +55,4 @@ func main() {
 	call(2, "start_capture", map[string]any{"port": 8080, "plugin": "http", "pcap_file": "test-http.pcap"})
 	call(3, "stop_capture", map[string]any{})
 	call(4, "list_decoded_data", map[string]any{"limit": 20})
-	call(5, "aggregate_query", map[string]any{"expression": "name == \"http_req_count\""})
-	call(6, "aggregate_query", map[string]any{"expression": "name == \"http_req_rate\""})
 }

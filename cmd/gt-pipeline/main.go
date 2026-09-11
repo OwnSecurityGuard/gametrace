@@ -1,5 +1,5 @@
 // Command gt-pipeline 是抓包+解码+分析+落库进程。
-// 持有 in-process Capture Source、Dispatcher、Analyze Engine，
+// 持有 in-process Capture Source、Dispatcher、Semantic Engine（执行插件 manifest 上报的语义规则），
 // 写 SQLite via EventWriter/ProjectionWriter，暴露 CaptureControl gRPC server。
 package main
 
