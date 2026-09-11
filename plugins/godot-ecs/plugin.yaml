@@ -29,6 +29,7 @@ schemas:
     description: 连接建立时服务端下发的握手帧，告知客户端自身实体 ID、世界边界与广播频率。
     strict: false
     fields:
+      msg_type: { type: string, queryable: true, description: 判别字段 t 的原始值（消息类型名） }
       id:    { type: int64, queryable: true, description: 服务端分配的实体 ID }
       hz:    { type: int64, queryable: true, description: 服务端模拟/广播频率 }
       npcs:  { type: int64, queryable: true, optional: true, description: 服务端漫游 NPC 数量 }
@@ -42,6 +43,7 @@ schemas:
     description: 客户端以 20Hz 上报的本地玩家位置/朝向/移动状态（客户端权威）。
     strict: false
     fields:
+      msg_type: { type: string, queryable: true, description: 判别字段 t 的原始值（消息类型名） }
       x:   { type: float64, unit: m }
       y:   { type: float64, unit: m }
       z:   { type: float64, unit: m }
@@ -53,12 +55,14 @@ schemas:
     name: ECS ping (client -> server)
     strict: false
     fields:
+      msg_type: { type: string, queryable: true, description: 判别字段 t 的原始值（消息类型名） }
       ts: { type: int64, queryable: true, description: 客户端发起时间戳 }
   - id: godot_ecs.pong
     version: 1
     name: ECS pong (server -> client)
     strict: false
     fields:
+      msg_type: { type: string, queryable: true, description: 判别字段 t 的原始值（消息类型名） }
       ts:   { type: int64, queryable: true, description: 回显的客户端时间戳，用于 RTT }
       tick: { type: int64, queryable: true, description: 服务端当前帧号 }
   - id: godot_ecs.state
@@ -67,6 +71,7 @@ schemas:
     description: 服务端 30Hz 广播的全量世界快照，含所有玩家与 NPC 实体状态。
     strict: false
     fields:
+      msg_type:  { type: string, queryable: true, description: 判别字段 t 的原始值（消息类型名） }
       tick:      { type: int64, queryable: true, description: 服务端模拟帧号 }
       ent_count: { type: int64, queryable: true, optional: true, description: 快照内实体数 }
       # 注意：queryable 只对顶层标量子字段生效。数组元素不可查询——宿主投影是
@@ -98,9 +103,19 @@ schemas:
       msg_type: { type: string, queryable: true, description: 原始 t 字段值 }
       raw:      { type: string, optional: true, description: 原始 JSON 文本（截断至 4KB） }
 # === 语义规则（Protocol Semantic Rule，spec：插件声明、平台执行）===
-# GJSON path 基于 decoder 产出的事件 payload：业务字段在顶层，
-# 方向/消息名在 _meta（宿主保留 _meta 不剔除）。
+# GJSON path 基于 decoder 产出的事件 payload：业务字段在顶层（含 msg_type），
+# 方向在 _meta（宿主保留 _meta 不剔除）。
 semantic_rules:
+  # name：消息名称从 payload 的 msg_type 字段提取（替代解码器硬编码），
+  # 宿主写入 meta.msg_name；同事件内后续 pair/annotate 规则可按 _meta.msg_name 判定
+  # （求值第一遍先执行 name 并把结果注入 _meta.msg_name）。
+  - id: godot_ecs.name_msg
+    when:
+      - path: msg_type
+        op: exists
+    effect:
+      type: name
+      key: msg_type
   # ping ↔ pong：客户端 ts 回显配对（RTT 链路）。同规则、ts 相等、
   # 各占一个 side 时配对，宿主为双方写同一个 CorrelationID，后到者写 CausationID。
   - id: godot_ecs.pair_ping_pong

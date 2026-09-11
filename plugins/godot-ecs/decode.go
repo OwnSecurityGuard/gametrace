@@ -133,8 +133,7 @@ func decodeMessage(body []byte, dir string) *Event {
 	obj, ok := parseJSON(body)
 	if !ok {
 		return newEvent("unknown", dir, msgTypeOf(nil), map[string]any{
-			"msg_type": "",
-			"raw":      truncate(string(body)),
+			"raw": truncate(string(body)),
 		}, false)
 	}
 
@@ -152,14 +151,17 @@ func decodeMessage(body []byte, dir string) *Event {
 		return newEvent("ping", dir, t, decodePing(obj), false)
 	default:
 		return newEvent("unknown", dir, t, map[string]any{
-			"msg_type": t,
-			"raw":      truncate(string(body)),
+			"raw": truncate(string(body)),
 		}, false)
 	}
 }
 
 // newEvent 组装事件。name 同时用作 event_type 与 schema id 前缀；push 表示这是
 // 服务端主动下推的消息（welcome / state / pong）。
+//
+// 判别字段 "t" 归一化为 msg_type 写入业务 payload 顶层：消息名称不再由解码器
+// 硬编码进 _meta.msg_name，而是由插件声明的 name 语义规则（GJSON path: msg_type）
+// 从 payload 提取，宿主统一写入 meta.msg_name（规则优先于解码器硬编码）。
 //
 // dir 为空时（代理类输入无端口信息）按消息类型推断方向：上行只有 pos/ping，
 // 下行只有 welcome/pong/state。
@@ -171,13 +173,13 @@ func newEvent(name, dir, msgType string, payload map[string]any, push bool) *Eve
 	if payload == nil {
 		payload = map[string]any{}
 	}
+	payload["msg_type"] = msgType
 	return &Event{
 		EventType: "godot_ecs." + name,
 		SchemaID:  "godot_ecs." + name + ".v1",
 		Payload:   payload,
 		Meta: map[string]any{
 			"direction": finalDir,
-			"msg_name":  msgType,
 			"is_push":   push,
 		},
 	}

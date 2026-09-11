@@ -60,6 +60,18 @@ schemas:
       account_id:        { type: int64, queryable: true, optional: true }
       worlds:            { type: array, optional: true }
       characters:        { type: array, optional: true }
+# === 语义规则（Protocol Semantic Rule，spec：插件声明、平台执行）===
+# 消息名称不再由解码器硬编码进 _meta.msg_name：请求/响应 payload 顶层统一写有
+# endpoint 字段（decode.go），由 name 规则从 payload 提取并写入 meta.msg_name，
+# 前端据此显示消息名称。
+semantic_rules:
+  - id: godot_gateway.name_endpoint
+    when:
+      - path: endpoint
+        op: exists
+    effect:
+      type: name
+      key: endpoint
 meta:
   author: opencode
   description: >-

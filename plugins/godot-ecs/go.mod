@@ -3,7 +3,7 @@ module godot-ecs
 go 1.25.5
 
 require (
-	github.com/OwnSecurityGuard/gt-plugin-sdk v0.8.0
+	github.com/OwnSecurityGuard/gt-plugin-sdk v0.8.2
 	github.com/google/gopacket v1.1.19
 	google.golang.org/grpc v1.83.2
 )

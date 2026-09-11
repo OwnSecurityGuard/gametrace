@@ -262,7 +262,6 @@ func decodeRequestMsg(m *httpMsg) *Event {
 		Payload:   payload,
 		Meta: map[string]any{
 			"direction": "client_to_server",
-			"msg_name":  endpoint,
 			"is_push":   false,
 		},
 	}
@@ -328,7 +327,6 @@ func buildResponseEvent(endpoint string, inferred bool, fields map[string]any, s
 		Payload:   fields,
 		Meta: map[string]any{
 			"direction": "server_to_client",
-			"msg_name":  endpoint,
 			"is_push":   false,
 		},
 	}

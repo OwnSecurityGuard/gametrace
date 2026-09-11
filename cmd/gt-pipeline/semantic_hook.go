@@ -30,6 +30,9 @@ const (
 	// metaKeySemantic 是 annotate 效果写入的 meta 字段名。
 	metaKeySemantic = "semantic"
 
+	// metaKeyMsgName 是 name 效果写入的 meta 字段名（规则从 payload 提取的消息名）。
+	metaKeyMsgName = "msg_name"
+
 	// maxPendingPairs 是待配对池上限，防止异常流量下无限增长。
 	maxPendingPairs = 4096
 
@@ -130,6 +133,7 @@ func (e *semanticEngine) enrichSemantics(ev *event.Event) []*event.Event {
 		return nil
 	}
 
+	e.applyMsgNames(ev, res.Names)
 	e.applySemantics(ev, res.Semantics)
 	e.applyPairs(ev, res.Pairs)
 	return e.buildChildren(ev, res.Children)
@@ -153,6 +157,45 @@ func withMetaObject(payload, meta event.Value) event.Value {
 	}
 	merged["_meta"] = meta
 	return event.ValueObject(merged)
+}
+
+// applyMsgNames 把 name 规则提取的消息名写入 Meta（规则优先于解码器硬编码）。
+// 取首个命中（规则声明顺序）；旧插件 payload 里已有 _meta 时同步写入，保证旧数据展示一致。
+func (e *semanticEngine) applyMsgNames(ev *event.Event, names []rule.NameHit) {
+	if len(names) == 0 {
+		return
+	}
+	name := names[0].Value
+	if name == "" {
+		return
+	}
+
+	// 新模型：消息名写入 ev.Meta.msg_name。
+	meta := map[string]event.Value{}
+	if cur, ok := ev.Meta.AsObject(); ok {
+		for k, v := range cur {
+			meta[k] = v
+		}
+	}
+	meta[metaKeyMsgName] = event.ValueString(name)
+	ev.Meta = event.ValueObject(meta)
+
+	// 旧模型兼容：payload 已带 _meta 时同步写 msg_name 键。
+	if cur, ok := ev.Payload.Value.Get("_meta"); ok && cur.Object != nil {
+		oldMeta := make(map[string]event.Value, len(cur.Object)+1)
+		for k, v := range cur.Object {
+			oldMeta[k] = v
+		}
+		oldMeta[metaKeyMsgName] = event.ValueString(name)
+		root := make(map[string]event.Value, len(ev.Payload.Value.Object)+1)
+		if ev.Payload.Value.Object != nil {
+			for k, v := range ev.Payload.Value.Object {
+				root[k] = v
+			}
+		}
+		root["_meta"] = event.ValueObject(oldMeta)
+		ev.Payload.Value = event.ValueObject(root)
+	}
 }
 
 // applySemantics 把 annotate 命中的语义标签写进独立 Meta（新模型）。

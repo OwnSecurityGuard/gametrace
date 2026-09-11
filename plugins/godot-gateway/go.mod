@@ -2,7 +2,7 @@ module godot-gateway
 
 go 1.25.5
 
-require github.com/OwnSecurityGuard/gt-plugin-sdk v0.8.0
+require github.com/OwnSecurityGuard/gt-plugin-sdk v0.8.2
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
