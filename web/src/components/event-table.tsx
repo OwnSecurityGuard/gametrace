@@ -41,12 +41,14 @@ import {
   OpBadge,
   type EventMeta,
 } from "@/lib/event-display";
-import { eventMatchesQuery } from "@/lib/fuzzy";
+import { eventMatchesQuery, eventMatchesDirection, type DirectionFilter } from "@/lib/fuzzy";
 
 interface EventTableProps {
   sessionId: string | null;
   /** 模糊查询关键词；非空时一次性拉取较大批次在前端内存过滤，空时保持分页拉取。 */
   query: string;
+  /** 消息方向过滤（C→S / S→C，空 = 全部）；与 query 叠加为 AND。 */
+  direction: DirectionFilter;
 }
 
 const PAGE_SIZES = [20, 50, 100];
@@ -720,7 +722,7 @@ const EventRow = memo(function EventRow({
 
 // ─── 主表格组件 ───────────────────────────────────────────────
 
-export function EventTable({ sessionId, query }: EventTableProps) {
+export function EventTable({ sessionId, query, direction }: EventTableProps) {
   const [page, setPage] = useState<number>(0);
   const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0]!);
   // 允许多行同时展开：对比请求/响应时不用来回点，这是最常见的阅读动作。
@@ -730,13 +732,13 @@ export function EventTable({ sessionId, query }: EventTableProps) {
   useEffect(() => {
     setPage(0);
     setExpandedIds(new Set());
-  }, [sessionId, query]);
+  }, [sessionId, query, direction]);
 
   const offset = page * pageSize;
 
-  // 有查询词时：一次性拉取较大批次在前端内存过滤（保证搜索跨页完整不遗漏）；
-  // 无查询词时：保持原有分页拉取。禁用 filter 表达式，改由前端过滤。
-  const useLargeLimit = !!query;
+  // 有查询词或方向过滤时：一次性拉取较大批次在前端内存过滤（保证搜索跨页完整不遗漏）；
+  // 无过滤条件时：保持原有分页拉取。禁用 filter 表达式，改由前端过滤。
+  const useLargeLimit = !!query || !!direction;
   const effectiveLimit = useLargeLimit ? QUERY_FETCH_LIMIT : pageSize;
   const effectiveOffset = useLargeLimit ? 0 : offset;
 
@@ -756,11 +758,17 @@ export function EventTable({ sessionId, query }: EventTableProps) {
   const events = useMemo(() => data?.events ?? [], [data]);
   const totalMatched = data?.total_matched ?? 0;
 
-  // 前端模糊过滤：搜索态在已拉取的批次上按 query 过滤。
+  // 前端过滤：搜索态在已拉取的批次上按 query + direction 过滤（AND）。
   const filteredEvents = useMemo(() => {
-    if (!query) return events;
-    return events.filter((e) => eventMatchesQuery(e, query));
-  }, [events, query]);
+    if (!query && !direction) return events;
+    return events.filter((e) => {
+      if (query && !eventMatchesQuery(e, query)) return false;
+      if (direction && !eventMatchesDirection(e, direction)) return false;
+      return true;
+    });
+  }, [events, query, direction]);
+
+  const filtering = !!query || !!direction;
 
   const totalPages = Math.ceil(totalMatched / pageSize);
   // 整页都没有 capture 上下文（非代理抓包）时隐藏该列，把宽度让给消息与摘要。
@@ -869,11 +877,11 @@ export function EventTable({ sessionId, query }: EventTableProps) {
   if (filteredEvents.length === 0) {
     return (
       <EmptyState
-        icon={query || totalMatched === 0 ? <SearchX className="h-5 w-5" /> : <Table2 className="h-5 w-5" />}
-        title={query ? "无匹配结果" : totalMatched === 0 ? "暂无解码数据" : "无数据"}
+        icon={filtering || totalMatched === 0 ? <SearchX className="h-5 w-5" /> : <Table2 className="h-5 w-5" />}
+        title={filtering ? "无匹配结果" : totalMatched === 0 ? "暂无解码数据" : "无数据"}
         hint={
-          query
-            ? "没有事件命中当前关键词，尝试更换或清除模糊搜索条件。"
+          filtering
+            ? "没有事件命中当前过滤条件，尝试更换或清除搜索条件 / 方向过滤。"
             : totalMatched === 0
               ? "该会话尚未产生可解码的协议事件，或解码插件尚未绑定。"
               : "暂无数据。"
@@ -891,7 +899,7 @@ export function EventTable({ sessionId, query }: EventTableProps) {
       {/* 统计信息 + 每页条数（搜索态隐藏分页相关控件） */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground" aria-live="polite">
         <span className="tabular-nums">
-          {query ? (
+          {filtering ? (
             <>
               命中 <b className="font-semibold text-foreground">{filteredEvents.length}</b> 条
             </>
@@ -903,7 +911,7 @@ export function EventTable({ sessionId, query }: EventTableProps) {
           {isPlaceholderData ? " · 更新中…" : ""}
           {expandedIds.size > 0 ? ` · 已展开 ${expandedIds.size} 行` : ""}
         </span>
-        {!query && (
+        {!filtering && (
           <span className="flex items-center gap-2">
             <span className="text-[11px] text-muted-foreground/70">点击行展开完整 JSON</span>
             <label className="flex items-center gap-1">
@@ -961,8 +969,8 @@ export function EventTable({ sessionId, query }: EventTableProps) {
         </TableBody>
       </Table>
 
-      {/* 分页控件（搜索态隐藏） */}
-      {!query && totalPages > 1 && (
+      {/* 分页控件（过滤态隐藏） */}
+      {!filtering && totalPages > 1 && (
         <div className="flex items-center justify-center gap-2 pt-2">
           <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setPage(0)} disabled={page === 0} aria-label="第一页">
             <ChevronsLeft className="h-4 w-4" />

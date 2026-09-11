@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Dialog } from "@/components/ui/dialog";
 import { OpBadge, HighlightedJson } from "@/lib/event-display";
-import { changeMatchesQuery } from "@/lib/fuzzy";
+import { changeMatchesQuery, changeMatchesDirection, type DirectionFilter } from "@/lib/fuzzy";
 import { cn } from "@/lib/utils";
 import {
   Crosshair,
@@ -42,6 +42,8 @@ interface StateChangeExplorerProps {
   sessionId: string | null;
   /** 模糊查询关键词；非空时在 changes 流上前端过滤并显示扁平命中列表。 */
   query?: string;
+  /** 消息方向过滤（C→S / S→C，空 = 全部）；与 query 叠加为 AND。 */
+  direction?: DirectionFilter;
 }
 
 type ViewId = "operation" | "entity" | "time";
@@ -156,7 +158,7 @@ function TimeLabel({
 
 // ===== 主组件 =====
 
-export function StateChangeExplorer({ sessionId, query }: StateChangeExplorerProps) {
+export function StateChangeExplorer({ sessionId, query, direction }: StateChangeExplorerProps) {
   const [view, setView] = useState<ViewId>("operation");
   const [anchorKind, setAnchorKind] = useState<AnchorKind>("");
   const [anchorId, setAnchorId] = useState("");
@@ -191,11 +193,18 @@ export function StateChangeExplorer({ sessionId, query }: StateChangeExplorerPro
   const { data, isLoading, isError, error, refetch, isFetching } = useStateChanges(sessionId, params);
 
   const changes = data?.changes ?? [];
-  const hasQuery = !!query;
-  // 前端模糊过滤：搜索态只展示命中的扁平变更；无搜索时走原有三视图。
+  const hasFilter = !!query || !!direction;
+  // 前端过滤：搜索/方向过滤时只展示命中的扁平变更；无过滤时走原有三视图。
   const matchedChanges = useMemo(
-    () => (hasQuery ? changes.filter((c) => changeMatchesQuery(c, query!)) : changes),
-    [changes, hasQuery, query],
+    () =>
+      hasFilter
+        ? changes.filter((c) => {
+            if (query && !changeMatchesQuery(c, query)) return false;
+            if (direction && !changeMatchesDirection(c, direction)) return false;
+            return true;
+          })
+        : changes,
+    [changes, hasFilter, query, direction],
   );
 
   // 锚点候选随查询结果累积：先看到什么就能拿什么当锚点，不必额外拉全量列表。
@@ -239,8 +248,8 @@ export function StateChangeExplorer({ sessionId, query }: StateChangeExplorerPro
 
   return (
     <div className="flex h-full flex-col gap-3">
-      {/* 查询态只做扁平模糊搜索，隐藏锚点/窗口/排序等高级筛选提干扰 */}
-      {!hasQuery && (
+      {/* 查询/方向过滤态只做扁平过滤，隐藏锚点/窗口/排序等高级筛选提干扰 */}
+      {!hasFilter && (
         <QueryBar
           anchorKind={anchorKind}
           onAnchorKind={(k) => {
@@ -280,8 +289,8 @@ export function StateChangeExplorer({ sessionId, query }: StateChangeExplorerPro
         />
       )}
 
-      {/* 三视图切换：共用同一份数据，只是换渲染维度（查询态隐藏） */}
-      {!hasQuery && (
+      {/* 三视图切换：共用同一份数据，只是换渲染维度（过滤态隐藏） */}
+      {!hasFilter && (
         <div
           role="tablist"
           aria-label="状态变更视图"
@@ -339,8 +348,8 @@ export function StateChangeExplorer({ sessionId, query }: StateChangeExplorerPro
         />
       )}
 
-      {/* 查询态：扁平命中变更列表 */}
-      {hasQuery && changes.length > 0 && (
+      {/* 过滤态：扁平命中变更列表 */}
+      {hasFilter && changes.length > 0 && (
         <div className="space-y-2">
           <div className="px-1 text-xs text-muted-foreground" aria-live="polite">
             命中 <b className="font-semibold text-foreground">{matchedChanges.length}</b> 条状态变更
@@ -349,7 +358,7 @@ export function StateChangeExplorer({ sessionId, query }: StateChangeExplorerPro
             <EmptyState
               icon={<TableProperties className="h-5 w-5" />}
               title="无匹配状态变更"
-              hint="没有变更命中当前关键词，尝试更换或清除模糊搜索条件。"
+              hint="没有变更命中当前过滤条件，尝试更换或清除模糊搜索条件 / 方向过滤。"
               className="h-56 justify-center"
             />
           ) : (
@@ -368,8 +377,8 @@ export function StateChangeExplorer({ sessionId, query }: StateChangeExplorerPro
         </div>
       )}
 
-      {/* 非查询态：三视图 */}
-      {!hasQuery && data && changes.length > 0 && (
+      {/* 非过滤态：三视图 */}
+      {!hasFilter && data && changes.length > 0 && (
         <>
           <SummaryBar data={data} />
           {view === "operation" && (

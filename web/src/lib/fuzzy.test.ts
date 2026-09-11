@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { fuzzyTokens, haystackIncludes, eventMatchesQuery, changeMatchesQuery } from "./fuzzy";
+import {
+  fuzzyTokens,
+  haystackIncludes,
+  eventMatchesQuery,
+  changeMatchesQuery,
+  eventMatchesDirection,
+  changeMatchesDirection,
+} from "./fuzzy";
 import type { DecodedEvent } from "@/types/event";
 import type { Change } from "@/types/state-change";
 
@@ -57,6 +64,23 @@ describe("eventMatchesQuery", () => {
   });
 });
 
+describe("eventMatchesDirection", () => {
+  it("空方向视为全部，恒匹配", () => {
+    expect(eventMatchesDirection(event, "")).toBe(true);
+  });
+  it("方向一致命中", () => {
+    expect(eventMatchesDirection(event, "client_to_server")).toBe(true);
+  });
+  it("方向不一致不命中", () => {
+    expect(eventMatchesDirection(event, "server_to_client")).toBe(false);
+  });
+  it("事件方向缺失时按空串比较", () => {
+    const noDir: DecodedEvent = { ...event, meta: {} };
+    expect(eventMatchesDirection(noDir, "client_to_server")).toBe(false);
+    expect(eventMatchesDirection(noDir, "")).toBe(true);
+  });
+});
+
 const change: Change = {
   id: "c1",
   seq: 1,
@@ -96,5 +120,23 @@ describe("changeMatchesQuery", () => {
   });
   it("空查询恒匹配", () => {
     expect(changeMatchesQuery(change, "")).toBe(true);
+  });
+});
+
+describe("changeMatchesDirection", () => {
+  it("空方向视为全部，恒匹配", () => {
+    expect(changeMatchesDirection(change, "")).toBe(true);
+  });
+  it("按来源消息方向过滤", () => {
+    const withDir: Change = {
+      ...change,
+      source: { ...change.source, direction: "client_to_server" },
+    };
+    expect(changeMatchesDirection(withDir, "client_to_server")).toBe(true);
+    expect(changeMatchesDirection(withDir, "server_to_client")).toBe(false);
+  });
+  it("来源方向缺失时按空串比较", () => {
+    expect(changeMatchesDirection(change, "client_to_server")).toBe(false);
+    expect(changeMatchesDirection(change, "")).toBe(true);
   });
 });

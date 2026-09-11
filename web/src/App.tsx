@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { SessionSidebar } from "@/components/session-sidebar";
 import { FilterBar } from "@/components/filter-bar";
+import type { DirectionFilter } from "@/lib/fuzzy";
 import { RawPacketTable } from "@/components/raw-packet-table";
 import { ConnectionsPage } from "@/components/connections-page";
 import { PluginPanel } from "@/components/plugin-panel";
@@ -64,6 +65,8 @@ export default function App() {
   const [linkedRunId, setLinkedRunId] = useState<string | null>(null);
   const [linkedRunSessionId, setLinkedRunSessionId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  // 协议数据页的消息方向过滤（C→S / S→C，空 = 全部）。
+  const [direction, setDirection] = useState<DirectionFilter>("");
   const [activeTab, setActiveTab] = useState<ViewTab>("home");
   // 「更多」下拉是否展开（普通用户把高级视图藏在这里）。
   const [moreOpen, setMoreOpen] = useState(false);
@@ -520,6 +523,8 @@ export default function App() {
             <FilterBar
               query={query}
               onQueryChange={setQuery}
+              direction={direction}
+              onDirectionChange={setDirection}
               inputRef={filterInputRef}
             />
           </div>
@@ -553,7 +558,7 @@ export default function App() {
           )}
           {activeTab === "decoded" && (
             <div className="flex h-full flex-col overflow-auto p-4 gt-scroll">
-              <DecodedView sessionId={selectedSessionId} query={query} />
+              <DecodedView sessionId={selectedSessionId} query={query} direction={direction} />
             </div>
           )}
           {activeTab === "connections" && (

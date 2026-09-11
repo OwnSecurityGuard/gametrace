@@ -29,17 +29,19 @@ import {
   MessageCell,
   HighlightedJson,
 } from "@/lib/event-display";
-import { eventMatchesQuery } from "@/lib/fuzzy";
+import { eventMatchesQuery, eventMatchesDirection, type DirectionFilter } from "@/lib/fuzzy";
 
 interface RelationshipViewProps {
   sessionId: string | null;
   query: string;
+  /** 消息方向过滤（C→S / S→C，空 = 全部）；与 query 叠加为 AND。 */
+  direction: DirectionFilter;
 }
 
 // 加载上限：关系视图需要整段事件来建父子森林与配对组，取一次较大的批次。
 const RELATION_FETCH_LIMIT = 1000;
 
-export function RelationshipView({ sessionId, query }: RelationshipViewProps) {
+export function RelationshipView({ sessionId, query, direction }: RelationshipViewProps) {
   const { data, isLoading, isError, error, refetch } = useDecodedData(sessionId, {
     limit: RELATION_FETCH_LIMIT,
     offset: 0,
@@ -51,13 +53,17 @@ export function RelationshipView({ sessionId, query }: RelationshipViewProps) {
   const totalMatched = data?.total_matched ?? 0;
   const truncated = totalMatched > events.length;
 
-  // 前端模糊过滤：在已加载的整段事件上按 query 过滤，再据此建父子森林与配对组。
+  // 前端过滤：在已加载的整段事件上按 query + direction 过滤（AND），再据此建父子森林与配对组。
   const filteredEvents = useMemo(() => {
-    if (!query) return events;
-    return events.filter((e) => eventMatchesQuery(e, query));
-  }, [events, query]);
+    if (!query && !direction) return events;
+    return events.filter((e) => {
+      if (query && !eventMatchesQuery(e, query)) return false;
+      if (direction && !eventMatchesDirection(e, direction)) return false;
+      return true;
+    });
+  }, [events, query, direction]);
 
-  const hasQuery = !!query;
+  const hasFilter = !!query || !!direction;
 
   // 父子索引：parent_id → 子事件；roots = 没有父事件在已载入集合内的顶层事件。
   const { childrenOf, roots } = useMemo(() => {
@@ -112,7 +118,7 @@ export function RelationshipView({ sessionId, query }: RelationshipViewProps) {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
-          已载入 {filteredEvents.length} 条事件{hasQuery ? "（命中模糊搜索）" : ""}
+          已载入 {filteredEvents.length} 条事件{hasFilter ? "（命中过滤条件）" : ""}
           {truncated ? `（会话共 ${totalMatched} 条，关系视图最多取前 ${RELATION_FETCH_LIMIT} 条）` : ""}
           {" "}· 有关系 {relatedIds.size} 条
         </p>
@@ -147,10 +153,10 @@ export function RelationshipView({ sessionId, query }: RelationshipViewProps) {
       ) : filteredEvents.length === 0 ? (
         <EmptyState
           icon={<Inbox className="h-5 w-5" />}
-          title={hasQuery ? "无匹配关系" : "暂无关系数据"}
+          title={hasFilter ? "无匹配关系" : "暂无关系数据"}
           hint={
-            hasQuery
-              ? "没有事件命中当前关键词。尝试更换或清除模糊搜索条件。"
+            hasFilter
+              ? "没有事件命中当前过滤条件。尝试更换或清除模糊搜索条件 / 方向过滤。"
               : "未解码到 extract 父子或 pair 配对。尝试清除模糊搜索条件，或确认解码插件声明了对应语义规则。"
           }
           className="h-64 justify-center"
