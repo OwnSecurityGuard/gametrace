@@ -135,16 +135,16 @@ func (lc *localControl) statusSnapshot() map[string]any {
 	state, sessionID, iface, portsCSV, lastErr, updatedMs := lc.runner.State()
 	d := lc.runner.Data()
 	return map[string]any{
-			"probe_id":    lc.cfg.ProbeID,
-			"name":        lc.cfg.Name,
-			"version":     version.String(),
-			"control_addr": lc.addr,
-			"ingest_addr": lc.ingest,
-			"registered":  lc.cfg.ProbeID != "" && lc.cfg.ProbeToken != "",
-			"capture": map[string]any{
-				"state": state, "session_id": sessionID, "iface": iface,
-				"ports": portsCSV, "error": lastErr, "updated_unix_ms": updatedMs,
-			},
+		"probe_id":     lc.cfg.ProbeID,
+		"name":         lc.cfg.Name,
+		"version":      version.String(),
+		"control_addr": lc.addr,
+		"ingest_addr":  lc.ingest,
+		"registered":   lc.cfg.ProbeID != "" && lc.cfg.ProbeToken != "",
+		"capture": map[string]any{
+			"state": state, "session_id": sessionID, "iface": iface,
+			"ports": portsCSV, "error": lastErr, "updated_unix_ms": updatedMs,
+		},
 		"data": map[string]any{
 			"last_packet_unix_ms": d.LastPacketMs, "last_upload_unix_ms": d.LastUploadMs,
 			"packets_captured": d.PacketsCaptured, "packets_acked": d.PacketsAcked,
@@ -256,6 +256,7 @@ func (lc *localControl) handleStart(w http.ResponseWriter, r *http.Request) {
 		Ports     []int32  `json:"ports"`
 		Hosts     []string `json:"hosts"`
 		BPF       string   `json:"bpf"`
+		Protocol  string   `json:"protocol"` // tcp/udp/both；空 = tcp（端口派生）
 		SnapLen   int32    `json:"snaplen"`
 		Promisc   bool     `json:"promisc"`
 	}
@@ -278,7 +279,7 @@ func (lc *localControl) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	err := lc.runner.Start(CaptureParams{
 		SessionID: req.SessionID, Iface: iface, Ports: req.Ports,
-		Hosts: req.Hosts, BPF: req.BPF, SnapLen: req.SnapLen, Promisc: req.Promisc,
+		Hosts: req.Hosts, Protocol: req.Protocol, BPF: req.BPF, SnapLen: req.SnapLen, Promisc: req.Promisc,
 	}, lc.ingest, lc.cfg.ProbeToken)
 	if err != nil {
 		writeJSONLocal(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
@@ -313,15 +314,16 @@ func (lc *localControl) handleFilter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Ports []int32  `json:"ports"`
-		Hosts []string `json:"hosts"`
-		BPF   string   `json:"bpf"`
+		Ports    []int32  `json:"ports"`
+		Hosts    []string `json:"hosts"`
+		BPF      string   `json:"bpf"`
+		Protocol string   `json:"protocol"` // tcp/udp/both；空 = tcp（端口派生）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := lc.runner.UpdateFilter(req.Ports, req.Hosts, req.BPF); err != nil {
+	if err := lc.runner.UpdateFilter(req.Ports, req.Hosts, req.Protocol, req.BPF); err != nil {
 		writeJSONLocal(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}

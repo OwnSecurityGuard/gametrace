@@ -2766,8 +2766,9 @@ func main() {
 	s.AddTool(mcp.NewTool("probe_start_capture",
 		mcp.WithDescription("Start a capture session on a selected probe (the user-facing 'create capture' flow: pick machine + ports + start). Creates a new session owned by the caller and assigns it to the probe via desired-state; returns session_id — poll get_session_status for the capture state machine (starting → running). The probe must be online."),
 		mcp.WithString("probe_id", mcp.Required(), mcp.Description("Probe ID to capture on (from list_probes)")),
-		mcp.WithArray("ports", mcp.Description("TCP ports to filter, e.g. [8080]. Empty = capture everything"), mcp.Items(map[string]any{"type": "number"})),
+		mcp.WithArray("ports", mcp.Description("Ports to filter, e.g. [8080]. Empty = capture everything"), mcp.Items(map[string]any{"type": "number"})),
 		mcp.WithArray("hosts", mcp.Description("Optional host filter list"), mcp.Items(map[string]any{"type": "string"})),
+		mcp.WithString("protocol", mcp.Description("Port filter protocol: tcp/udp/both (default tcp). Only affects the ports-derived BPF; ignored when an explicit bpf is given")),
 		mcp.WithString("iface", mcp.Description("Optional single interface name on the probe machine; empty = probe auto-detects the default interface. Legacy single-nic field — prefer ifaces")),
 		mcp.WithArray("ifaces", mcp.Description("Optional list of interface names on the probe machine (see list_probes → interfaces[].name). One = capture on that nic; multiple = capture on all of them concurrently into the same session; empty = probe auto-detects the default interface"), mcp.Items(map[string]any{"type": "string"})),
 		mcp.WithString("plugin", mcp.Description("Optional decoder plugin bound to the session")),
@@ -2782,8 +2783,9 @@ func main() {
 	s.AddTool(mcp.NewTool("probe_update_filter",
 		mcp.WithDescription("Hot-update the probe's capture filter (BPF recompile, capture continues uninterrupted). Empty ports/hosts clears the filter (capture all)."),
 		mcp.WithString("probe_id", mcp.Required(), mcp.Description("Probe ID")),
-		mcp.WithArray("ports", mcp.Description("TCP ports filter"), mcp.Items(map[string]any{"type": "number"})),
+		mcp.WithArray("ports", mcp.Description("Ports filter"), mcp.Items(map[string]any{"type": "number"})),
 		mcp.WithArray("hosts", mcp.Description("Host filter list"), mcp.Items(map[string]any{"type": "string"})),
+		mcp.WithString("protocol", mcp.Description("Port filter protocol: tcp/udp/both (default tcp)")),
 	), capture.handleProbeUpdateFilter)
 
 	s.AddTool(mcp.NewTool("probe_retry_capture",

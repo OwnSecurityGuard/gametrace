@@ -25,7 +25,7 @@ type ProbeAdmin interface {
 	Get(ctx context.Context, probeID string) (*store.ProbeMeta, error)
 	StartCapture(ctx context.Context, probeID string, d probe.Desired) error
 	StopCapture(ctx context.Context, probeID string) (string, error)
-	UpdateFilter(ctx context.Context, probeID string, ports []int32, hosts []string) error
+	UpdateFilter(ctx context.Context, probeID string, ports []int32, hosts []string, protocol string) error
 	Retry(ctx context.Context, probeID string) error
 	Rename(ctx context.Context, probeID, name string) error
 	Revoke(ctx context.Context, probeID string) error
@@ -71,30 +71,30 @@ func authorizeProbe(p *store.ProbeMeta, owner string, allOwners bool) error {
 // probeInfoToProto 把 ProbeMeta（已合并在线态）转为 pb.ProbeInfo。
 func probeInfoToProto(p *store.ProbeMeta) *pb.ProbeInfo {
 	return &pb.ProbeInfo{
-		ProbeId:          p.ProbeID,
-		Name:             p.Name,
-		Owner:            p.Owner,
-		TenantId:         p.TenantID,
-		Capabilities:     p.Capabilities,
-		Version:          p.Version,
-		Hostname:         p.Hostname,
-		Os:               p.OS,
-		Arch:             p.Arch,
-		ConnectionState:  p.ConnectionState,
-		LastSeenAt:       formatTime(p.LastSeenAt),
-		CaptureState:     p.CaptureState,
-		LastSessionId:    p.LastSessionID,
-		StatusError:      p.StatusError,
-		CaptureIface:     p.CaptureIface,
-		CapturePorts:     p.CapturePorts,
-		LastPacketUnixMs: p.LastPacketMs,
-		LastUploadUnixMs: p.LastUploadMs,
-		PacketsCaptured:  p.PacketsCaptured,
-		PacketsAcked:     p.PacketsAcked,
-		SpoolDepth:       p.SpoolDepth,
-		Dropped:          p.Dropped,
-		ArchiveBytes:     p.ArchiveBytes,
-		ArchiveSegments:  p.ArchiveSegments,
+		ProbeId:           p.ProbeID,
+		Name:              p.Name,
+		Owner:             p.Owner,
+		TenantId:          p.TenantID,
+		Capabilities:      p.Capabilities,
+		Version:           p.Version,
+		Hostname:          p.Hostname,
+		Os:                p.OS,
+		Arch:              p.Arch,
+		ConnectionState:   p.ConnectionState,
+		LastSeenAt:        formatTime(p.LastSeenAt),
+		CaptureState:      p.CaptureState,
+		LastSessionId:     p.LastSessionID,
+		StatusError:       p.StatusError,
+		CaptureIface:      p.CaptureIface,
+		CapturePorts:      p.CapturePorts,
+		LastPacketUnixMs:  p.LastPacketMs,
+		LastUploadUnixMs:  p.LastUploadMs,
+		PacketsCaptured:   p.PacketsCaptured,
+		PacketsAcked:      p.PacketsAcked,
+		SpoolDepth:        p.SpoolDepth,
+		Dropped:           p.Dropped,
+		ArchiveBytes:      p.ArchiveBytes,
+		ArchiveSegments:   p.ArchiveSegments,
 		ArchiveOldestUnix: p.ArchiveOldestMs / 1000,
 		ArchiveNewestUnix: p.ArchiveNewestMs / 1000,
 		Interfaces:        nicsToProto(p.Interfaces),
@@ -196,6 +196,7 @@ func (s *Server) ProbeStartCapture(ctx context.Context, req *pb.ProbeStartCaptur
 		Ifaces:    req.GetIfaces(),
 		Ports:     req.GetPorts(),
 		Hosts:     req.GetHosts(),
+		Protocol:  req.GetProtocol(),
 		SnapLen:   1600,
 		Promisc:   true,
 	}
@@ -246,7 +247,7 @@ func (s *Server) ProbeUpdateFilter(ctx context.Context, req *pb.ProbeUpdateFilte
 	if err := authorizeProbe(p, req.GetOwner(), req.GetAllOwners()); err != nil {
 		return nil, err
 	}
-	if err := pa.UpdateFilter(ctx, req.GetProbeId(), req.GetPorts(), req.GetHosts()); err != nil {
+	if err := pa.UpdateFilter(ctx, req.GetProbeId(), req.GetPorts(), req.GetHosts(), req.GetProtocol()); err != nil {
 		return &pb.ProbeUpdateFilterResponse{Ok: false}, nil
 	}
 	return &pb.ProbeUpdateFilterResponse{Ok: true}, nil

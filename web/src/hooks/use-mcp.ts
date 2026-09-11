@@ -995,6 +995,7 @@ export function useProbeStartCapture() {
       ifaces?: string[];
       plugin?: string;
       projectId?: string;
+      protocol?: string; // tcp/udp/both；空 = tcp（端口派生）
     }) =>
       mcpClient.callTool<ProbeStartCaptureResult>("probe_start_capture", {
         probe_id: vars.probeId,
@@ -1004,6 +1005,7 @@ export function useProbeStartCapture() {
         ifaces: vars.ifaces ?? [],
         plugin: vars.plugin ?? "",
         project_id: vars.projectId ?? "",
+        protocol: vars.protocol ?? "",
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sessions"] });
@@ -1031,11 +1033,12 @@ export function useProbeStopCapture() {
 export function useProbeUpdateFilter() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (vars: { probeId: string; ports?: number[]; hosts?: string[] }) =>
+    mutationFn: (vars: { probeId: string; ports?: number[]; hosts?: string[]; protocol?: string }) =>
       mcpClient.callTool<ProbeOkResult>("probe_update_filter", {
         probe_id: vars.probeId,
         ports: vars.ports ?? [],
         hosts: vars.hosts ?? [],
+        protocol: vars.protocol ?? "",
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["probes"] });

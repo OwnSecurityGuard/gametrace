@@ -640,6 +640,7 @@ message ProbeStartCaptureRequest {
   bool all_owners = 8;
   repeated string plugin_owners = 9;
   repeated string ifaces = 10;       // 多网卡抓包；非空时优先于 iface
+  string protocol = 11;              // 端口派生协议：tcp/udp/both；空 = tcp
 }
 message ProbeStartCaptureResponse {
   string session_id = 1;
@@ -660,6 +661,7 @@ message ProbeUpdateFilterRequest {
   repeated string hosts = 3;
   string owner = 4;
   bool all_owners = 5;
+  string protocol = 6;               // 端口派生协议：tcp/udp/both；空 = tcp
 }
 message ProbeUpdateFilterResponse { bool ok = 1; }
 

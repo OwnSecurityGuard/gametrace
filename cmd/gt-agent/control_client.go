@@ -218,7 +218,7 @@ func (c *ControlAgent) execute(ctx context.Context, cmd *proto.Command, sendEven
 	if a := cmd.GetAssign(); a != nil {
 		slog.Info("probe command received", "cmd_id", cmd.GetId(), "kind", kind,
 			"session", a.GetSessionId(), "iface", a.GetIface(), "ifaces", a.GetIfaces(), "ports", a.GetPorts(),
-			"hosts", a.GetHosts(), "bpf", a.GetBpf(), "snaplen", a.GetSnaplen(),
+			"hosts", a.GetHosts(), "protocol", a.GetProtocol(), "bpf", a.GetBpf(), "snaplen", a.GetSnaplen(),
 			"promisc", a.GetPromisc())
 	} else {
 		slog.Info("probe command received", "cmd_id", cmd.GetId(), "kind", kind)
@@ -227,7 +227,7 @@ func (c *ControlAgent) execute(ctx context.Context, cmd *proto.Command, sendEven
 	if a := cmd.GetAssign(); a != nil {
 		p := &CaptureParams{
 			SessionID: a.GetSessionId(), Iface: a.GetIface(), Ifaces: a.GetIfaces(),
-			Ports: a.GetPorts(), Hosts: a.GetHosts(), BPF: a.GetBpf(),
+			Ports: a.GetPorts(), Hosts: a.GetHosts(), Protocol: a.GetProtocol(), BPF: a.GetBpf(),
 			SnapLen: a.GetSnaplen(), Promisc: a.GetPromisc(),
 		}
 		c.lastAssign.Store(p)
@@ -237,7 +237,7 @@ func (c *ControlAgent) execute(ctx context.Context, cmd *proto.Command, sendEven
 		a := p.Assign
 		err := c.runner.Start(CaptureParams{
 			SessionID: a.GetSessionId(), Iface: a.GetIface(), Ifaces: a.GetIfaces(),
-			Ports: a.GetPorts(), Hosts: a.GetHosts(), BPF: a.GetBpf(),
+			Ports: a.GetPorts(), Hosts: a.GetHosts(), Protocol: a.GetProtocol(), BPF: a.GetBpf(),
 			SnapLen: a.GetSnaplen(), Promisc: a.GetPromisc(),
 		}, c.ingestAddr, c.probeToken)
 		if err != nil {
@@ -249,7 +249,7 @@ func (c *ControlAgent) execute(ctx context.Context, cmd *proto.Command, sendEven
 		}
 	case *proto.Command_Filter:
 		f := p.Filter
-		err := c.runner.UpdateFilter(f.GetPorts(), f.GetHosts(), f.GetBpf())
+		err := c.runner.UpdateFilter(f.GetPorts(), f.GetHosts(), f.GetProtocol(), f.GetBpf())
 		if err != nil {
 			ok, errStr = false, err.Error()
 		}

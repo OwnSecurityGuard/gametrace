@@ -1161,7 +1161,8 @@ type AssignCapture struct {
 	Bpf           string                 `protobuf:"bytes,5,opt,name=bpf,proto3" json:"bpf,omitempty"`          // 显式 BPF；非空时覆盖 ports/hosts 派生
 	Snaplen       int32                  `protobuf:"varint,6,opt,name=snaplen,proto3" json:"snaplen,omitempty"` // 0 = 默认 1600
 	Promisc       bool                   `protobuf:"varint,7,opt,name=promisc,proto3" json:"promisc,omitempty"`
-	Ifaces        []string               `protobuf:"bytes,8,rep,name=ifaces,proto3" json:"ifaces,omitempty"` // 多网卡抓包；优先于 iface
+	Ifaces        []string               `protobuf:"bytes,8,rep,name=ifaces,proto3" json:"ifaces,omitempty"`     // 多网卡抓包；优先于 iface
+	Protocol      string                 `protobuf:"bytes,9,opt,name=protocol,proto3" json:"protocol,omitempty"` // 端口派生协议：tcp/udp/both；空 = tcp。仅影响 ports 派生，显式 bpf 时忽略
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1252,6 +1253,13 @@ func (x *AssignCapture) GetIfaces() []string {
 	return nil
 }
 
+func (x *AssignCapture) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
+}
+
 type StopCaptureCmd struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1295,6 +1303,7 @@ type UpdateFilter struct {
 	Ports         []int32                `protobuf:"varint,1,rep,packed,name=ports,proto3" json:"ports,omitempty"`
 	Hosts         []string               `protobuf:"bytes,2,rep,name=hosts,proto3" json:"hosts,omitempty"`
 	Bpf           string                 `protobuf:"bytes,3,opt,name=bpf,proto3" json:"bpf,omitempty"`
+	Protocol      string                 `protobuf:"bytes,4,opt,name=protocol,proto3" json:"protocol,omitempty"` // 端口派生协议：tcp/udp/both；空 = tcp
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1346,6 +1355,13 @@ func (x *UpdateFilter) GetHosts() []string {
 func (x *UpdateFilter) GetBpf() string {
 	if x != nil {
 		return x.Bpf
+	}
+	return ""
+}
+
+func (x *UpdateFilter) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
 	}
 	return ""
 }
@@ -1933,7 +1949,7 @@ const file_pkg_capture_agent_proto_agent_proto_rawDesc = "" +
 	"\theartbeat\x18\x02 \x01(\v2\x1f.gametrace.agent.ProbeHeartbeatH\x00R\theartbeat\x128\n" +
 	"\x06result\x18\x03 \x01(\v2\x1e.gametrace.agent.CommandResultH\x00R\x06result\x12R\n" +
 	"\x10archive_segments\x18\x04 \x01(\v2%.gametrace.agent.ArchiveSegmentsReplyH\x00R\x0farchiveSegmentsB\t\n" +
-	"\apayload\"\xce\x01\n" +
+	"\apayload\"\xea\x01\n" +
 	"\rAssignCapture\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x14\n" +
@@ -1943,12 +1959,14 @@ const file_pkg_capture_agent_proto_agent_proto_rawDesc = "" +
 	"\x03bpf\x18\x05 \x01(\tR\x03bpf\x12\x18\n" +
 	"\asnaplen\x18\x06 \x01(\x05R\asnaplen\x12\x18\n" +
 	"\apromisc\x18\a \x01(\bR\apromisc\x12\x16\n" +
-	"\x06ifaces\x18\b \x03(\tR\x06ifaces\"\x10\n" +
-	"\x0eStopCaptureCmd\"L\n" +
+	"\x06ifaces\x18\b \x03(\tR\x06ifaces\x12\x1a\n" +
+	"\bprotocol\x18\t \x01(\tR\bprotocol\"\x10\n" +
+	"\x0eStopCaptureCmd\"h\n" +
 	"\fUpdateFilter\x12\x14\n" +
 	"\x05ports\x18\x01 \x03(\x05R\x05ports\x12\x14\n" +
 	"\x05hosts\x18\x02 \x03(\tR\x05hosts\x12\x10\n" +
-	"\x03bpf\x18\x03 \x01(\tR\x03bpf\"z\n" +
+	"\x03bpf\x18\x03 \x01(\tR\x03bpf\x12\x1a\n" +
+	"\bprotocol\x18\x04 \x01(\tR\bprotocol\"z\n" +
 	"\tSetConfig\x125\n" +
 	"\x03kvs\x18\x01 \x03(\v2#.gametrace.agent.SetConfig.KvsEntryR\x03kvs\x1a6\n" +
 	"\bKvsEntry\x12\x10\n" +

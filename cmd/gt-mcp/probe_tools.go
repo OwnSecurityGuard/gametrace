@@ -142,6 +142,7 @@ func (m *mcpCapture) handleProbeStartCapture(ctx context.Context, req mcp.CallTo
 		Ifaces:    req.GetStringSlice("ifaces", nil),
 		Plugin:    req.GetString("plugin", ""),
 		ProjectId: req.GetString("project_id", ""),
+		Protocol:  req.GetString("protocol", ""),
 	}
 	grpcReq.Hosts = req.GetStringSlice("hosts", nil)
 	for _, p := range req.GetIntSlice("ports", nil) {
@@ -187,7 +188,7 @@ func (m *mcpCapture) handleProbeUpdateFilter(ctx context.Context, req mcp.CallTo
 	if m.pipelineClient == nil {
 		return errorResult(fmt.Errorf("pipeline client not available")), nil
 	}
-	grpcReq := &pb.ProbeUpdateFilterRequest{ProbeId: req.GetString("probe_id", "")}
+	grpcReq := &pb.ProbeUpdateFilterRequest{ProbeId: req.GetString("probe_id", ""), Protocol: req.GetString("protocol", "")}
 	grpcReq.Hosts = req.GetStringSlice("hosts", nil)
 	for _, p := range req.GetIntSlice("ports", nil) {
 		grpcReq.Ports = append(grpcReq.Ports, int32(p))
@@ -255,10 +256,10 @@ func (m *mcpCapture) handleProbeListArchive(ctx context.Context, req mcp.CallToo
 		return errorResult(fmt.Errorf("pipeline client not available")), nil
 	}
 	grpcReq := &pb.ProbeListArchiveRequest{
-		ProbeId:   req.GetString("probe_id", ""),
-		FromUnix:  int64(req.GetFloat("from_unix", 0)),
-		ToUnix:    int64(req.GetFloat("to_unix", 0)),
-		Refresh:   req.GetBool("refresh", false),
+		ProbeId:  req.GetString("probe_id", ""),
+		FromUnix: int64(req.GetFloat("from_unix", 0)),
+		ToUnix:   int64(req.GetFloat("to_unix", 0)),
+		Refresh:  req.GetBool("refresh", false),
 	}
 	fillOwner(ctx, func(o string, a bool) { grpcReq.Owner, grpcReq.AllOwners = o, a })
 	resp, err := m.pipelineClient.ProbeListArchive(ctx, grpcReq)

@@ -59,12 +59,14 @@ type Desired struct {
 	SessionID string
 	Iface     string
 	// Ifaces 是多网卡抓包清单；非空时优先于 Iface，空 = 探针自动选卡。
-	Ifaces    []string
-	Ports     []int32
-	Hosts     []string
-	BPF       string
-	SnapLen   int32
-	Promisc   bool
+	Ifaces []string
+	Ports  []int32
+	Hosts  []string
+	// Protocol 是端口过滤协议：tcp/udp/both；空 = tcp。仅影响探针侧端口派生。
+	Protocol string
+	BPF      string
+	SnapLen  int32
+	Promisc  bool
 }
 
 // probeConn 是一条活跃控制流的发送端。
@@ -79,7 +81,7 @@ type probeConn struct {
 //     锁外不卡；等待指令结果通过 per-command channel 完成。
 type Manager struct {
 	store    ProbeStore
-	hub      *agent.Hub               // 离线导入回放投递用；nil 禁用
+	hub      *agent.Hub                // 离线导入回放投递用；nil 禁用
 	sessions agent.SessionOwnerChecker // 回放目标会话归属校验；nil 跳过
 	log      *slog.Logger
 
@@ -230,6 +232,7 @@ func (m *Manager) syncLocked(probeID string, force bool) {
 						Ifaces:    d.Ifaces,
 						Ports:     d.Ports,
 						Hosts:     d.Hosts,
+						Protocol:  d.Protocol,
 						Bpf:       d.BPF,
 						Snaplen:   d.SnapLen,
 						Promisc:   d.Promisc,
@@ -364,20 +367,21 @@ func (m *Manager) StopCapture(ctx context.Context, probeID string) (string, erro
 }
 
 // UpdateFilter 热更新抓包过滤（探针侧 SetBPFFilter，不中断抓包），并同步 desired。
-func (m *Manager) UpdateFilter(ctx context.Context, probeID string, ports []int32, hosts []string) error {
+// protocol 是端口派生协议（tcp/udp/both；空 = tcp）。
+func (m *Manager) UpdateFilter(ctx context.Context, probeID string, ports []int32, hosts []string, protocol string) error {
 	if _, err := m.store.GetProbe(ctx, probeID); err != nil {
 		return fmt.Errorf("probe %s: %w", probeID, err)
 	}
 	err := m.sendAndWait(probeID, &proto.Command{
 		Id:      m.nextCmdID(),
-		Payload: &proto.Command_Filter{Filter: &proto.UpdateFilter{Ports: ports, Hosts: hosts}},
+		Payload: &proto.Command_Filter{Filter: &proto.UpdateFilter{Ports: ports, Hosts: hosts, Protocol: protocol}},
 	})
 	if err != nil {
 		return err
 	}
 	m.mu.Lock()
 	if d, ok := m.desired[probeID]; ok {
-		d.Ports, d.Hosts, d.BPF = ports, hosts, ""
+		d.Ports, d.Hosts, d.Protocol, d.BPF = ports, hosts, protocol, ""
 		m.desired[probeID] = d
 	}
 	m.mu.Unlock()

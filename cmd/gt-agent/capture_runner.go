@@ -55,8 +55,11 @@ type CaptureParams struct {
 	Ports     []int32
 	Hosts     []string
 	BPF       string // 显式 BPF；空则按 Ports/Hosts 派生
-	SnapLen   int32
-	Promisc   bool
+	// Protocol 是端口过滤的协议：tcp/udp/both；空 = tcp（向后兼容）。
+	// 仅影响端口派生（deriveBPF），显式 BPF 非空时被忽略。
+	Protocol string
+	SnapLen  int32
+	Promisc  bool
 }
 
 // ifaceList 归一化抓包网卡清单：Ifaces 优先，回退单卡 Iface。
@@ -70,16 +73,33 @@ func (p CaptureParams) ifaceList() []string {
 	return nil
 }
 
-// deriveBPF 把 ports/hosts/显式 BPF 统一成最终过滤表达式。
+// deriveBPF 把 protocol/ports/hosts/显式 BPF 统一成最终过滤表达式。
 // 显式 BPF 非空时直接用（覆盖派生）；全空返回空串（不过滤）。
+// protocol 取值 tcp/udp/both；空或非法值回落 tcp：
+//   - tcp  → "tcp port <port>"
+//   - udp  → "udp port <port>"
+//   - both → "tcp port <port> or udp port <port>"
 func deriveBPF(p CaptureParams) string {
 	if p.BPF != "" {
 		return p.BPF
 	}
+	p.Protocol = strings.ToLower(strings.TrimSpace(p.Protocol))
+	switch p.Protocol {
+	case "udp", "both":
+	default:
+		p.Protocol = "tcp"
+	}
 	var parts []string
 	for _, port := range p.Ports {
 		if port > 0 && port <= 65535 {
-			parts = append(parts, fmt.Sprintf("tcp port %d", port))
+			switch p.Protocol {
+			case "udp":
+				parts = append(parts, fmt.Sprintf("udp port %d", port))
+			case "both":
+				parts = append(parts, fmt.Sprintf("tcp port %d or udp port %d", port, port))
+			default:
+				parts = append(parts, fmt.Sprintf("tcp port %d", port))
+			}
 		}
 	}
 	for _, h := range p.Hosts {
@@ -276,17 +296,17 @@ func (r *captureRunner) Start(p CaptureParams, ingestAddr, token string) error {
 	}
 
 	ic := &ingestClient{
-		addr:         ingestAddr,
-		token:        token,
-		sessionID:    p.SessionID,
-		iface:        strings.Join(p.ifaceList(), ","),
-		batchSize:    r.batchSize,
+		addr:          ingestAddr,
+		token:         token,
+		sessionID:     p.SessionID,
+		iface:         strings.Join(p.ifaceList(), ","),
+		batchSize:     r.batchSize,
 		batchInterval: r.batchInterval,
-		spool:        r.spool,
-		onAck:        r.onAcked,
+		spool:         r.spool,
+		onAck:         r.onAcked,
 		// onPacket 必须接上：它是 packets_captured / last_packet_ms 的唯一来源，
 		// 漏接会让心跳里的"抓包数/最后收包时间"恒为 0（平台显示"从未收到帧"）。
-		onPacket:     r.onPacket,
+		onPacket: r.onPacket,
 	}
 	// 换会话时计数归零（新会话从 0 开始，UI 语义是"本次抓了多少"）。
 	r.packetsCaptured.Store(0)
@@ -360,14 +380,14 @@ func (r *captureRunner) stopLocked() {
 }
 
 // UpdateFilter 热更新过滤（running 下 SetBPFFilter，不断流）。
-// 空 ports/hosts/bpf = 清除过滤（全抓）。
-func (r *captureRunner) UpdateFilter(ports []int32, hosts []string, bpf string) error {
+// 空 ports/hosts/bpf = 清除过滤（全抓）。protocol 影响端口派生（tcp/udp/both）。
+func (r *captureRunner) UpdateFilter(ports []int32, hosts []string, protocol, bpf string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.state != stateRunning || len(r.lives) == 0 {
 		return errors.New("capture is not running; filter update requires a running capture")
 	}
-	derived := deriveBPF(CaptureParams{Ports: ports, Hosts: hosts, BPF: bpf})
+	derived := deriveBPF(CaptureParams{Ports: ports, Hosts: hosts, Protocol: protocol, BPF: bpf})
 	for _, lc := range r.lives {
 		if err := lc.SetFilter(derived); err != nil {
 			return err
@@ -375,6 +395,7 @@ func (r *captureRunner) UpdateFilter(ports []int32, hosts []string, bpf string) 
 	}
 	r.params.Ports = ports
 	r.params.Hosts = hosts
+	r.params.Protocol = protocol
 	r.params.BPF = derived
 	return nil
 }

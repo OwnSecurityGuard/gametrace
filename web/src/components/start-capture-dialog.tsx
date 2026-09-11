@@ -108,6 +108,8 @@ export function StartCaptureDialog({
   // 探针抓包选卡：空数组 = 自动选卡（探针按出口 IP 挑默认网卡）；可多选并发抓。
   const [probeIfaces, setProbeIfaces] = useState<string[]>([]);
   const [port, setPort] = useState("8080");
+  // 端口过滤协议：tcp/udp/both（默认 tcp）。仅探针抓包生效（探针侧派生 BPF）。
+  const [protocol, setProtocol] = useState<"tcp" | "udp" | "both">("tcp");
   const [plugin, setPlugin] = useState("");
   // 从项目一键抓包时带入的项目 id（本次抓包会话归属到此项目）。
   const [projectId, setProjectId] = useState("");
@@ -189,6 +191,7 @@ export function StartCaptureDialog({
           ifaces: probeIfaces.length > 0 ? probeIfaces : undefined,
           plugin: plugin || undefined,
           projectId: projectId || undefined,
+          protocol,
         },
         {
           onSuccess: (data) => {
@@ -425,6 +428,39 @@ export function StartCaptureDialog({
               className="mt-1.5 font-mono"
             />
           </div>
+          {source === "agent" && (
+            <div>
+              <label className="text-sm font-medium">端口协议</label>
+              <div className="mt-1.5 flex items-center gap-1 rounded-lg bg-muted p-1">
+                {(
+                  [
+                    { id: "tcp", label: "TCP" },
+                    { id: "udp", label: "UDP" },
+                    { id: "both", label: "TCP+UDP" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={protocol === opt.id}
+                    onClick={() => setProtocol(opt.id)}
+                    className={
+                      "flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-[background-color,color] " +
+                      (protocol === opt.id
+                        ? "bg-card text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground")
+                    }
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                端口非空时按所选协议在探针侧过滤；UDP/TCP+UDP 需要探针 Npcap 支持。
+              </p>
+            </div>
+          )}
           {/* 高级设置（默认收起）：Interface 等技术细节，普通用户只需选端口 + 解析器。 */}
           <button
             type="button"

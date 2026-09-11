@@ -4471,7 +4471,8 @@ type ProbeStartCaptureRequest struct {
 	Owner         string                 `protobuf:"bytes,7,opt,name=owner,proto3" json:"owner,omitempty"`
 	AllOwners     bool                   `protobuf:"varint,8,opt,name=all_owners,json=allOwners,proto3" json:"all_owners,omitempty"`
 	PluginOwners  []string               `protobuf:"bytes,9,rep,name=plugin_owners,json=pluginOwners,proto3" json:"plugin_owners,omitempty"`
-	Ifaces        []string               `protobuf:"bytes,10,rep,name=ifaces,proto3" json:"ifaces,omitempty"` // 多网卡抓包；非空时优先于 iface
+	Ifaces        []string               `protobuf:"bytes,10,rep,name=ifaces,proto3" json:"ifaces,omitempty"`     // 多网卡抓包；非空时优先于 iface
+	Protocol      string                 `protobuf:"bytes,11,opt,name=protocol,proto3" json:"protocol,omitempty"` // 端口派生协议：tcp/udp/both；空 = tcp
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4574,6 +4575,13 @@ func (x *ProbeStartCaptureRequest) GetIfaces() []string {
 		return x.Ifaces
 	}
 	return nil
+}
+
+func (x *ProbeStartCaptureRequest) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
 }
 
 type ProbeStartCaptureResponse struct {
@@ -4740,6 +4748,7 @@ type ProbeUpdateFilterRequest struct {
 	Hosts         []string               `protobuf:"bytes,3,rep,name=hosts,proto3" json:"hosts,omitempty"`
 	Owner         string                 `protobuf:"bytes,4,opt,name=owner,proto3" json:"owner,omitempty"`
 	AllOwners     bool                   `protobuf:"varint,5,opt,name=all_owners,json=allOwners,proto3" json:"all_owners,omitempty"`
+	Protocol      string                 `protobuf:"bytes,6,opt,name=protocol,proto3" json:"protocol,omitempty"` // 端口派生协议：tcp/udp/both；空 = tcp
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4807,6 +4816,13 @@ func (x *ProbeUpdateFilterRequest) GetAllOwners() bool {
 		return x.AllOwners
 	}
 	return false
+}
+
+func (x *ProbeUpdateFilterRequest) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
 }
 
 type ProbeUpdateFilterResponse struct {
@@ -5942,7 +5958,7 @@ const file_pkg_internalipc_proto_internal_proto_rawDesc = "" +
 	"\n" +
 	"all_owners\x18\x03 \x01(\bR\tallOwners\"J\n" +
 	"\x10GetProbeResponse\x126\n" +
-	"\x05probe\x18\x01 \x01(\v2 .gametrace.internalipc.ProbeInfoR\x05probe\"\xa0\x02\n" +
+	"\x05probe\x18\x01 \x01(\v2 .gametrace.internalipc.ProbeInfoR\x05probe\"\xbc\x02\n" +
 	"\x18ProbeStartCaptureRequest\x12\x19\n" +
 	"\bprobe_id\x18\x01 \x01(\tR\aprobeId\x12\x14\n" +
 	"\x05ports\x18\x02 \x03(\x05R\x05ports\x12\x14\n" +
@@ -5956,7 +5972,8 @@ const file_pkg_internalipc_proto_internal_proto_rawDesc = "" +
 	"all_owners\x18\b \x01(\bR\tallOwners\x12#\n" +
 	"\rplugin_owners\x18\t \x03(\tR\fpluginOwners\x12\x16\n" +
 	"\x06ifaces\x18\n" +
-	" \x03(\tR\x06ifaces\"S\n" +
+	" \x03(\tR\x06ifaces\x12\x1a\n" +
+	"\bprotocol\x18\v \x01(\tR\bprotocol\"S\n" +
 	"\x19ProbeStartCaptureResponse\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
@@ -5968,14 +5985,15 @@ const file_pkg_internalipc_proto_internal_proto_rawDesc = "" +
 	"all_owners\x18\x03 \x01(\bR\tallOwners\"9\n" +
 	"\x18ProbeStopCaptureResponse\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\"\x96\x01\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\"\xb2\x01\n" +
 	"\x18ProbeUpdateFilterRequest\x12\x19\n" +
 	"\bprobe_id\x18\x01 \x01(\tR\aprobeId\x12\x14\n" +
 	"\x05ports\x18\x02 \x03(\x05R\x05ports\x12\x14\n" +
 	"\x05hosts\x18\x03 \x03(\tR\x05hosts\x12\x14\n" +
 	"\x05owner\x18\x04 \x01(\tR\x05owner\x12\x1d\n" +
 	"\n" +
-	"all_owners\x18\x05 \x01(\bR\tallOwners\"+\n" +
+	"all_owners\x18\x05 \x01(\bR\tallOwners\x12\x1a\n" +
+	"\bprotocol\x18\x06 \x01(\tR\bprotocol\"+\n" +
 	"\x19ProbeUpdateFilterResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"j\n" +
 	"\x18ProbeRetryCaptureRequest\x12\x19\n" +
