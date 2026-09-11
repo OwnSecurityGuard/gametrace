@@ -2,7 +2,7 @@
 #
 # 多阶段构建：
 #   webui   : node:22-bookworm-slim 构建 web/ 前端（Vite 产物 dist）；
-#   builder : golang:1.25-bookworm + libpcap-dev，以 cgo（pcap）编译两个服务端二进制；
+#   builder : golang:1.26-bookworm + libpcap-dev，以 cgo（pcap）编译两个服务端二进制；
 #             前端产物先 COPY 进 cmd/gt-mcp/webui/，由 //go:embed 嵌入 gt-mcp；
 #   runtime : debian:bookworm-slim + libpcap0.8（gopacket/pcap 运行时需要的共享库）。
 #
@@ -58,7 +58,7 @@ RUN npm run build
 # ============================================================================
 # 阶段 1：builder
 # ============================================================================
-FROM golang:1.25-bookworm AS builder
+FROM golang:1.26-bookworm AS builder
 
 ARG VERSION=dev
 ARG GIT_COMMIT=unknown
