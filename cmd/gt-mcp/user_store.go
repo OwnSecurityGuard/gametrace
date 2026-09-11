@@ -56,11 +56,11 @@ CREATE TABLE IF NOT EXISTS users (
 	return nil
 }
 
-// newInviteToken 生成 gt_ 前缀的 192bit 随机 token（hex）。
-func newInviteToken() (string, error) {
+// newUserToken 生成 gt_ 前缀的 192bit 随机 token（hex）。
+func newUserToken() (string, error) {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generate invite token: %w", err)
+		return "", fmt.Errorf("generate user token: %w", err)
 	}
 	return "gt_" + hex.EncodeToString(b), nil
 }
@@ -71,7 +71,7 @@ func (us *userStore) CreateUser(ctx context.Context, owner, createdBy string) (*
 	if !validOwnerName(owner) {
 		return nil, "", fmt.Errorf("invalid owner name %q: letters/digits/._- , starts with letter or digit, max 64 chars", owner)
 	}
-	token, err := newInviteToken()
+	token, err := newUserToken()
 	if err != nil {
 		return nil, "", err
 	}

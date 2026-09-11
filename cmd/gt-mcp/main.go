@@ -3025,12 +3025,11 @@ func main() {
 	), capture.handleListProjects)
 
 	// 启动码接入：生成/列出 GT-XXXX 码，成员在目标机输入即可自动注册并回连抓包。
-	// 邀请模式：带 new_owner 时，claim 为新用户创建独立身份（而不是借用码创建者的身份）。
+	// 启动码只带身份与回连地址；抓包端口与解码插件在 probe_start_capture 时决定。
 	s.AddTool(mcp.NewTool("create_access_code",
-		mcp.WithDescription("Generate an access code (GT-XXXX-XXXX) bound to the current user. A member enters this code when first starting gt-agent to auto-register and connect. The code only carries identity + back-connect address — capture port/plugin are decided later at probe_start_capture. Optional: project_id, platform, server. Invite mode: set new_owner to create a fresh independent identity for that user on claim (user must not already exist)."),
+		mcp.WithDescription("Generate an access code (GT-XXXX-XXXX) bound to the current user. A member enters this code when first starting gt-agent to auto-register and connect. The code only carries identity + back-connect address — capture port/plugin are decided later at probe_start_capture. Optional: project_id, platform, server."),
 		mcp.WithString("project_id"),
 		mcp.WithString("platform"), mcp.WithString("server"),
-		mcp.WithString("new_owner", mcp.Description("Invite mode: user name to create on claim (letters/digits/._-)")),
 	), capture.handleCreateAccessCode)
 	s.AddTool(mcp.NewTool("list_access_codes",
 		mcp.WithDescription("List access codes visible to the current user (global admin sees all)."),
@@ -3082,11 +3081,11 @@ func main() {
 	), capture.handleSetProjectRules)
 
 	s.AddTool(mcp.NewTool("list_users",
-		mcp.WithDescription("List invited users (invited identities only; env bootstrap tokens are not listed here). Token values are never returned. Global admin only."),
+		mcp.WithDescription("List registered users (self-registered identities only; env bootstrap tokens are not listed here). Token values are never returned. Global admin only."),
 	), capture.handleListUsers)
 
 	s.AddTool(mcp.NewTool("revoke_user",
-		mcp.WithDescription("Revoke an invited user: delete its identity so its token stops working immediately. Global admin only; cannot revoke yourself."),
+		mcp.WithDescription("Revoke a registered user: delete its identity so its token stops working immediately. Global admin only; cannot revoke yourself."),
 		mcp.WithString("owner", mcp.Required(), mcp.Description("User name to revoke")),
 	), capture.handleRevokeUser)
 
