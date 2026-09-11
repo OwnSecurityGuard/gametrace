@@ -31,11 +31,19 @@ func TestDeriveConnID(t *testing.T) {
 		t.Fatalf("existing conn_id overwritten: %q", proxy.Metadata["conn_id"])
 	}
 
-	// 非 TCP / 无五元组的包不派生。
-	udp := event.Packet{Protocol: "udp", Src: src, Dst: dst}
-	deriveConnID(&udp)
-	if _, ok := udp.Metadata["conn_id"]; ok {
-		t.Fatal("udp packet should not get conn_id")
+	// UDP 也派生 conn_id（udp: 前缀，且双向一致）。
+	udpFwd := event.Packet{Protocol: "udp", Src: src, Dst: dst}
+	udpRev := event.Packet{Protocol: "udp", Src: dst, Dst: src}
+	deriveConnID(&udpFwd)
+	deriveConnID(&udpRev)
+	if udpFwd.Metadata["conn_id"] == "" {
+		t.Fatal("udp packet should get conn_id")
+	}
+	if udpFwd.Metadata["conn_id"] != udpRev.Metadata["conn_id"] {
+		t.Fatalf("udp conn_id not bidirectional: %q vs %q", udpFwd.Metadata["conn_id"], udpRev.Metadata["conn_id"])
+	}
+	if want := "udp:127.0.0.1:50000<->127.0.0.1:9250"; udpFwd.Metadata["conn_id"] != want {
+		t.Fatalf("udp conn_id = %q, want %q", udpFwd.Metadata["conn_id"], want)
 	}
 	bare := event.Packet{Protocol: "tcp"}
 	deriveConnID(&bare)

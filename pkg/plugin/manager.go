@@ -53,6 +53,8 @@ type PluginSummary struct {
 	Name          string
 	Protocol      string
 	Type          string
+	// Transports 是插件声明的 L4 传输层能力（tcp|udp）；空表示未声明。
+	Transports    []string
 	APIVersion    string
 	SocketPath    string
 	Online        bool
@@ -502,12 +504,19 @@ func (s *RegistryServer) FindFor(owner, protocolHint string) (pb.DecoderClient, 
 		} else if rp.Owner != "" {
 			continue
 		}
-		// 匹配 protocol 或 hints
+		// 匹配 protocol / hints / transports：
+		// transports 是插件声明的 L4 传输层能力（tcp|udp），供 dispatcher 按
+		// 抓包协议路由——声明 transports:[udp] 的插件可被 FindFor(owner,"udp") 命中。
 		if rp.Manifest.Protocol == protocolHint {
 			return rp.Client, rp.SchemaRegistry(), true
 		}
 		for _, h := range rp.Manifest.Hints {
 			if h == protocolHint {
+				return rp.Client, rp.SchemaRegistry(), true
+			}
+		}
+		for _, t := range rp.Manifest.Transports {
+			if t == protocolHint {
 				return rp.Client, rp.SchemaRegistry(), true
 			}
 		}
@@ -696,6 +705,7 @@ func (s *RegistryServer) List() []PluginSummary {
 			InstanceID:    rp.InstanceID,
 			Name:          rp.Manifest.Name,
 			Protocol:      rp.Manifest.Protocol,
+			Transports:    rp.Manifest.Transports,
 			Type:          rp.Manifest.Type,
 			APIVersion:    rp.Manifest.APIVersion,
 			SocketPath:    rp.SocketPath,
@@ -718,6 +728,7 @@ func (s *RegistryServer) ListSummaries() []PluginSummary {
 			InstanceID:    rp.InstanceID,
 			Name:          rp.Manifest.Name,
 			Protocol:      rp.Manifest.Protocol,
+			Transports:    rp.Manifest.Transports,
 			Type:          rp.Manifest.Type,
 			APIVersion:    rp.Manifest.APIVersion,
 			SocketPath:    rp.SocketPath,

@@ -4,7 +4,7 @@ go 1.26.8
 
 require (
 	github.com/Microsoft/go-winio v0.6.2
-	github.com/OwnSecurityGuard/gt-plugin-sdk v0.8.0
+	github.com/OwnSecurityGuard/gt-plugin-sdk v0.8.1
 	github.com/expr-lang/expr v1.17.0
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.6.0

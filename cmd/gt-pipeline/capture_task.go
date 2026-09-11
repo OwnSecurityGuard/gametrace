@@ -630,12 +630,13 @@ func (t *captureTask) run() {
 		// raw_packets 落库与解码事件上下文都带连接标识——Connections 页面
 		// 依赖 raw_packets.conn_id 聚合，缺失时整个页面为空。
 		deriveConnID(&pkt)
-			raws = append(raws, pkt)
-			resolveDecoder(false)
-			if pkt.Protocol != "tcp" {
-				t.logger.Debug("skipped non-tcp packet", "protocol", pkt.Protocol)
-				continue
-			}
+		raws = append(raws, pkt)
+		resolveDecoder(false)
+		if pkt.Protocol == "" {
+			// 无传输层协议（如解析失败）的包无法路由到解码器，仅落原始帧。
+			t.logger.Debug("skipped packet without protocol", "protocol", pkt.Protocol)
+			continue
+		}
 			if t.pcapFile != "" {
 				// pcap 回放：无实时约束，解码队列满时背压等待（不丢包）。
 				// 溢出队列非空时优先回灌旧包（FIFO），再送新包；
@@ -721,7 +722,13 @@ func (t *captureTask) resolveDecoderClient() (pb.DecoderClient, *schema.Registry
 		}
 		return nil, nil, false
 	}
-	return t.registry.FindFor(t.owner, "tcp")
+	// 未指定插件名：优先按 tcp hint 取第一个在线插件（兼容默认 TCP 抓包）；
+	// 若该 owner 下无 tcp 插件但有 udp 插件（纯 UDP 协议场景），回退按 udp 取，
+	// 避免 UDP 流量因 hint 写死而始终选不到解码器。
+	if c, sr, ok := t.registry.FindFor(t.owner, "tcp"); ok {
+		return c, sr, true
+	}
+	return t.registry.FindFor(t.owner, "udp")
 }
 
 // pluginOwnerCandidates 返回去重保序的插件解析 owner 候选集：会话 owner 在前，
@@ -750,7 +757,11 @@ func (t *captureTask) pluginOwnerCandidates() []string {
 // 按 TCP 五元组双向排序生成规范键（同一连接两个方向得到相同 conn_id），
 // 写入 Metadata["conn_id"] 供 AppendRawPackets 落库与解码事件上下文使用。
 func deriveConnID(pkt *event.Packet) {
-	if pkt.Protocol != "tcp" {
+	// 仅 TCP / UDP 等带五元组的传输层协议派生连接标识；
+	// 移动代理等已在 Metadata 携带 conn_id，由下方分支优先保留。
+	switch pkt.Protocol {
+	case "tcp", "udp":
+	default:
 		return
 	}
 	if c, ok := pkt.Metadata["conn_id"].(string); ok && c != "" {
@@ -766,7 +777,8 @@ func deriveConnID(pkt *event.Packet) {
 	if pkt.Metadata == nil {
 		pkt.Metadata = map[string]any{}
 	}
-	pkt.Metadata["conn_id"] = "tcp:" + a + "<->" + b
+	// 协议不同则连接归一维度不同，故以 "protocol:..." 为前缀（tcp:/udp:）。
+	pkt.Metadata["conn_id"] = pkt.Protocol + ":" + a + "<->" + b
 }
 
 // decoderAction 给定一次 registry.Find 的结果与当前 dispatcher 状态，
