@@ -63,7 +63,7 @@ export default function App() {
   // 与当前抓包会话联动的行为窗口（start_capture 成功后自动 begin，便于在「行为」Tab 直接查看）。
   const [linkedRunId, setLinkedRunId] = useState<string | null>(null);
   const [linkedRunSessionId, setLinkedRunSessionId] = useState<string | null>(null);
-  const [filter, setFilter] = useState("");
+  const [query, setQuery] = useState("");
   const [activeTab, setActiveTab] = useState<ViewTab>("home");
   // 「更多」下拉是否展开（普通用户把高级视图藏在这里）。
   const [moreOpen, setMoreOpen] = useState(false);
@@ -90,7 +90,7 @@ export default function App() {
     return window.matchMedia("(prefers-color-scheme: dark)").matches;
   });
 
-  // 筛选框引用：用于 "/" 快捷键聚焦
+  // 模糊搜索框引用：用于 "/" 快捷键聚焦
   const filterInputRef = useRef<HTMLInputElement>(null);
   // 会话搜索框引用：用于 Ctrl/Cmd+K 快捷键聚焦
   const sessionSearchInputRef = useRef<HTMLInputElement>(null);
@@ -169,13 +169,13 @@ export default function App() {
 
   const handleSelectSession = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
-    setFilter(""); // 切换 session 时清空 filter
+    setQuery(""); // 切换 session 时清空查询
   }, []);
 
   // 从代理抓包状态卡一键跳转：选中常驻会话切到「连接」页并关闭弹窗
   const handleNavigateToSession = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
-    setFilter("");
+    setQuery("");
     setActiveTab("connections");
     setProxyConfigOpen(false);
   }, []);
@@ -518,9 +518,8 @@ export default function App() {
         {activeTab === "decoded" && (
           <div className="border-b border-border bg-card/40 px-4 py-3">
             <FilterBar
-              sessionId={selectedSessionId}
-              filter={filter}
-              onFilterChange={setFilter}
+              query={query}
+              onQueryChange={setQuery}
               inputRef={filterInputRef}
             />
           </div>
@@ -554,7 +553,7 @@ export default function App() {
           )}
           {activeTab === "decoded" && (
             <div className="flex h-full flex-col overflow-auto p-4 gt-scroll">
-              <DecodedView sessionId={selectedSessionId} filter={filter} onFilterChange={setFilter} />
+              <DecodedView sessionId={selectedSessionId} query={query} />
             </div>
           )}
           {activeTab === "connections" && (
@@ -616,7 +615,7 @@ export default function App() {
         initialProbeId={startCaptureProbeId ?? undefined}
         onStarted={(sessionId) => {
           setSelectedSessionId(sessionId);
-          setFilter("");
+          setQuery("");
           // 抓包成功即进入「概览」（会话工作区默认入口），
           // 概览页可看到实时统计与最近连接/事件，并可一键跳到连接/时间线分析。
           setActiveTab("overview");

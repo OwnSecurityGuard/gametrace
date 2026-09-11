@@ -921,8 +921,7 @@ export function useAccessCodes() {
 }
 
 /** create_access_code：生成一个绑定当前用户的启动码（可选绑项目/平台/回连地址）。
- *  启动码只带身份与回连，不带抓包端口/插件——抓包在「开始抓包」时下发。
- *  newOwner 非空时为邀请码：认领时为该名字创建独立身份（users 表）。 */
+ *  启动码只带身份与回连，不带抓包端口/插件——抓包在「开始抓包」时下发。 */
 export function useCreateAccessCode() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -930,13 +929,11 @@ export function useCreateAccessCode() {
       projectId?: string;
       platform?: string;
       server?: string;
-      newOwner?: string;
     }) =>
       mcpClient.callTool<CreateAccessCodeResult>("create_access_code", {
         project_id: vars.projectId ?? "",
         platform: vars.platform ?? "",
         server: vars.server ?? "",
-        new_owner: vars.newOwner ?? "",
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["accessCodes"] });

@@ -29,20 +29,20 @@ import {
   MessageCell,
   HighlightedJson,
 } from "@/lib/event-display";
+import { eventMatchesQuery } from "@/lib/fuzzy";
 
 interface RelationshipViewProps {
   sessionId: string | null;
-  filter: string;
+  query: string;
 }
 
 // 加载上限：关系视图需要整段事件来建父子森林与配对组，取一次较大的批次。
 const RELATION_FETCH_LIMIT = 1000;
 
-export function RelationshipView({ sessionId, filter }: RelationshipViewProps) {
+export function RelationshipView({ sessionId, query }: RelationshipViewProps) {
   const { data, isLoading, isError, error, refetch } = useDecodedData(sessionId, {
     limit: RELATION_FETCH_LIMIT,
     offset: 0,
-    filter: filter || undefined,
   });
 
   const [onlyRelated, setOnlyRelated] = useState(true);
@@ -51,38 +51,46 @@ export function RelationshipView({ sessionId, filter }: RelationshipViewProps) {
   const totalMatched = data?.total_matched ?? 0;
   const truncated = totalMatched > events.length;
 
+  // 前端模糊过滤：在已加载的整段事件上按 query 过滤，再据此建父子森林与配对组。
+  const filteredEvents = useMemo(() => {
+    if (!query) return events;
+    return events.filter((e) => eventMatchesQuery(e, query));
+  }, [events, query]);
+
+  const hasQuery = !!query;
+
   // 父子索引：parent_id → 子事件；roots = 没有父事件在已载入集合内的顶层事件。
   const { childrenOf, roots } = useMemo(() => {
     const byId = new Map<string, DecodedEvent>();
     const children = new Map<string, DecodedEvent[]>();
-    for (const ev of events) byId.set(ev.id, ev);
-    for (const ev of events) {
+    for (const ev of filteredEvents) byId.set(ev.id, ev);
+    for (const ev of filteredEvents) {
       if (!ev.parent_id) continue;
       const arr = children.get(ev.parent_id);
       if (arr) arr.push(ev);
       else children.set(ev.parent_id, [ev]);
     }
-    const top = events.filter((ev) => !ev.parent_id || !byId.has(ev.parent_id));
+    const top = filteredEvents.filter((ev) => !ev.parent_id || !byId.has(ev.parent_id));
     return { childrenOf: children, roots: top };
-  }, [events]);
+  }, [filteredEvents]);
 
   // 配对索引：请求事件 id → 其响应（causation_id 指回请求）。
   const responsesOf = useMemo(() => {
     const m = new Map<string, DecodedEvent[]>();
-    for (const ev of events) {
+    for (const ev of filteredEvents) {
       if (!ev.causation_id) continue;
       const arr = m.get(ev.causation_id);
       if (arr) arr.push(ev);
       else m.set(ev.causation_id, [ev]);
     }
     return m;
-  }, [events]);
-  const requestWithResponses = events.filter((ev) => (responsesOf.get(ev.id)?.length ?? 0) > 0);
+  }, [filteredEvents]);
+  const requestWithResponses = filteredEvents.filter((ev) => (responsesOf.get(ev.id)?.length ?? 0) > 0);
 
   // 有关系 = 参与过 extract 父子（任一侧）或 pair 配对（任一侧）。
   const relatedIds = useMemo(() => {
     const s = new Set<string>();
-    for (const ev of events) {
+    for (const ev of filteredEvents) {
       if (ev.parent_id) {
         s.add(ev.id);
         s.add(ev.parent_id);
@@ -93,7 +101,7 @@ export function RelationshipView({ sessionId, filter }: RelationshipViewProps) {
       }
     }
     return s;
-  }, [events]);
+  }, [filteredEvents]);
 
   const visibleRoots = useMemo(
     () => (onlyRelated ? roots.filter((ev) => relatedIds.has(ev.id)) : roots),
@@ -104,9 +112,9 @@ export function RelationshipView({ sessionId, filter }: RelationshipViewProps) {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
-          已载入 {events.length} 条事件
+          已载入 {filteredEvents.length} 条事件{hasQuery ? "（命中模糊搜索）" : ""}
           {truncated ? `（会话共 ${totalMatched} 条，关系视图最多取前 ${RELATION_FETCH_LIMIT} 条）` : ""}
-          {filter ? " · 受当前筛选影响" : ""} · 有关系 {relatedIds.size} 条
+          {" "}· 有关系 {relatedIds.size} 条
         </p>
         <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
           <input
@@ -136,11 +144,15 @@ export function RelationshipView({ sessionId, filter }: RelationshipViewProps) {
             重试
           </Button>
         </div>
-      ) : events.length === 0 ? (
+      ) : filteredEvents.length === 0 ? (
         <EmptyState
           icon={<Inbox className="h-5 w-5" />}
-          title="暂无关系数据"
-          hint="未解码到 extract 父子或 pair 配对。尝试清除筛选，或确认解码插件声明了对应语义规则。"
+          title={hasQuery ? "无匹配关系" : "暂无关系数据"}
+          hint={
+            hasQuery
+              ? "没有事件命中当前关键词。尝试更换或清除模糊搜索条件。"
+              : "未解码到 extract 父子或 pair 配对。尝试清除模糊搜索条件，或确认解码插件声明了对应语义规则。"
+          }
           className="h-64 justify-center"
         />
       ) : (

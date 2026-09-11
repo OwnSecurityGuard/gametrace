@@ -1,54 +1,45 @@
-import { type ChangeEvent, type KeyboardEvent, type Ref, useEffect, useMemo, useRef, useState } from "react";
+// FilterBar — 协议数据页的模糊查询输入框（事件 / 关系 / 状态变更三视图共享）。
+//
+// 已从「筛选表达式 + 快捷字段标签」简化为单一模糊搜索框：
+//   - 输入过程中防抖（300ms）提交到 App 状态，再分流给三个子视图做纯前端过滤；
+//   - Enter 立即提交、Esc 清空、输入框右侧「清除」按钮一键清空；
+//   - 不调用后端 filter 表达式，无 schema/语法提示。
+import { type ChangeEvent, type KeyboardEvent, type Ref, useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { useCaptureSchema } from "@/hooks/use-mcp";
 import { Search, X } from "lucide-react";
 
 interface FilterBarProps {
-  sessionId: string | null;
-  filter: string;
-  onFilterChange: (filter: string) => void;
+  query: string;
+  onQueryChange: (query: string) => void;
   /** 由父组件传入，用于 "/" 快捷键聚焦输入框 */
   inputRef?: Ref<HTMLInputElement>;
 }
 
-/** 快捷字段默认只露出前 N 个：字段多时整排小按钮会把筛选栏撑成两行，反而更难找。 */
-const QUICK_FIELD_LIMIT = 6;
-
-export function FilterBar({ sessionId, filter, onFilterChange, inputRef }: FilterBarProps) {
-  const { data: schemaData } = useCaptureSchema(sessionId);
-  const [local, setLocal] = useState(filter);
-  const [showAllFields, setShowAllFields] = useState(false);
+export function FilterBar({ query, onQueryChange, inputRef }: FilterBarProps) {
+  const [local, setLocal] = useState(query);
   const debounceRef = useRef<number | null>(null);
 
-  // 外部 filter 变化（切换会话清空、快捷标签）同步到本地输入
+  // 外部 query 变化（切换会话清空）同步回本地输入
   useEffect(() => {
-    setLocal(filter);
-  }, [filter]);
+    setLocal(query);
+  }, [query]);
 
-  // 本地输入变化后防抖提交（300ms），避免每次按键都触发后端查询
+  // 本地输入变化后防抖提交（300ms），避免每次按键都触发过滤
   useEffect(() => {
-    if (local === filter) return;
+    if (local === query) return;
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
     debounceRef.current = window.setTimeout(() => {
-      onFilterChange(local);
+      onQueryChange(local);
     }, 300);
     return () => {
       if (debounceRef.current) window.clearTimeout(debounceRef.current);
     };
-  }, [local, filter, onFilterChange]);
-
-  /** 从 schema 中提取 data.* 字段用于快捷标签 */
-  const dataFields = useMemo(() => {
-    if (!schemaData?.query_fields) return [];
-    return schemaData.query_fields
-      .filter((f) => f.name.startsWith("data."))
-      .map((f) => f.name);
-  }, [schemaData]);
+  }, [local, query, onQueryChange]);
 
   function flush() {
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
-    onFilterChange(local);
+    onQueryChange(local);
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
@@ -57,7 +48,7 @@ export function FilterBar({ sessionId, filter, onFilterChange, inputRef }: Filte
     } else if (e.key === "Escape") {
       if (debounceRef.current) window.clearTimeout(debounceRef.current);
       setLocal("");
-      onFilterChange("");
+      onQueryChange("");
     }
   }
 
@@ -65,23 +56,14 @@ export function FilterBar({ sessionId, filter, onFilterChange, inputRef }: Filte
     setLocal(e.target.value);
   }
 
-  function handleQuickFilter(field: string) {
-    const value = field.includes("method") ? '"GET"' : '""';
-    const newFilter = `${field} == ${value}`;
-    if (debounceRef.current) window.clearTimeout(debounceRef.current);
-    setLocal(newFilter);
-    onFilterChange(newFilter);
-  }
-
   function handleClear() {
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
     setLocal("");
-    onFilterChange("");
+    onQueryChange("");
   }
 
   return (
     <div className="space-y-2.5">
-      {/* 输入行 */}
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -90,8 +72,8 @@ export function FilterBar({ sessionId, filter, onFilterChange, inputRef }: Filte
             value={local}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            aria-label="筛选表达式"
-            placeholder='输入筛选表达式，如 data.method == "GET"（按 / 聚焦，Esc 清除）'
+            aria-label="模糊搜索"
+            placeholder="输入关键词模糊搜索，空格分隔多个词（AND），如 playerId 1001 / PlayerMove / server_to_client…"
             className="pl-9 font-mono"
           />
         </div>
@@ -100,38 +82,12 @@ export function FilterBar({ sessionId, filter, onFilterChange, inputRef }: Filte
           size="sm"
           onClick={handleClear}
           disabled={!local}
-          aria-label="清除筛选"
+          aria-label="清除搜索"
         >
           <X className="h-3 w-3" />
           清除
         </Button>
       </div>
-
-      {/* 快捷标签 */}
-      {dataFields.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-muted-foreground">快捷字段：</span>
-          {(showAllFields ? dataFields : dataFields.slice(0, QUICK_FIELD_LIMIT)).map((field) => (
-            <button
-              key={field}
-              type="button"
-              onClick={() => handleQuickFilter(field)}
-              className="cursor-pointer rounded-md border border-border bg-background px-2 py-0.5 font-mono text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-            >
-              {field}
-            </button>
-          ))}
-          {dataFields.length > QUICK_FIELD_LIMIT && (
-            <button
-              type="button"
-              onClick={() => setShowAllFields((v) => !v)}
-              className="rounded-md px-1.5 py-0.5 text-xs text-primary hover:underline"
-            >
-              {showAllFields ? "收起" : `更多 ${dataFields.length - QUICK_FIELD_LIMIT} 个`}
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 }

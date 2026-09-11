@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Dialog } from "@/components/ui/dialog";
 import { OpBadge, HighlightedJson } from "@/lib/event-display";
+import { changeMatchesQuery } from "@/lib/fuzzy";
 import { cn } from "@/lib/utils";
 import {
   Crosshair,
@@ -39,6 +40,8 @@ import type {
 
 interface StateChangeExplorerProps {
   sessionId: string | null;
+  /** 模糊查询关键词；非空时在 changes 流上前端过滤并显示扁平命中列表。 */
+  query?: string;
 }
 
 type ViewId = "operation" | "entity" | "time";
@@ -153,7 +156,7 @@ function TimeLabel({
 
 // ===== 主组件 =====
 
-export function StateChangeExplorer({ sessionId }: StateChangeExplorerProps) {
+export function StateChangeExplorer({ sessionId, query }: StateChangeExplorerProps) {
   const [view, setView] = useState<ViewId>("operation");
   const [anchorKind, setAnchorKind] = useState<AnchorKind>("");
   const [anchorId, setAnchorId] = useState("");
@@ -186,6 +189,14 @@ export function StateChangeExplorer({ sessionId }: StateChangeExplorerProps) {
   );
 
   const { data, isLoading, isError, error, refetch, isFetching } = useStateChanges(sessionId, params);
+
+  const changes = data?.changes ?? [];
+  const hasQuery = !!query;
+  // 前端模糊过滤：搜索态只展示命中的扁平变更；无搜索时走原有三视图。
+  const matchedChanges = useMemo(
+    () => (hasQuery ? changes.filter((c) => changeMatchesQuery(c, query!)) : changes),
+    [changes, hasQuery, query],
+  );
 
   // 锚点候选随查询结果累积：先看到什么就能拿什么当锚点，不必额外拉全量列表。
   const [catalog, setCatalog] = useState<{ ops: { key: string; label: string }[]; entities: string[] }>({
@@ -228,67 +239,72 @@ export function StateChangeExplorer({ sessionId }: StateChangeExplorerProps) {
 
   return (
     <div className="flex h-full flex-col gap-3">
-      <QueryBar
-        anchorKind={anchorKind}
-        onAnchorKind={(k) => {
-          setAnchorKind(k);
-          setAnchorId("");
-        }}
-        anchorId={anchorId}
-        onAnchorId={setAnchorId}
-        catalog={catalog}
-        beforeMs={beforeMs}
-        afterMs={afterMs}
-        onBeforeMs={setBeforeMs}
-        onAfterMs={setAfterMs}
-        sortBy={sortBy}
-        onSortBy={setSortBy}
-        typeFilter={typeFilter}
-        onTypeFilter={setTypeFilter}
-        pathFilter={pathFilter}
-        onPathFilter={setPathFilter}
-        opFilter={opFilter}
-        onOpFilter={setOpFilter}
-        timeMode={timeMode}
-        onTimeMode={setTimeMode}
-        onReset={() => {
-          setAnchorKind("");
-          setAnchorId("");
-          setBeforeMs(0);
-          setAfterMs(3000);
-          setSortBy("first_change");
-          setTypeFilter("");
-          setPathFilter("");
-          setOpFilter("");
-          setFocus({});
-        }}
-        onRefresh={() => void refetch()}
-        busy={isFetching}
-      />
+      {/* 查询态只做扁平模糊搜索，隐藏锚点/窗口/排序等高级筛选提干扰 */}
+      {!hasQuery && (
+        <QueryBar
+          anchorKind={anchorKind}
+          onAnchorKind={(k) => {
+            setAnchorKind(k);
+            setAnchorId("");
+          }}
+          anchorId={anchorId}
+          onAnchorId={setAnchorId}
+          catalog={catalog}
+          beforeMs={beforeMs}
+          afterMs={afterMs}
+          onBeforeMs={setBeforeMs}
+          onAfterMs={setAfterMs}
+          sortBy={sortBy}
+          onSortBy={setSortBy}
+          typeFilter={typeFilter}
+          onTypeFilter={setTypeFilter}
+          pathFilter={pathFilter}
+          onPathFilter={setPathFilter}
+          opFilter={opFilter}
+          onOpFilter={setOpFilter}
+          timeMode={timeMode}
+          onTimeMode={setTimeMode}
+          onReset={() => {
+            setAnchorKind("");
+            setAnchorId("");
+            setBeforeMs(0);
+            setAfterMs(3000);
+            setSortBy("first_change");
+            setTypeFilter("");
+            setPathFilter("");
+            setOpFilter("");
+            setFocus({});
+          }}
+          onRefresh={() => void refetch()}
+          busy={isFetching}
+        />
+      )}
 
-      {/* 三视图切换：共用同一份数据，只是换渲染维度 */}
-      <div
-        role="tablist"
-        aria-label="状态变更视图"
-        className="inline-flex w-fit items-center gap-1 rounded-lg bg-muted p-1"
-      >
-        {VIEWS.map(({ id, label, hint, icon: Icon }) => (
-          <button
-            key={id}
-            role="tab"
-            aria-selected={view === id}
-            title={hint}
-            onClick={() => setView(id)}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-              view === id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <Icon className="h-3.5 w-3.5" />
-            {label}
-          </button>
-        ))}
-      </div>
+      {/* 三视图切换：共用同一份数据，只是换渲染维度（查询态隐藏） */}
+      {!hasQuery && (
+        <div
+          role="tablist"
+          aria-label="状态变更视图"
+          className="inline-flex w-fit items-center gap-1 rounded-lg bg-muted p-1"
+        >
+          {VIEWS.map(({ id, label, hint, icon: Icon }) => (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={view === id}
+              title={hint}
+              onClick={() => setView(id)}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                view === id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {isLoading && (
         <div className="space-y-2">
@@ -311,7 +327,7 @@ export function StateChangeExplorer({ sessionId }: StateChangeExplorerProps) {
         </div>
       )}
 
-      {data && data.changes.length === 0 && (
+      {data && changes.length === 0 && (
         <EmptyState
           icon={<TableProperties className="h-5 w-5" />}
           title="暂无匹配的状态变更"
@@ -323,7 +339,37 @@ export function StateChangeExplorer({ sessionId }: StateChangeExplorerProps) {
         />
       )}
 
-      {data && data.changes.length > 0 && (
+      {/* 查询态：扁平命中变更列表 */}
+      {hasQuery && changes.length > 0 && (
+        <div className="space-y-2">
+          <div className="px-1 text-xs text-muted-foreground" aria-live="polite">
+            命中 <b className="font-semibold text-foreground">{matchedChanges.length}</b> 条状态变更
+          </div>
+          {matchedChanges.length === 0 ? (
+            <EmptyState
+              icon={<TableProperties className="h-5 w-5" />}
+              title="无匹配状态变更"
+              hint="没有变更命中当前关键词，尝试更换或清除模糊搜索条件。"
+              className="h-56 justify-center"
+            />
+          ) : (
+            <div className="space-y-2">
+              {matchedChanges.map((c) => (
+                <div key={c.id} className="rounded-lg border border-border bg-card p-2">
+                  <ChangeRow
+                    change={c}
+                    timeMode={timeMode}
+                    onDetail={(d) => setDetail({ ...d })}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 非查询态：三视图 */}
+      {!hasQuery && data && changes.length > 0 && (
         <>
           <SummaryBar data={data} />
           {view === "operation" && (

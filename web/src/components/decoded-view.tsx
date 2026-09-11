@@ -1,7 +1,8 @@
 // DecodedView — 「协议数据」页的三视图容器。
 //
 // 从单一事件表格升级为内部三分段：事件（表格）/ 关系（父子树+配对）/ 状态变更（三视图分析）。
-// 沿用 App 顶部 segmented tab 样式，filter 仅影响事件与关系两个基于事件的子视图。
+// query（模糊关键词）由 App 传入并在三个子视图间共享：事件 / 关系在已加载事件上做内存过滤，
+// 状态变更在 changes 流上做内存过滤。
 import { useState } from "react";
 import { EventTable } from "@/components/event-table";
 import { RelationshipView } from "@/components/relationship-view";
@@ -10,8 +11,7 @@ import { Table2, GitFork, TableProperties } from "lucide-react";
 
 interface DecodedViewProps {
   sessionId: string | null;
-  filter: string;
-  onFilterChange: (filter: string) => void;
+  query: string;
 }
 
 type DecodedSubview = "events" | "relations" | "state";
@@ -22,7 +22,7 @@ const SUBVIEWS: { id: DecodedSubview; label: string; icon: typeof Table2 }[] = [
   { id: "state", label: "状态变更", icon: TableProperties },
 ];
 
-export function DecodedView({ sessionId, filter, onFilterChange }: DecodedViewProps) {
+export function DecodedView({ sessionId, query }: DecodedViewProps) {
   const [subview, setSubview] = useState<DecodedSubview>("events");
 
   return (
@@ -55,11 +55,9 @@ export function DecodedView({ sessionId, filter, onFilterChange }: DecodedViewPr
         })}
       </div>
 
-      {subview === "events" && (
-        <EventTable sessionId={sessionId} filter={filter} onFilterChange={onFilterChange} />
-      )}
-      {subview === "relations" && <RelationshipView sessionId={sessionId} filter={filter} />}
-      {subview === "state" && <StateChangeExplorer sessionId={sessionId} />}
+      {subview === "events" && <EventTable sessionId={sessionId} query={query} />}
+      {subview === "relations" && <RelationshipView sessionId={sessionId} query={query} />}
+      {subview === "state" && <StateChangeExplorer sessionId={sessionId} query={query} />}
     </div>
   );
 }

@@ -3,7 +3,7 @@
 // 设计：
 //   - POST /access/register {"name":"carol"} → 201 {"ok":true,"owner":"carol","token":"gt_..."}
 //   - 仅 token 鉴权模式下开放（匿名模式没有"用户"概念，注册无意义）；
-//     GT_AUTH_REGISTER=off 可显式关闭（封闭团队走纯邀请制）。
+//     GT_AUTH_REGISTER=off 可显式关闭（禁用自助注册）。
 //   - 身份落 users 表（与邀请 claim 同表、同一条 DBResolver 解析链），即时生效。
 //   - 保留名拒绝：env bootstrap 的 owner（同名会让 projects/sessions 的 owner
 //     字段把两个身份混同，权限边界击穿）、匿名 owner "local"、既有邀请制用户。

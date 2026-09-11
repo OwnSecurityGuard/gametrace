@@ -21,8 +21,6 @@ export interface AccessCode {
   claimed?: boolean;
   /** 认领后建立的服务端会话 */
   session_id?: string;
-  /** 非空表示邀请码：认领时为该名字创建独立身份 */
-  new_owner?: string;
 }
 
 /** create_access_code 返回：新建的启动码。 */
@@ -35,10 +33,6 @@ export interface CreateAccessCodeResult {
   port?: number;
   platform?: string;
   expires_at: string;
-  /** 邀请码标记：new_owner 非空时为 true */
-  invite?: boolean;
-  /** 邀请码目标身份名 */
-  new_owner?: string;
 }
 
 /** list_access_codes 返回：当前用户可见的启动码列表。 */
@@ -48,7 +42,7 @@ export interface ListAccessCodesResult {
   codes: AccessCode[];
 }
 
-/** 邀请制用户条目（list_users 返回；不含 token —— 凭证只在创建时展示一次）。 */
+/** 自助注册用户条目（list_users 返回；不含 token —— 凭证只在创建时展示一次）。 */
 export interface GtaUser {
   owner: string;
   is_admin?: boolean;

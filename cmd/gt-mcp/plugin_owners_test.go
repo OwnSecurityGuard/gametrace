@@ -13,7 +13,7 @@ import (
 //   - 无关用户拿到 nil（= 只能用自己注册的插件）；
 //   - 插件条目无归属（老数据）不产生候选。
 func TestPluginOwnersFor(t *testing.T) {
-	m, _, _ := newInviteMCP(t)
+	m, _, _ := newUserMgmtMCP(t)
 	ctx := context.Background()
 
 	p := &project{
@@ -50,7 +50,7 @@ func TestPluginOwnersFor(t *testing.T) {
 // TestSetProjectPlugins_RecordsOwner 验证 set_project_plugins 为无归属条目
 // 记录设置者身份（幂等回显：已带 owner 的条目不被覆盖）。
 func TestSetProjectPlugins_RecordsOwner(t *testing.T) {
-	m, _, _ := newInviteMCP(t)
+	m, _, _ := newUserMgmtMCP(t)
 	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{Owner: "bob"})
 	req := reqWith("name", "P")
 	if _, err := m.handleCreateProject(ctx, req); err != nil {

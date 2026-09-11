@@ -60,19 +60,13 @@ openssl rand -hex 24   # 输出前加 gt_tok_ 前缀
 
 其余 `.env` 可选项（端口映射 `GT_*_PORT`、容器内监听地址 `GT_*_ADDR`、CORS `GT_MCP_ALLOWED_ORIGINS`、版本注入 `GT_VERSION`/`GT_GIT_COMMIT`）见 `.env.example` 内注释。
 
-### 2.2 邀请制与自助注册：新成员获取身份
+### 2.2 自助注册：新成员获取身份
 
-新成员有两条路径获得个人独立身份（users 表 + 即时生效的 `gt_` token）：
+新成员通过自助注册获得个人独立身份（users 表 + 即时生效的 `gt_` token）：
 
-1. **自助注册（默认开放）**：Web UI「设置」弹窗 →「没有令牌？快速开始」输入用户名即可创建身份，无需管理员介入。注册者可立即创建自己的项目、抓原始包；**别人项目的解码插件需要该项目把你加为成员（项目邀请）才能按名解析使用**。接口为 `POST /access/register {"name":"carol"}`；`GT_AUTH_REGISTER=off` 可显式关闭（封闭团队走纯邀请制）；匿名模式下无意义（恒关闭）。保留名不可注册：env bootstrap 的 owner、匿名 owner `local`、已存在用户。
-2. **邀请码**：持有 token 的成员在 Web UI「我的接入」面板勾选「邀请码：为新成员创建独立身份」，填入新成员用户名后生成邀请码；新成员认领后即获得个人独立身份，而非借用邀请人的身份。
+1. **自助注册（默认开放）**：Web UI「设置」弹窗 →「没有令牌？快速开始」输入用户名即可创建身份，无需管理员介入。注册者可立即创建自己的项目、抓原始包；**别人项目的解码插件需要该项目把你加为成员（项目邀请）才能按名解析使用**。接口为 `POST /access/register {"name":"carol"}`；`GT_AUTH_REGISTER=off` 可显式关闭（禁用自助注册）；匿名模式下无意义（恒关闭）。保留名不可注册：env bootstrap 的 owner、匿名 owner `local`、已存在用户。
 
-邀请码细节：
-
-- **发放**：`create_access_code` 带 `new_owner` 参数（格式：字母/数字开头，可含 `. _ -`，≤64 字符；同名用户已存在则拒绝）。匿名部署无法发邀请。
-- **认领**：新成员在目标机执行 `curl -fsSL "http://<server>:8781/access/claim?code=<GT-XXXX>"`，返回 JSON 中的 `token` 即个人凭证（仅此一次展示）；走 setup 脚本接入设备时同样自动创建身份。
-- **管理**：global admin（`:admin` token）可用 `list_users` / `revoke_user` 查看与撤销邀请制用户（含自助注册用户）；撤销即删 users 行，token **立即失效**。env bootstrap 身份（`GT_AUTH_TOKENS`）不在其列，天然不可被撤销。
-- 注意：env bootstrap token 默认**不是** global admin，需带 `:admin` 后缀才能使用成员管理工具。
+成员管理（撤销等）：global admin（`:admin` token）可用 `list_users` / `revoke_user` 查看与撤销自助注册用户；撤销即删 users 行，token **立即失效**。env bootstrap 身份（`GT_AUTH_TOKENS`）不在其列，天然不可被撤销。注意：env bootstrap token 默认**不是** global admin，需带 `:admin` 后缀才能使用成员管理工具。
 
 **项目插件共享**：项目 admin 在项目页设置的解码插件条目会记录设置者身份；项目成员（member/admin/owner）开始抓包（`start_capture`、租约抓包、`set_session_plugin` 热切换）时，服务端自动把"所属项目插件的归属 owner"加入解析白名单——成员可以用项目插件，但看不到、也不能用项目之外的其他用户插件。
 

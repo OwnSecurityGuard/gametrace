@@ -26,7 +26,6 @@ CREATE TABLE IF NOT EXISTS access_codes (
     code        TEXT PRIMARY KEY,
     owner       TEXT NOT NULL DEFAULT '',
     project_id  TEXT NOT NULL DEFAULT '',
-    new_owner   TEXT NOT NULL DEFAULT '',
     plugin      TEXT NOT NULL DEFAULT '',
     port        INTEGER NOT NULL DEFAULT 0,
     server      TEXT NOT NULL DEFAULT '',
@@ -37,17 +36,10 @@ CREATE TABLE IF NOT EXISTS access_codes (
     session_id  TEXT NOT NULL DEFAULT ''
 );`
 
-// accessCodeNewOwnerCol 是邀请制（new_owner）列的幂等补列语句：
-// 既有库由 Init 时 PRAGMA 复查 + ALTER 兜底（与 projects.owner 列迁移同款策略）。
-const accessCodeNewOwnerDDL = `ALTER TABLE access_codes ADD COLUMN new_owner TEXT NOT NULL DEFAULT ''`
-
 type accessCode struct {
 	Code      string    `json:"code"`
 	Owner     string    `json:"owner"`
 	ProjectID string    `json:"project_id,omitempty"`
-	// NewOwner 非空表示这是邀请码：claim 时为该名字创建独立身份（users 表），
-	// 而不是把 code 创建者的身份借给目标机。
-	NewOwner  string    `json:"new_owner,omitempty"`
 	Plugin    string    `json:"plugin,omitempty"`
 	Port      int       `json:"port"`
 	Server    string    `json:"server,omitempty"`
@@ -66,22 +58,14 @@ func (s *accessCodeStore) Init() error {
 	if _, err := s.db.Exec(accessCodeSchema); err != nil {
 		return err
 	}
-	// 既有库补 new_owner 列（CREATE TABLE IF NOT EXISTS 不会为老表加列）。
-	if !sqliteHasColumn(s.db, "access_codes", "new_owner") {
-		if _, err := s.db.Exec(accessCodeNewOwnerDDL); err != nil {
-			if !sqliteHasColumn(s.db, "access_codes", "new_owner") {
-				return fmt.Errorf("migrate access_codes.new_owner: %w", err)
-			}
-		}
-	}
 	return nil
 }
 
 func (s *accessCodeStore) Create(ctx context.Context, c *accessCode) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO access_codes(code,owner,project_id,new_owner,plugin,port,server,platform,created_at,expires_at,claimed,session_id)
-		 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-		c.Code, c.Owner, c.ProjectID, c.NewOwner, c.Plugin, c.Port, c.Server, c.Platform,
+		`INSERT INTO access_codes(code,owner,project_id,plugin,port,server,platform,created_at,expires_at,claimed,session_id)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		c.Code, c.Owner, c.ProjectID, c.Plugin, c.Port, c.Server, c.Platform,
 		c.CreatedAt.Format(time.RFC3339), c.ExpiresAt.Format(time.RFC3339),
 		boolInt(c.Claimed), c.SessionID)
 	return err
@@ -89,7 +73,7 @@ func (s *accessCodeStore) Create(ctx context.Context, c *accessCode) error {
 
 func (s *accessCodeStore) Get(ctx context.Context, code string) (*accessCode, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT code,owner,project_id,new_owner,plugin,port,server,platform,created_at,expires_at,claimed,session_id
+		`SELECT code,owner,project_id,plugin,port,server,platform,created_at,expires_at,claimed,session_id
 		 FROM access_codes WHERE code=?`, code)
 	return scanAccessCode(row)
 }
@@ -103,7 +87,7 @@ func (s *accessCodeStore) MarkClaimed(ctx context.Context, code string) error {
 
 func (s *accessCodeStore) listForOwner(ctx context.Context, owner string, all bool) ([]accessCode, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT code,owner,project_id,new_owner,plugin,port,server,platform,created_at,expires_at,claimed,session_id
+		`SELECT code,owner,project_id,plugin,port,server,platform,created_at,expires_at,claimed,session_id
 		 FROM access_codes ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -126,7 +110,7 @@ func scanAccessCode(s interface{ Scan(dest ...any) error }) (*accessCode, error)
 	var c accessCode
 	var ca, ea string
 	var claimed int
-	err := s.Scan(&c.Code, &c.Owner, &c.ProjectID, &c.NewOwner, &c.Plugin, &c.Port, &c.Server, &c.Platform,
+	err := s.Scan(&c.Code, &c.Owner, &c.ProjectID, &c.Plugin, &c.Port, &c.Server, &c.Platform,
 		&ca, &ea, &claimed, &c.SessionID)
 	if err != nil {
 		return nil, err
@@ -168,9 +152,6 @@ func newAccessCode() string {
 //
 // 启动码只解决「这台机器是谁、回连到哪」：不再带抓包端口与解码插件——
 // 那是「开始抓包」时才确定的事，由 Web 下发给已接入的探针。
-//
-// 邀请模式（new_owner 非空）：claim 时为 new_owner 创建**独立身份**（users 表），
-// 而不是把调用者身份借给目标机 —— 新用户凭码即可获得自己的 token（2026-09-05 邀请制）。
 func (m *mcpCapture) handleCreateAccessCode(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	p := authzPrincipal(ctx)
 	owner := p.User
@@ -181,23 +162,6 @@ func (m *mcpCapture) handleCreateAccessCode(ctx context.Context, req mcp.CallToo
 	platform := req.GetString("platform", "")
 	projectID := req.GetString("project_id", "")
 	server := strings.TrimSpace(req.GetString("server", ""))
-	// 邀请模式参数：new_owner 是将被创建的新身份名。
-	newOwner := strings.TrimSpace(req.GetString("new_owner", ""))
-	if newOwner != "" {
-		if owner == "" {
-			return errorResult(fmt.Errorf("anonymous callers cannot issue invitations; bootstrap a token first")), nil
-		}
-		if !validOwnerName(newOwner) {
-			return errorResult(fmt.Errorf("invalid new_owner %q: letters/digits/._- , starts with letter or digit, max 64 chars", newOwner)), nil
-		}
-		exists, err := m.users.OwnerExists(ctx, newOwner)
-		if err != nil {
-			return nil, err
-		}
-		if exists {
-			return errorResult(fmt.Errorf("user %s already exists; invitations are for new identities only", newOwner)), nil
-		}
-	}
 	if projectID != "" {
 		target, err := m.projects.Get(ctx, projectID)
 		if err != nil {
@@ -215,7 +179,6 @@ func (m *mcpCapture) handleCreateAccessCode(ctx context.Context, req mcp.CallToo
 		Code:      code,
 		Owner:     owner,
 		ProjectID: projectID,
-		NewOwner:  newOwner,
 		Server:    server,
 		Platform:  platform,
 		CreatedAt: time.Now(),
@@ -224,11 +187,10 @@ func (m *mcpCapture) handleCreateAccessCode(ctx context.Context, req mcp.CallToo
 	if err := m.accessCodes.Create(ctx, rec); err != nil {
 		return nil, fmt.Errorf("create access code: %w", err)
 	}
-	slog.Info("access code created", "owner", owner, "code", code, "invite_for", newOwner)
+	slog.Info("access code created", "owner", owner, "code", code)
 	return successResult(map[string]any{
-		"code": code, "owner": owner, "project_id": projectID, "new_owner": newOwner,
+		"code": code, "owner": owner, "project_id": projectID,
 		"platform": platform, "expires_at": rec.ExpiresAt.Format(time.RFC3339),
-		"invite": newOwner != "",
 	}), nil
 }
 
@@ -301,9 +263,7 @@ func (m *mcpCapture) handleAccessClaim(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveAccessCode 校验启动码并换回「身份 + 回连」：owner、token、registry、ingest。
-// 邀请模式会为 new_owner 创建独立身份；已存在则复用其 token，使接入脚本先 claim 再
-// 下载同码时不会因重复建用户而 409。码无效/过期/邀请不可用已在 w 写出错误响应；
-// 调用方检查 ok 即可（失败时不返回配置）。
+// 码无效/过期已在 w 写出错误响应；调用方检查 ok 即可（失败时不返回配置）。
 func (m *mcpCapture) resolveAccessCode(w http.ResponseWriter, r *http.Request, code string) (owner, token, registry, ingest string, ok bool) {
 	ctx := r.Context()
 	rec, err := m.accessCodes.Get(ctx, code)
@@ -318,31 +278,6 @@ func (m *mcpCapture) resolveAccessCode(w http.ResponseWriter, r *http.Request, c
 
 	owner = rec.Owner
 	token = m.ownerSecret(owner)
-	if rec.NewOwner != "" {
-		if m.users == nil {
-			http.Error(w, "invite is not available on this deployment", http.StatusServiceUnavailable)
-			return "", "", "", "", false
-		}
-		// 幂等：接入脚本可能先 claim 再下载（同码二次领取），已建身份直接复用 token。
-		if exists, _ := m.users.OwnerExists(ctx, rec.NewOwner); exists {
-			tok, terr := m.users.TokenByOwner(ctx, rec.NewOwner)
-			if terr != nil {
-				slog.Warn("invite re-claim: get token failed", "new_owner", rec.NewOwner, "error", terr)
-				http.Error(w, "invite re-claim failed: "+terr.Error(), http.StatusInternalServerError)
-				return "", "", "", "", false
-			}
-			owner, token = rec.NewOwner, tok
-		} else {
-			u, newToken, cerr := m.users.CreateUser(ctx, rec.NewOwner, rec.Owner)
-			if cerr != nil {
-				slog.Warn("invite claim: create user failed", "new_owner", rec.NewOwner, "error", cerr)
-				http.Error(w, "invite claim failed: "+cerr.Error(), http.StatusConflict)
-				return "", "", "", "", false
-			}
-			owner, token = u.Owner, newToken
-			slog.Info("invite claimed: new identity created", "new_owner", owner, "created_by", rec.Owner, "code", code)
-		}
-	}
 
 	// 回连地址与凭证：对外通告地址优先（GT_PUBLIC_HOST），否则按探针本次请求的
 	// Host 回推——探针是怎么访问到本端点的，就怎么回连。
@@ -378,7 +313,7 @@ func (m *mcpCapture) handleListUsers(ctx context.Context, req mcp.CallToolReques
 	return successResult(map[string]any{"users": users, "bootstrap_owners": bootstrap}), nil
 }
 
-// handleRevokeUser 撤销邀请制用户（删除 users 行，token 即时失效；仅 global admin）。
+// handleRevokeUser 撤销自助注册用户（删除 users 行，token 即时失效；仅 global admin）。
 // 只能撤销 users 表里的身份：env bootstrap（GT_AUTH_TOKENS）不在此列，天然不可撤销。
 func (m *mcpCapture) handleRevokeUser(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if err := m.authz.Can(ctx, authz.ActionUserManage, authz.Resource{Kind: authz.KindUser}); err != nil {

@@ -41,15 +41,17 @@ import {
   OpBadge,
   type EventMeta,
 } from "@/lib/event-display";
+import { eventMatchesQuery } from "@/lib/fuzzy";
 
 interface EventTableProps {
   sessionId: string | null;
-  filter: string;
-  /** 供配对定位写回筛选表达式（App 状态，同步到 FilterBar）。 */
-  onFilterChange?: (filter: string) => void;
+  /** 模糊查询关键词；非空时一次性拉取较大批次在前端内存过滤，空时保持分页拉取。 */
+  query: string;
 }
 
 const PAGE_SIZES = [20, 50, 100];
+/** 有查询词时向前端内存过滤提供的事件批次上限。 */
+const QUERY_FETCH_LIMIT = 1000;
 
 /** 生成一行 payload 摘要文本 */
 function summarizePayload(data: Record<string, unknown>, meta: EventMeta): string {
@@ -113,12 +115,10 @@ function PairPanel({
   event,
   partners,
   onJumpToPartner,
-  onLocatePair,
 }: {
   event: DecodedEvent;
   partners: DecodedEvent[];
   onJumpToPartner: (id: string) => void;
-  onLocatePair: (event: DecodedEvent) => void;
 }) {
   if (partners.length === 0 && !event.causation_id) return null;
 
@@ -149,14 +149,7 @@ function PairPanel({
         })
       ) : (
         <span className="text-xs text-muted-foreground">
-          配对消息不在当前页
-          <button
-            type="button"
-            onClick={() => onLocatePair(event)}
-            className="ml-2 inline-flex items-center rounded border border-border px-1.5 py-0.5 text-[11px] text-primary hover:bg-muted transition-colors"
-          >
-            筛选定位
-          </button>
+          配对消息不在当前页（可在上方模糊搜索框输入该消息名或 id 定位）
         </span>
       )}
     </div>
@@ -330,7 +323,6 @@ function AnalysisPanel({
   children,
   analysis,
   onJumpToPartner,
-  onLocatePair,
   onJumpToChild,
 }: {
   event: DecodedEvent;
@@ -338,7 +330,6 @@ function AnalysisPanel({
   children: DecodedEvent[];
   analysis: Record<string, unknown>;
   onJumpToPartner: (id: string) => void;
-  onLocatePair: (event: DecodedEvent) => void;
   onJumpToChild: (id: string) => void;
 }) {
   const sc = Array.isArray(analysis._state_changes) ? analysis._state_changes : [];
@@ -360,7 +351,6 @@ function AnalysisPanel({
         event={event}
         partners={partners}
         onJumpToPartner={onJumpToPartner}
-        onLocatePair={onLocatePair}
       />
       <ChildPanel children={children} onJumpToChild={onJumpToChild} />
 
@@ -535,7 +525,6 @@ function ExpandedRow({
   children,
   colSpan,
   onJumpToPartner,
-  onLocatePair,
   onJumpToChild,
   onCollapse,
 }: {
@@ -544,7 +533,6 @@ function ExpandedRow({
   children: DecodedEvent[];
   colSpan: number;
   onJumpToPartner: (id: string) => void;
-  onLocatePair: (event: DecodedEvent) => void;
   onJumpToChild: (id: string) => void;
   onCollapse: () => void;
 }) {
@@ -609,7 +597,6 @@ function ExpandedRow({
               children={children}
               analysis={classes.analysis}
               onJumpToPartner={onJumpToPartner}
-              onLocatePair={onLocatePair}
               onJumpToChild={onJumpToChild}
             />
           </div>
@@ -630,7 +617,6 @@ const EventRow = memo(function EventRow({
   isHighlighted,
   onToggle,
   onJumpToPartner,
-  onLocatePair,
   onJumpToChild,
   onCollapse,
 }: {
@@ -642,7 +628,6 @@ const EventRow = memo(function EventRow({
   isHighlighted: boolean;
   onToggle: (id: string) => void;
   onJumpToPartner: (id: string) => void;
-  onLocatePair: (event: DecodedEvent) => void;
   onJumpToChild: (id: string) => void;
   onCollapse: (id: string) => void;
 }) {
@@ -725,7 +710,6 @@ const EventRow = memo(function EventRow({
           children={children}
           colSpan={colSpan}
           onJumpToPartner={onJumpToPartner}
-          onLocatePair={onLocatePair}
           onJumpToChild={onJumpToChild}
           onCollapse={() => onCollapse(event.id)}
         />
@@ -736,7 +720,7 @@ const EventRow = memo(function EventRow({
 
 // ─── 主表格组件 ───────────────────────────────────────────────
 
-export function EventTable({ sessionId, filter, onFilterChange }: EventTableProps) {
+export function EventTable({ sessionId, query }: EventTableProps) {
   const [page, setPage] = useState<number>(0);
   const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0]!);
   // 允许多行同时展开：对比请求/响应时不用来回点，这是最常见的阅读动作。
@@ -746,9 +730,15 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
   useEffect(() => {
     setPage(0);
     setExpandedIds(new Set());
-  }, [sessionId, filter]);
+  }, [sessionId, query]);
 
   const offset = page * pageSize;
+
+  // 有查询词时：一次性拉取较大批次在前端内存过滤（保证搜索跨页完整不遗漏）；
+  // 无查询词时：保持原有分页拉取。禁用 filter 表达式，改由前端过滤。
+  const useLargeLimit = !!query;
+  const effectiveLimit = useLargeLimit ? QUERY_FETCH_LIMIT : pageSize;
+  const effectiveOffset = useLargeLimit ? 0 : offset;
 
   const {
     data,
@@ -759,16 +749,22 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
     isFetching,
     isPlaceholderData,
   } = useDecodedData(sessionId, {
-    limit: pageSize,
-    offset,
-    filter: filter || undefined,
+    limit: effectiveLimit,
+    offset: effectiveOffset,
   });
 
   const events = useMemo(() => data?.events ?? [], [data]);
   const totalMatched = data?.total_matched ?? 0;
+
+  // 前端模糊过滤：搜索态在已拉取的批次上按 query 过滤。
+  const filteredEvents = useMemo(() => {
+    if (!query) return events;
+    return events.filter((e) => eventMatchesQuery(e, query));
+  }, [events, query]);
+
   const totalPages = Math.ceil(totalMatched / pageSize);
   // 整页都没有 capture 上下文（非代理抓包）时隐藏该列，把宽度让给消息与摘要。
-  const showCapture = useMemo(() => events.some((e) => !!e.capture), [events]);
+  const showCapture = useMemo(() => filteredEvents.some((e) => !!e.capture), [filteredEvents]);
 
   /**
    * 配对索引：事件 id → 当前页内的配对伙伴。
@@ -776,14 +772,14 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
    * 不用 correlation_id —— 后者可能是插件 decode 侧写的流键（全流共享），不是配对关系。
    */
   const partnersMap = useMemo(() => {
-    const byId = new Map(events.map((e) => [e.id, e]));
+    const byId = new Map(filteredEvents.map((e) => [e.id, e]));
     const m = new Map<string, DecodedEvent[]>();
     const push = (key: string, val: DecodedEvent) => {
       const arr = m.get(key);
       if (arr) arr.push(val);
       else m.set(key, [val]);
     };
-    for (const ev of events) {
+    for (const ev of filteredEvents) {
       if (!ev.causation_id) continue;
       const req = byId.get(ev.causation_id);
       if (!req) continue;
@@ -791,21 +787,21 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
       push(ev.id, req);
     }
     return m;
-  }, [events]);
+  }, [filteredEvents]);
 
   /**
    * 父子索引：父事件 id → 当前页内的提取子事件（parent_id 指回父事件，extract 规则写入）。
    */
   const childrenMap = useMemo(() => {
     const m = new Map<string, DecodedEvent[]>();
-    for (const ev of events) {
+    for (const ev of filteredEvents) {
       if (!ev.parent_id) continue;
       const arr = m.get(ev.parent_id);
       if (arr) arr.push(ev);
       else m.set(ev.parent_id, [ev]);
     }
     return m;
-  }, [events]);
+  }, [filteredEvents]);
 
   /** 展开并滚动定位到某事件（配对伙伴 / 子事件跳转）。 */
   function handleJumpTo(id: string) {
@@ -815,13 +811,6 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
       document.getElementById(`event-row-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 0);
     setTimeout(() => setHighlightId(null), 2000);
-  }
-
-  function handleLocatePair(ev: DecodedEvent) {
-    if (!onFilterChange) return;
-    setExpandedIds(new Set());
-    // 响应方：按请求事件 id 找；请求方：找 causation_id 指向自己的响应。
-    onFilterChange(ev.causation_id ? `id == "${ev.causation_id}"` : `causation_id == "${ev.id}"`);
   }
 
   function handleToggleExpand(eventId: string) {
@@ -877,15 +866,17 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
     );
   }
 
-  if (events.length === 0) {
+  if (filteredEvents.length === 0) {
     return (
       <EmptyState
-        icon={totalMatched === 0 ? <Table2 className="h-5 w-5" /> : <SearchX className="h-5 w-5" />}
-        title={totalMatched === 0 ? "暂无解码数据" : "无匹配结果"}
+        icon={query || totalMatched === 0 ? <SearchX className="h-5 w-5" /> : <Table2 className="h-5 w-5" />}
+        title={query ? "无匹配结果" : totalMatched === 0 ? "暂无解码数据" : "无数据"}
         hint={
-          totalMatched === 0
-            ? "该会话尚未产生可解码的协议事件，或解码插件尚未绑定。"
-            : "尝试调整筛选表达式，或清除筛选查看全部数据。"
+          query
+            ? "没有事件命中当前关键词，尝试更换或清除模糊搜索条件。"
+            : totalMatched === 0
+              ? "该会话尚未产生可解码的协议事件，或解码插件尚未绑定。"
+              : "暂无数据。"
         }
         className="h-64 justify-center"
       />
@@ -897,35 +888,45 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
       {/* 后台刷新指示 */}
       {isFetching && !isLoading && <div className="gt-loading-bar" aria-hidden="true" />}
 
-      {/* 统计信息 + 每页条数 */}
+      {/* 统计信息 + 每页条数（搜索态隐藏分页相关控件） */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground" aria-live="polite">
         <span className="tabular-nums">
-          共 {totalMatched} 条 · 当前第 {offset + 1}–{Math.min(offset + pageSize, totalMatched)} 条
+          {query ? (
+            <>
+              命中 <b className="font-semibold text-foreground">{filteredEvents.length}</b> 条
+            </>
+          ) : (
+            <>
+              共 {totalMatched} 条 · 当前第 {offset + 1}–{Math.min(offset + pageSize, totalMatched)} 条
+            </>
+          )}
           {isPlaceholderData ? " · 更新中…" : ""}
           {expandedIds.size > 0 ? ` · 已展开 ${expandedIds.size} 行` : ""}
         </span>
-        <span className="flex items-center gap-2">
-          <span className="text-[11px] text-muted-foreground/70">点击行展开完整 JSON</span>
-          <label className="flex items-center gap-1">
-            <span className="text-[11px] text-muted-foreground/70">每页</span>
-            <select
-              value={pageSize}
-              onChange={(e) => {
-                setPageSize(Number(e.target.value));
-                setPage(0);
-                setExpandedIds(new Set());
-              }}
-              className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
-              aria-label="每页条数"
-            >
-              {PAGE_SIZES.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </label>
-        </span>
+        {!query && (
+          <span className="flex items-center gap-2">
+            <span className="text-[11px] text-muted-foreground/70">点击行展开完整 JSON</span>
+            <label className="flex items-center gap-1">
+              <span className="text-[11px] text-muted-foreground/70">每页</span>
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setPage(0);
+                  setExpandedIds(new Set());
+                }}
+                className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
+                aria-label="每页条数"
+              >
+                {PAGE_SIZES.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </span>
+        )}
       </div>
 
       {/* 数据表格 */}
@@ -942,7 +943,7 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
           </TableRow>
         </TableHeader>
         <TableBody>
-          {events.map((event: DecodedEvent) => (
+          {filteredEvents.map((event: DecodedEvent) => (
             <EventRow
               key={event.id}
               event={event}
@@ -953,7 +954,6 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
               isHighlighted={highlightId === event.id}
               onToggle={handleToggleExpand}
               onJumpToPartner={handleJumpTo}
-              onLocatePair={handleLocatePair}
               onJumpToChild={handleJumpTo}
               onCollapse={handleCollapse}
             />
@@ -961,8 +961,8 @@ export function EventTable({ sessionId, filter, onFilterChange }: EventTableProp
         </TableBody>
       </Table>
 
-      {/* 分页控件 */}
-      {totalPages > 1 && (
+      {/* 分页控件（搜索态隐藏） */}
+      {!query && totalPages > 1 && (
         <div className="flex items-center justify-center gap-2 pt-2">
           <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setPage(0)} disabled={page === 0} aria-label="第一页">
             <ChevronsLeft className="h-4 w-4" />

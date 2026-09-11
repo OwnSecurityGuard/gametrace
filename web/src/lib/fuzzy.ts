@@ -1,0 +1,85 @@
+/**
+ * 前端模糊查询工具（协议数据页的事件 / 关系 / 状态变更三视图共用）。
+ *
+ * 语义约定：
+ *  - 大小写不敏感的子串匹配；
+ *  - 多关键词以空白分隔，AND 语义（所有关键词都命中才算匹配）；
+ *  - 对每个事件把「协议名 / 消息名 / 方向 / id / 关联 id / 业务 payload」拼成一个
+ *    字段包再统一下沉匹配，让用户随便输入某个值的片段都能搜到。
+ *
+ * 纯前端过滤：仅在已加载的数据上做子串匹配，不调用后端 filter 表达式。
+ */
+import type { DecodedEvent } from "@/types/event";
+import type { Change } from "@/types/state-change";
+import { extractMeta } from "@/lib/event-display";
+
+/** 查询串 → 小写关键词数组（去空白、去空串）。 */
+export function fuzzyTokens(query: string): string[] {
+  return query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/** 字段包 must 包含所有的关键词（AND）。空查询恒为真。 */
+export function haystackIncludes(haystack: string, tokens: string[]): boolean {
+  if (tokens.length === 0) return true;
+  return tokens.every((t) => haystack.includes(t));
+}
+
+/** 任意值 → 小写扁平文本，供子串匹配。 */
+function flatten(o: unknown): string {
+  try {
+    return JSON.stringify(o).toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 事件是否命中查询。
+ * 覆盖协议名、消息名、方向、id / correlation / causation / parent、
+ * 以及 data / meta / analysis 全量序列化文本。
+ */
+export function eventMatchesQuery(ev: DecodedEvent, query: string): boolean {
+  const tokens = fuzzyTokens(query);
+  if (tokens.length === 0) return true;
+
+  const meta = extractMeta(ev.data, ev.meta);
+  const haystack = [
+    ev.protocol,
+    meta.msgName,
+    meta.direction,
+    ev.correlation_id || "",
+    ev.causation_id || "",
+    ev.parent_id || "",
+    ev.id,
+    flatten({ data: ev.data, meta: ev.meta, analysis: ev.analysis }),
+  ].join(" ").toLowerCase();
+
+  return haystackIncludes(haystack, tokens);
+}
+
+/**
+ * 字段变更是否命中查询。
+ * 覆盖主体类型/id、实体键、字段路径、操作、来源消息名/事件 id、变更前/后值。
+ */
+export function changeMatchesQuery(c: Change, query: string): boolean {
+  const tokens = fuzzyTokens(query);
+  if (tokens.length === 0) return true;
+
+  const haystack = [
+    c.subject_type,
+    c.subject_id,
+    c.entity_key,
+    c.path,
+    c.op,
+    c.source.msg_name,
+    c.source.event_id,
+    flatten(c.before),
+    flatten(c.after),
+  ].join(" ").toLowerCase();
+
+  return haystackIncludes(haystack, tokens);
+}
