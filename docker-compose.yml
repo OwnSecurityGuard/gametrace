@@ -45,6 +45,11 @@ x-build: &server-build
   # 完全重建（可用 GT_BUILD_NO_CACHE=false 临时退回缓存构建）。
   no_cache: ${GT_BUILD_NO_CACHE:-true}
   pull: ${GT_BUILD_PULL:-true}
+  # 探针 4 平台编译开关：默认 1（osxcross 交叉编译 darwin/amd64 + darwin/arm64，
+  # 见 Dockerfile；SDK 下载/编译失败会自动退化为 linux+windows 并 WARN）。
+  # 网络受限环境可设 0 跳过，darwin 探针由 macOS 宿主 make build-agents 补充。
+  args:
+    BUILD_DARWIN_AGENT: ${GT_BUILD_DARWIN_AGENT:-1}
 
 services:
   postgres:
@@ -148,10 +153,11 @@ services:
       - "${GT_MCP_PORT:-18781}:8781" # MCP HTTP/SSE + Web UI（浏览器访问 http://<host>:18781）
     volumes:
       - gt-data:/data
-      # 远程 agent 预置产物（只读）：docker build 前先 `make build-agents` 在本机预置，
-      # 挂载到镜像默认的 GT_AGENT_BIN_DIR=/opt/gametrace/agents（见 Dockerfile）。
-      # 「接入成员」页按此目录扫出的平台下发；缺产物平台会自动标为不可用，不影响其余功能。
-      - ./build/agents:/opt/gametrace/agents:ro
+      # 远程 agent 预置产物已由镜像内建（Dockerfile builder 编译 linux/amd64、
+      # windows/amd64 与 darwin/amd64、darwin/arm64 四份可抓包探针，见
+      # /opt/gametrace/agents；darwin 经 osxcross，可用 GT_BUILD_DARWIN_AGENT=0
+      # 关闭），无需宿主 `make build-agents` + 挂载。仍需补充平台时，可在宿主机
+      # 放一份产物并用 GT_AGENT_BIN_DIR 环境变量指过去。
 
 volumes:
   gt-data:

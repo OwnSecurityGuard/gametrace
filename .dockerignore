@@ -5,9 +5,9 @@
 go.work
 go.work.sum
 bin/
-# 远程 agent 预置产物不进构建上下文：镜像不烧入，由 docker-compose 把宿主
-# `./build/agents` 只读挂载到 GT_AGENT_BIN_DIR（见 Dockerfile）。保持镜像构建
-# 上下文不含宿主编译的多平台二进制（避免体积 + 陈旧产物进入 builder 层）。
+# 远程 agent 预置产物不进构建上下文：镜像内由 builder 阶段现场编译 4 平台
+# 探针（见 Dockerfile），宿主 build/agents 只用于裸机部署补充，避免本地陈旧
+# 二进制混入镜像层。
 build/agents/
 *.exe
 *.dll

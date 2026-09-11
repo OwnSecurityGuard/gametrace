@@ -179,6 +179,11 @@ type prebuiltAgentPlatform struct {
 }
 
 // prebuiltplatforms 定义下载 agent 支持的目标平台矩阵（按公开顺序）。
+// Docker 镜像默认内建四份可抓包探针（见 Dockerfile）：linux/amd64（cgo+pcap）、
+// windows/amd64（纯 Go pcap）与 darwin/amd64、darwin/arm64（osxcross 交叉编译）。
+// BUILD_DARWIN_AGENT=0 或 osxcross 安装/编译失败时 darwin 产物缺失，本表会在
+// availableAgentPlatforms 里如实标为不可用（macOS 宿主 `make build-agents`
+// 构建后放进 GT_AGENT_BIN_DIR 目录即可补上）。
 func prebuiltPlatforms() []struct {
 	OS        string
 	Arch      string
@@ -193,8 +198,8 @@ func prebuiltPlatforms() []struct {
 	}{
 		{"windows", "amd64", "Windows x64", true},
 		{"linux", "amd64", "Linux x64", false},
-		{"windows", "arm64", "Windows ARM64", true},
-		{"linux", "arm64", "Linux ARM64", false},
+		{"darwin", "amd64", "macOS Intel", false},
+		{"darwin", "arm64", "macOS Apple Silicon", false},
 	}
 }
 
@@ -316,7 +321,7 @@ func (m *mcpCapture) serveAgentZip(w http.ResponseWriter, platform string, cfgJS
 			continue
 		}
 		if !p.Available {
-			http.Error(w, "platform "+platform+" is not available; run `make build-agents` on the server to prebuild it", http.StatusNotFound)
+			http.Error(w, "platform "+platform+" is not available; prebuild it with `make build-agents` on a suitable host (darwin requires a macOS host)", http.StatusNotFound)
 			return false
 		}
 		binPath = filepath.Join(binDir, p.Filename)

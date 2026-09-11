@@ -10,11 +10,16 @@
 #
 # 远程 Agent 预置二进制：gt-mcp 的 /download/agent 只下发预置产物（见
 #   cmd/gt-mcp/agent_download.go 的 agentBinDir/availableAgentPlatforms），不再现场
-#   编译。全平台 cgo/pcap 产物无法在单一 builder 内交叉编译，因此镜像默认不烧入，
-#   由 docker-compose 把宿主 `./build/agents`（make build-agents 产出）只读挂载到
-#   GT_AGENT_BIN_DIR 指向的 /opt/gametrace/agents。缺产物的下载平台会被如实标为不可用。
-#   runtime 保留 Go 工具链是为 gt-mcp 内嵌 Developer Plane 现场编译插件
-#   （pkg/plugindev/build.go 的 build_plugin），与 agent 无关。
+#   编译。镜像在 builder 阶段直接烧入四份可抓包产物（见 builder 注释）：
+#   - linux/amd64（cgo+pcap，原生编译）
+#   - windows/amd64（gopacket/pcap 在 Windows 是纯 Go，CGO_ENABLED=0 交叉编译，
+#     运行时加载 Npcap 的 wpcap.dll）
+#   - darwin/amd64、darwin/arm64（osxcross + macOS SDK 交叉编译，见 builder 的
+#     BUILD_DARWIN_AGENT 参数；gopacket/pcap 在 darwin 走 cgo，Linux builder 需
+#     osxcross 工具链，SDK 下载/工具链构建失败或被跳过时镜像退化为 linux+windows，
+#     下载页如实标 darwin 不可用）
+# runtime 保留 Go 工具链是为 gt-mcp 内嵌 Developer Plane 现场编译插件
+# （pkg/plugindev/build.go 的 build_plugin），与 agent 无关。
 #
 # pcap 说明：pipeline 仍可在服务端本地开 pcap 源（实时网卡抓包 / pcap 文件源），
 # 因此镜像带 pcap（cgo）编译；agent（gt-agent）推流入口是纯 Go gRPC，服务端
@@ -88,6 +93,32 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
+# ---- macOS 交叉工具链（osxcross，仅 BUILD_DARWIN_AGENT=1）----
+# 在 Linux builder 上交叉编译 darwin/amd64 + darwin/arm64 的可抓包探针：
+# gopacket/pcap 在 darwin 走 cgo（#cgo darwin LDFLAGS: -lpcap），必须用 darwin 的
+# clang（o64-clang/oa64-clang）与 macOS SDK 里的 libpcap 头文件/链接 stub。
+#   - BUILD_DARWIN_AGENT=0 可整体跳过（探针由 macOS 宿主 `make build-agents`
+#     产出，经 GT_AGENT_BIN_DIR 补充，下载页自动标 darwin 不可用）；
+#   - MACOS_SDK_URL / MACOS_SDK_FILE 可覆盖为内网缓存 / 境内镜像源。
+# 安装失败只 WARN 不中断构建：镜像退化为 linux+windows，darwin 下载页如实标不可用。
+ARG BUILD_DARWIN_AGENT=1
+ARG MACOS_SDK_URL=https://github.com/joseluisq/macosx-sdks/releases/download/11.3/MacOSX11.3.sdk.tar.xz
+ARG MACOS_SDK_FILE=MacOSX11.3.sdk.tar.xz
+RUN if [ "${BUILD_DARWIN_AGENT}" = "1" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            clang llvm libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev \
+            libzip-dev liblzma-dev libzstd-dev patch cpio make \
+        && git clone --depth 1 https://github.com/tpoechtrager/osxcross.git /osxcross \
+        && curl -fsSL -o "/osxcross/tarballs/${MACOS_SDK_FILE}" "${MACOS_SDK_URL}" \
+        && cd /osxcross && UNATTENDED=1 ./build.sh \
+        && rm -rf /osxcross/.git /osxcross/tarballs \
+        && echo "==> osxcross ready: $(ls /osxcross/target/bin | tr '\n' ' ')" \
+    || { echo "WARN: osxcross install failed - darwin agents will be skipped"; }; \
+    else \
+        echo "==> BUILD_DARWIN_AGENT=0 - skipping osxcross (darwin agents unavailable in this image)"; \
+    fi
+
 COPY . .
 
 # 前端产物嵌入 gt-mcp（//go:embed cmd/gt-mcp/webui）。.dockerignore 已把
@@ -107,6 +138,42 @@ RUN CGO_ENABLED=1 \
 	go build -trimpath \
 	-ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT}" \
 	-o /out/gt-singbox-agent ./cmd/gt-singbox-agent
+
+# 远程探针（gt-agent）预置产物：/download/agent 按 /opt/gametrace/agents 目录
+# 扫描平台下发（见 agent_download.go）。命名与 availableAgentPlatforms 对齐：
+#   - gt-agent-linux-amd64：cgo+pcap 原生编译（libpcap-dev 已装）；
+#   - gt-agent-windows-amd64.exe：gopacket/pcap 在 Windows 纯 Go（运行时加载
+#     wpcap.dll），CGO_ENABLED=0 交叉编译，无需 mingw/Npcap SDK；
+#   - gt-agent-darwin-{amd64,arm64}：osxcross 交叉编译（BUILD_DARWIN_AGENT=1 时），
+#     运行时用 macOS 系统自带 libpcap。
+# darwin 编译失败只 WARN 不中断（镜像退化为 linux+windows，下载页如实标不可用）。
+RUN set -e; \
+    CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+        go build -tags pcap -trimpath \
+        -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT}" \
+        -o /out/agents/gt-agent-linux-amd64 ./cmd/gt-agent; \
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+        go build -tags pcap -trimpath \
+        -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT}" \
+        -o /out/agents/gt-agent-windows-amd64.exe ./cmd/gt-agent; \
+    if [ -x /osxcross/target/bin/o64-clang ]; then \
+        export PATH="/osxcross/target/bin:${PATH}"; \
+        export MACOSX_DEPLOYMENT_TARGET=11.0; \
+        echo "==> cross-compile darwin/amd64 (osxcross)"; \
+        CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC=o64-clang \
+            go build -tags pcap -trimpath \
+            -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT}" \
+            -o /out/agents/gt-agent-darwin-amd64 ./cmd/gt-agent \
+            || echo "WARN: darwin/amd64 build failed - skipped"; \
+        echo "==> cross-compile darwin/arm64 (osxcross)"; \
+        CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 CC=oa64-clang \
+            go build -tags pcap -trimpath \
+            -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT}" \
+            -o /out/agents/gt-agent-darwin-arm64 ./cmd/gt-agent \
+            || echo "WARN: darwin/arm64 build failed - skipped"; \
+    else \
+        echo "==> osxcross not installed - darwin agents skipped"; \
+    fi
 
 # ============================================================================
 # 阶段 2：runtime
@@ -142,6 +209,13 @@ COPY --from=builder /out/gt-mcp /usr/local/bin/gt-mcp
 COPY --from=builder /out/gt-singbox-agent /usr/local/bin/gt-singbox-agent
 RUN chmod +x /usr/local/bin/gt-singbox-agent
 
+# 远程探针预置产物（镜像内建，见 builder 阶段）：/download/agent 按此目录扫可用平台
+# （cmd/gt-mcp/agentBinDir 的 GT_AGENT_BIN_DIR 默认指向这里）。
+# linux/amd64、windows/amd64 与 darwin 两架构默认全部烧入（darwin 经 osxcross；
+# BUILD_DARWIN_AGENT=0 或 osxcross 安装/编译失败时缺 darwin → 下载页如实标不可用）。
+COPY --from=builder /out/agents/. /opt/gametrace/agents/
+RUN chown -R gametrace:gametrace /opt/gametrace/agents
+
 # == Developer Plane 插件编译：gt-mcp 内嵌的 PluginDev 会现场 `go build` 插件
 #    （pkg/plugindev/build.go），故 runtime 保留 Go 工具链 + 模块缓存；构建缓存落
 #    /data（gametrace 可写 HOME）。远程 Agent 已改「预置二进制」，不再现场编译，因此不
@@ -158,14 +232,13 @@ ENV PATH=/usr/local/go/bin:${PATH} \
 	GOTOOLCHAIN=local \
 	GOPROXY=https://goproxy.cn,direct \
 	GOSUMDB=sum.golang.google.cn \
-	# 远程 agent 预置产物目录（见下方 mkdir）：agentBinDir() 优先读此变量，否则会
-	# 回退到 WORKDIR(/data) 下的 ./build/agents —— 与 docker-compose 挂载点不一致。
-	GT_AGENT_BIN_DIR=/opt/gametrace/agents
+	# 远程 agent 预置产物目录（镜像内建，见下方 COPY）：agentBinDir() 优先读此
+		# 变量，否则回退到 WORKDIR(/data) 下的 ./build/agents。
+		GT_AGENT_BIN_DIR=/opt/gametrace/agents
 
-# 远程 agent 预置产物目录：镜像默认不烧入（全平台 cgo/pcap 产物无法在单一 builder
-# 交叉编译），由 docker-compose 把宿主 `./build/agents` 只读挂载到这里。该路径即
-# cmd/gt-mcp/agentBinDir 的 GT_AGENT_BIN_DIR 来源，agent 下载按此目录扫可用平台。
-RUN mkdir -p /opt/gametrace/agents && chown gametrace:gametrace /opt/gametrace/agents
+# 远程 agent 预置产物目录（镜像内建）：gt-mcp 的 GT_AGENT_BIN_DIR 默认指向这里
+# （见 agentBinDir），agent 下载按此目录扫可用平台。需要额外平台（如 darwin）时，
+# 可用 GT_AGENT_BIN_DIR 环境变量另指一个含补充产物的目录。
 
 RUN chown -R gametrace:gametrace /go
 
