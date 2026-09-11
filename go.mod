@@ -1,10 +1,10 @@
 module gametrace
 
-go 1.25.5
+go 1.26.8
 
 require (
 	github.com/Microsoft/go-winio v0.6.2
-	github.com/OwnSecurityGuard/gt-plugin-sdk v0.7.1
+	github.com/OwnSecurityGuard/gt-plugin-sdk v0.8.0
 	github.com/expr-lang/expr v1.17.0
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.6.0
@@ -19,10 +19,6 @@ require (
 )
 
 // 契约单向流动：SDK 定义，gametrace 消费。
-// 本地开发调试 SDK（v0.8.0，Payload/Meta/Analysis 分离）时临时加 replace，
-// SDK 正式发布后切回远程版本。
-
-replace github.com/OwnSecurityGuard/gt-plugin-sdk => E:\ai_workspace\gt-plugin-sdk
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

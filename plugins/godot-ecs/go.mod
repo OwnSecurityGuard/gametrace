@@ -3,14 +3,10 @@ module godot-ecs
 go 1.25.5
 
 require (
-	github.com/OwnSecurityGuard/gt-plugin-sdk v0.7.1
+	github.com/OwnSecurityGuard/gt-plugin-sdk v0.8.0
 	github.com/google/gopacket v1.1.19
 	google.golang.org/grpc v1.83.2
 )
-
-// 契约单向流动：SDK 定义，插件消费。本地开发调试 SDK（v0.8.0，
-// Payload/Meta/Analysis 分离）时临时加 replace，SDK 正式发布后切回远程版本。
-replace github.com/OwnSecurityGuard/gt-plugin-sdk => E:\ai_workspace\gt-plugin-sdk
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect

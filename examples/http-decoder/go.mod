@@ -1,18 +1,14 @@
 // http-decoder plugin dependencies (locked, based on plugins/go.mod.template).
-// Uses the published gt-plugin-sdk v0.7.0 (no replace), so it builds on any
-// machine and in CI. Add a local replace temporarily only when debugging the SDK.
+// Uses the published gt-plugin-sdk v0.8.0 (no replace), so it builds on any
+// machine and in CI.
 module http-decoder
 
 go 1.25.5
 
 require (
-	github.com/OwnSecurityGuard/gt-plugin-sdk v0.7.1
+	github.com/OwnSecurityGuard/gt-plugin-sdk v0.8.0
 	google.golang.org/grpc v1.71.0
 )
-
-// 本地开发调试 SDK（v0.8.0，Payload/Meta/Analysis 分离）时临时加 replace，
-// SDK 正式发布后切回远程版本。
-replace github.com/OwnSecurityGuard/gt-plugin-sdk => E:\ai_workspace\gt-plugin-sdk
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
