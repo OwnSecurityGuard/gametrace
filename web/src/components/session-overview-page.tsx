@@ -18,7 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { PhaseBadge, SessionPhaseTracker } from "@/components/session-phase-tracker";
 
 /** 概览页可跳转的分析视图（与 App 的 ViewTab 对齐的子集）。 */
-export type OverviewTargetTab = "connections" | "decoded" | "raw";
+export type OverviewTargetTab = "decoded" | "raw";
 
 interface SessionOverviewPageProps {
   sessionId: string | null;
@@ -142,9 +142,9 @@ export function SessionOverviewPage({ sessionId, onNavigate }: SessionOverviewPa
             </p>
           </div>
           <div className="flex flex-wrap gap-1.5">
-            <Button variant="outline" size="sm" className="h-8" onClick={() => onNavigate("connections")}>
+            <Button variant="outline" size="sm" className="h-8" onClick={() => onNavigate("decoded")}>
               <Cable className="h-3.5 w-3.5" />
-              查看连接
+              连接 / 协议
             </Button>
             <Button variant="outline" size="sm" className="h-8" onClick={() => onNavigate("decoded")}>
               <Table2 className="h-3.5 w-3.5" />
@@ -197,7 +197,7 @@ export function SessionOverviewPage({ sessionId, onNavigate }: SessionOverviewPa
             {recentConnections.length > 0 && (
               <button
                 type="button"
-                onClick={() => onNavigate("connections")}
+                onClick={() => onNavigate("decoded")}
                 className="inline-flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
               >
                 全部 {fmtNum(connectionCount)} 条
@@ -214,7 +214,7 @@ export function SessionOverviewPage({ sessionId, onNavigate }: SessionOverviewPa
                   <li key={c.conn_id}>
                     <button
                       type="button"
-                      onClick={() => onNavigate("connections")}
+                      onClick={() => onNavigate("decoded")}
                       className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-muted/40"
                     >
                       <div className="min-w-0 flex-1">

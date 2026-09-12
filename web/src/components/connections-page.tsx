@@ -19,7 +19,6 @@ import {
   ChevronLeft,
   ChevronRight as ChevronRightIcon,
 } from "lucide-react";
-import { ConnectionDetailView } from "@/components/connection-detail";
 import { CaptureSummary } from "@/components/capture-summary";
 import { formatTimestamp } from "@/lib/event-display";
 import type { ConnectionSummary } from "@/types/connection";
@@ -56,16 +55,16 @@ export function protocolLabel(c: Pick<ConnectionSummary, "protocol" | "event_typ
 
 interface ConnectionsPageProps {
   sessionId: string | null;
+  /** 点击某连接时回调（协议数据页据此过滤事件并切到「事件」子视图）。 */
+  onSelectConn?: (conn: ConnectionSummary) => void;
 }
 
-export function ConnectionsPage({ sessionId }: ConnectionsPageProps) {
-  const [selected, setSelected] = useState<{ connId: string; seq: number } | null>(null);
+export function ConnectionsPage({ sessionId, onSelectConn }: ConnectionsPageProps) {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[1]!);
 
-  // 切换会话时重置选中与分页
+  // 切换会话时重置分页
   useEffect(() => {
-    setSelected(null);
     setPage(0);
   }, [sessionId]);
 
@@ -83,18 +82,6 @@ export function ConnectionsPage({ sessionId }: ConnectionsPageProps) {
     () => new Set(connections.map((c) => c.source || "")).size > 1,
     [connections],
   );
-
-  // 已选中连接：渲染详情视图（含 Timeline/Streams/Frames/Events/Raw 子页）。
-  if (selected) {
-    return (
-      <ConnectionDetailView
-        sessionId={sessionId}
-        connId={selected.connId}
-        connSeq={selected.seq}
-        onBack={() => setSelected(null)}
-      />
-    );
-  }
 
   if (!sessionId) {
     return (
@@ -160,7 +147,7 @@ export function ConnectionsPage({ sessionId }: ConnectionsPageProps) {
           {isPlaceholderData ? " · 更新中…" : ""}
         </span>
         <span className="flex items-center gap-2">
-          <span className="text-[11px] text-muted-foreground/70">点击连接查看详情</span>
+          <span className="text-[11px] text-muted-foreground/70">点击连接查看其事件</span>
           <label className="flex items-center gap-1">
             <span className="text-[11px] text-muted-foreground/70">每页</span>
             <select
@@ -203,7 +190,7 @@ export function ConnectionsPage({ sessionId }: ConnectionsPageProps) {
               <TableRow
                 key={conn.conn_id}
                 className="cursor-pointer hover:bg-muted/50 transition-colors"
-                onClick={() => setSelected({ connId: conn.conn_id, seq })}
+                onClick={() => onSelectConn?.(conn)}
                 aria-label={`打开连接 ${String(seq).padStart(3, "0")}`}
               >
                 {/* ID */}

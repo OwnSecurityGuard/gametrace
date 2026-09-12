@@ -1,9 +1,9 @@
 import { useState, useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { SessionSidebar } from "@/components/session-sidebar";
 import { FilterBar } from "@/components/filter-bar";
+import type { ConnectionSummary } from "@/types/connection";
 import type { DirectionFilter } from "@/lib/fuzzy";
 import { RawPacketTable } from "@/components/raw-packet-table";
-import { ConnectionsPage } from "@/components/connections-page";
 import { PluginPanel } from "@/components/plugin-panel";
 import { RunsPanel } from "@/components/runs-panel";
 import { SettingsDialog } from "@/components/settings-dialog";
@@ -25,16 +25,16 @@ import { useAuthError, useIdentity } from "@/hooks/use-auth";
 import { toast } from "@/components/ui/toast";
 import type { ProjectInfo } from "@/types/project";
 
-type ViewTab = "home" | "overview" | "connections" | "decoded" | "runs" | "plugins" | "raw";
+type ViewTab = "home" | "overview" | "decoded" | "runs" | "plugins" | "raw";
 
-/** 一级视图：普通用户最常用的入口（我的抓包 / 会话 / 协议数据 / 连接）。
+/** 一级视图：普通用户最常用的入口（我的抓包 / 会话 / 协议数据）。
  *  「会话」= 选中会话后的工作区（原「概览」，名字说不出它是什么，故改名）。
- *  「协议数据」是本平台最重要的数据视图，必须常驻一级，不能藏在「更多」里。 */
+ *  「协议数据」是本平台最重要的数据视图，必须常驻一级，不能藏在「更多」里。
+ *  连接列表已并入「协议数据」内作为首个子视图，不再占用一级导航。 */
 const PRIMARY_TABS: { id: ViewTab; label: string }[] = [
   { id: "home", label: "我的抓包" },
   { id: "overview", label: "会话" },
   { id: "decoded", label: "协议数据" },
-  { id: "connections", label: "连接" },
 ];
 
 /** 高级视图：行为 / 插件 / 原始包，默认收进「更多」下拉，降低普通用户的认知负担。 */
@@ -67,6 +67,9 @@ export default function App() {
   const [query, setQuery] = useState("");
   // 协议数据页的消息方向过滤（C→S / S→C，空 = 全部）。
   const [direction, setDirection] = useState<DirectionFilter>("");
+  // 协议数据页的连接过滤：全部子视图（连接/事件/关系/状态变更/原始数据）共享，
+  // 与 direction/query 叠加为 AND；连接列表点击连接时也会写入此值并切到事件。
+  const [connFilter, setConnFilter] = useState<ConnectionSummary | null>(null);
   const [activeTab, setActiveTab] = useState<ViewTab>("home");
   // 「更多」下拉是否展开（普通用户把高级视图藏在这里）。
   const [moreOpen, setMoreOpen] = useState(false);
@@ -114,6 +117,11 @@ export default function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [activeTab]);
+
+  // 切换会话时清空连接过滤，避免把旧会话的连接选进新会话（连接按会话隔离）。
+  useEffect(() => {
+    setConnFilter(null);
+  }, [selectedSessionId]);
 
   // Ctrl/Cmd+K 快捷键：全局聚焦左侧会话搜索框
   useEffect(() => {
@@ -175,11 +183,11 @@ export default function App() {
     setQuery(""); // 切换 session 时清空查询
   }, []);
 
-  // 从代理抓包状态卡一键跳转：选中常驻会话切到「连接」页并关闭弹窗
+  // 从代理抓包状态卡一键跳转：选中常驻会话切到「协议数据」（其首个子视图为连接列表）
   const handleNavigateToSession = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
     setQuery("");
-    setActiveTab("connections");
+    setActiveTab("decoded");
     setProxyConfigOpen(false);
   }, []);
 
@@ -521,10 +529,13 @@ export default function App() {
         {activeTab === "decoded" && (
           <div className="border-b border-border bg-card/40 px-4 py-3">
             <FilterBar
+              sessionId={selectedSessionId}
               query={query}
               onQueryChange={setQuery}
               direction={direction}
               onDirectionChange={setDirection}
+              connFilter={connFilter}
+              onConnFilterChange={setConnFilter}
               inputRef={filterInputRef}
             />
           </div>
@@ -558,12 +569,13 @@ export default function App() {
           )}
           {activeTab === "decoded" && (
             <div className="flex h-full flex-col overflow-auto p-4 gt-scroll">
-              <DecodedView sessionId={selectedSessionId} query={query} direction={direction} />
-            </div>
-          )}
-          {activeTab === "connections" && (
-            <div className="h-full overflow-auto p-4 gt-scroll">
-              <ConnectionsPage sessionId={selectedSessionId} />
+              <DecodedView
+                sessionId={selectedSessionId}
+                query={query}
+                direction={direction}
+                connFilter={connFilter}
+                onConnFilterChange={setConnFilter}
+              />
             </div>
           )}
           {activeTab === "runs" && (

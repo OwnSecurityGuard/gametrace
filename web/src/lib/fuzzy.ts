@@ -12,6 +12,7 @@
  */
 import type { DecodedEvent } from "@/types/event";
 import type { Change } from "@/types/state-change";
+import type { ConnectionSummary } from "@/types/connection";
 import { extractMeta } from "@/lib/event-display";
 
 /** 查询串 → 小写关键词数组（去空白、去空串）。 */
@@ -30,6 +31,19 @@ export type DirectionFilter = "" | "client_to_server" | "server_to_client";
 export function eventMatchesDirection(ev: DecodedEvent, direction: DirectionFilter): boolean {
   if (!direction) return true;
   return extractMeta(ev.data, ev.meta).direction === direction;
+}
+
+/** 事件是否命中连接过滤（conn 为 null 时视为全部连接）。按捕获上下文 conn_id 匹配。 */
+export function eventMatchesConnection(ev: DecodedEvent, conn: ConnectionSummary | null): boolean {
+  if (!conn) return true;
+  return ev.capture?.conn_id === conn.conn_id;
+}
+
+/** 状态变更是否命中连接过滤（conn 为 null 视为全部连接）。变更携带的连接标识来自源消息。 */
+export function changeMatchesConnection(change: Change, conn: ConnectionSummary | null): boolean {
+  if (!conn) return true;
+  const cid = conn.conn_id;
+  return change.flow_id === cid || change.source?.conn_id === cid;
 }
 
 /** 字段变更是否命中方向过滤（按其来源消息的 direction；空值恒真）。 */

@@ -22,6 +22,7 @@ import {
   Inbox,
 } from "lucide-react";
 import type { DecodedEvent } from "@/types/event";
+import type { ConnectionSummary } from "@/types/connection";
 import {
   extractMeta,
   formatTimestamp,
@@ -29,19 +30,26 @@ import {
   MessageCell,
   HighlightedJson,
 } from "@/lib/event-display";
-import { eventMatchesQuery, eventMatchesDirection, type DirectionFilter } from "@/lib/fuzzy";
+import {
+  eventMatchesQuery,
+  eventMatchesDirection,
+  eventMatchesConnection,
+  type DirectionFilter,
+} from "@/lib/fuzzy";
 
 interface RelationshipViewProps {
   sessionId: string | null;
   query: string;
   /** 消息方向过滤（C→S / S→C，空 = 全部）；与 query 叠加为 AND。 */
   direction: DirectionFilter;
+  /** 连接过滤（null = 全部连接）；按捕获上下文 conn_id 匹配，与 query/direction 叠加为 AND。 */
+  connFilter: ConnectionSummary | null;
 }
 
 // 加载上限：关系视图需要整段事件来建父子森林与配对组，取一次较大的批次。
 const RELATION_FETCH_LIMIT = 1000;
 
-export function RelationshipView({ sessionId, query, direction }: RelationshipViewProps) {
+export function RelationshipView({ sessionId, query, direction, connFilter }: RelationshipViewProps) {
   const { data, isLoading, isError, error, refetch } = useDecodedData(sessionId, {
     limit: RELATION_FETCH_LIMIT,
     offset: 0,
@@ -53,17 +61,18 @@ export function RelationshipView({ sessionId, query, direction }: RelationshipVi
   const totalMatched = data?.total_matched ?? 0;
   const truncated = totalMatched > events.length;
 
-  // 前端过滤：在已加载的整段事件上按 query + direction 过滤（AND），再据此建父子森林与配对组。
+  // 前端过滤：在已加载的整段事件上按 query + direction + 连接过滤（AND），再据此建父子森林与配对组。
   const filteredEvents = useMemo(() => {
-    if (!query && !direction) return events;
+    if (!query && !direction && !connFilter) return events;
     return events.filter((e) => {
       if (query && !eventMatchesQuery(e, query)) return false;
       if (direction && !eventMatchesDirection(e, direction)) return false;
+      if (connFilter && !eventMatchesConnection(e, connFilter)) return false;
       return true;
     });
-  }, [events, query, direction]);
+  }, [events, query, direction, connFilter]);
 
-  const hasFilter = !!query || !!direction;
+  const hasFilter = !!query || !!direction || !!connFilter;
 
   // 父子索引：parent_id → 子事件；roots = 没有父事件在已载入集合内的顶层事件。
   const { childrenOf, roots } = useMemo(() => {

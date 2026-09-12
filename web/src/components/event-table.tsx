@@ -25,7 +25,7 @@ import {
   FileCode2,
 } from "lucide-react";
 import type { DecodedEvent } from "@/types/event";
-import type { CaptureContext } from "@/types/connection";
+import type { CaptureContext, ConnectionSummary } from "@/types/connection";
 import {
   extractMeta,
   formatTimestamp,
@@ -41,7 +41,7 @@ import {
   OpBadge,
   type EventMeta,
 } from "@/lib/event-display";
-import { eventMatchesQuery, eventMatchesDirection, type DirectionFilter } from "@/lib/fuzzy";
+import { eventMatchesQuery, eventMatchesDirection, eventMatchesConnection, type DirectionFilter } from "@/lib/fuzzy";
 
 interface EventTableProps {
   sessionId: string | null;
@@ -49,6 +49,8 @@ interface EventTableProps {
   query: string;
   /** 消息方向过滤（C→S / S→C，空 = 全部）；与 query 叠加为 AND。 */
   direction: DirectionFilter;
+  /** 连接过滤（null = 全部连接，由顶部过滤栏切换）；按捕获上下文 conn_id 匹配，与 query/direction 叠加为 AND。 */
+  connFilter: ConnectionSummary | null;
 }
 
 const PAGE_SIZES = [20, 50, 100];
@@ -722,7 +724,7 @@ const EventRow = memo(function EventRow({
 
 // ─── 主表格组件 ───────────────────────────────────────────────
 
-export function EventTable({ sessionId, query, direction }: EventTableProps) {
+export function EventTable({ sessionId, query, direction, connFilter }: EventTableProps) {
   const [page, setPage] = useState<number>(0);
   const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0]!);
   // 允许多行同时展开：对比请求/响应时不用来回点，这是最常见的阅读动作。
@@ -732,13 +734,13 @@ export function EventTable({ sessionId, query, direction }: EventTableProps) {
   useEffect(() => {
     setPage(0);
     setExpandedIds(new Set());
-  }, [sessionId, query, direction]);
+  }, [sessionId, query, direction, connFilter]);
 
   const offset = page * pageSize;
 
-  // 有查询词或方向过滤时：一次性拉取较大批次在前端内存过滤（保证搜索跨页完整不遗漏）；
-  // 无过滤条件时：保持原有分页拉取。禁用 filter 表达式，改由前端过滤。
-  const useLargeLimit = !!query || !!direction;
+  // 有查询词、方向过滤或连接过滤时：一次性拉取较大批次在前端内存过滤
+  // （保证搜索跨页完整不遗漏）；无过滤条件时：保持原有分页拉取。
+  const useLargeLimit = !!query || !!direction || !!connFilter;
   const effectiveLimit = useLargeLimit ? QUERY_FETCH_LIMIT : pageSize;
   const effectiveOffset = useLargeLimit ? 0 : offset;
 
@@ -758,17 +760,18 @@ export function EventTable({ sessionId, query, direction }: EventTableProps) {
   const events = useMemo(() => data?.events ?? [], [data]);
   const totalMatched = data?.total_matched ?? 0;
 
-  // 前端过滤：搜索态在已拉取的批次上按 query + direction 过滤（AND）。
+  // 前端过滤：搜索/方向/连接过滤态在已拉取的批次上过滤（AND）。
   const filteredEvents = useMemo(() => {
-    if (!query && !direction) return events;
+    if (!query && !direction && !connFilter) return events;
     return events.filter((e) => {
       if (query && !eventMatchesQuery(e, query)) return false;
       if (direction && !eventMatchesDirection(e, direction)) return false;
+      if (connFilter && !eventMatchesConnection(e, connFilter)) return false;
       return true;
     });
-  }, [events, query, direction]);
+  }, [events, query, direction, connFilter]);
 
-  const filtering = !!query || !!direction;
+  const filtering = !!query || !!direction || !!connFilter;
 
   const totalPages = Math.ceil(totalMatched / pageSize);
   // 整页都没有 capture 上下文（非代理抓包）时隐藏该列，把宽度让给消息与摘要。
@@ -911,30 +914,32 @@ export function EventTable({ sessionId, query, direction }: EventTableProps) {
           {isPlaceholderData ? " · 更新中…" : ""}
           {expandedIds.size > 0 ? ` · 已展开 ${expandedIds.size} 行` : ""}
         </span>
-        {!filtering && (
-          <span className="flex items-center gap-2">
-            <span className="text-[11px] text-muted-foreground/70">点击行展开完整 JSON</span>
-            <label className="flex items-center gap-1">
-              <span className="text-[11px] text-muted-foreground/70">每页</span>
-              <select
-                value={pageSize}
-                onChange={(e) => {
-                  setPageSize(Number(e.target.value));
-                  setPage(0);
-                  setExpandedIds(new Set());
-                }}
-                className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
-                aria-label="每页条数"
-              >
-                {PAGE_SIZES.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </span>
-        )}
+        <span className="flex items-center gap-3">
+          {!filtering && (
+            <span className="flex items-center gap-2">
+              <span className="text-[11px] text-muted-foreground/70">点击行展开完整 JSON</span>
+              <label className="flex items-center gap-1">
+                <span className="text-[11px] text-muted-foreground/70">每页</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setPage(0);
+                    setExpandedIds(new Set());
+                  }}
+                  className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
+                  aria-label="每页条数"
+                >
+                  {PAGE_SIZES.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </span>
+          )}
+        </span>
       </div>
 
       {/* 数据表格 */}

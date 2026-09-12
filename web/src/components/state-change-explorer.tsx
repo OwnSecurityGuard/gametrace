@@ -12,8 +12,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Dialog } from "@/components/ui/dialog";
 import { OpBadge, HighlightedJson } from "@/lib/event-display";
-import { changeMatchesQuery, changeMatchesDirection, type DirectionFilter } from "@/lib/fuzzy";
+import { changeMatchesQuery, changeMatchesDirection, changeMatchesConnection, type DirectionFilter } from "@/lib/fuzzy";
 import { cn } from "@/lib/utils";
+import type { ConnectionSummary } from "@/types/connection";
 import {
   Crosshair,
   ArrowRight,
@@ -44,6 +45,8 @@ interface StateChangeExplorerProps {
   query?: string;
   /** 消息方向过滤（C→S / S→C，空 = 全部）；与 query 叠加为 AND。 */
   direction?: DirectionFilter;
+  /** 连接过滤（null = 全部连接）；按变更携带的 conn_id/flow_id 匹配，与 query/direction 叠加为 AND。 */
+  connFilter?: ConnectionSummary | null;
 }
 
 type ViewId = "operation" | "entity" | "time";
@@ -158,7 +161,7 @@ function TimeLabel({
 
 // ===== 主组件 =====
 
-export function StateChangeExplorer({ sessionId, query, direction }: StateChangeExplorerProps) {
+export function StateChangeExplorer({ sessionId, query, direction, connFilter }: StateChangeExplorerProps) {
   const [view, setView] = useState<ViewId>("operation");
   const [anchorKind, setAnchorKind] = useState<AnchorKind>("");
   const [anchorId, setAnchorId] = useState("");
@@ -193,18 +196,19 @@ export function StateChangeExplorer({ sessionId, query, direction }: StateChange
   const { data, isLoading, isError, error, refetch, isFetching } = useStateChanges(sessionId, params);
 
   const changes = data?.changes ?? [];
-  const hasFilter = !!query || !!direction;
-  // 前端过滤：搜索/方向过滤时只展示命中的扁平变更；无过滤时走原有三视图。
+  const hasFilter = !!query || !!direction || !!connFilter;
+  // 前端过滤：搜索/方向/连接过滤时只展示命中的扁平变更；无过滤时走原有三视图。
   const matchedChanges = useMemo(
     () =>
       hasFilter
         ? changes.filter((c) => {
             if (query && !changeMatchesQuery(c, query)) return false;
             if (direction && !changeMatchesDirection(c, direction)) return false;
+            if (connFilter && !changeMatchesConnection(c, connFilter)) return false;
             return true;
           })
         : changes,
-    [changes, hasFilter, query, direction],
+    [changes, hasFilter, query, direction, connFilter],
   );
 
   // 锚点候选随查询结果累积：先看到什么就能拿什么当锚点，不必额外拉全量列表。
