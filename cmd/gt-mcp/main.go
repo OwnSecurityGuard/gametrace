@@ -1540,6 +1540,14 @@ func decodedEventMap(ev *event.Event, captureIdx map[string]captureContextJSON, 
 	if metaContent == nil {
 		metaContent = map[string]any{}
 	}
+	// 方向兜底：部分插件未上报 meta.direction 时（旧数据或插件未写），
+	// 用 host 已推断的 Context.Direction（client_to_server/server_to_client）补上，
+	// 保证前端 C→S / S→C 过滤始终可用。
+	if m, ok := metaContent.(map[string]any); ok {
+		if _, has := m["direction"]; !has && ev.Context.Direction != "" {
+			m["direction"] = ev.Context.Direction
+		}
+	}
 	analysisContent := ev.Analysis.ToAny()
 	if analysisContent == nil {
 		analysisContent = flatAnalysis.ToAny()
