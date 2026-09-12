@@ -189,15 +189,16 @@ func (d *decoder) decodePayload(body []byte, seg framing.Segment, dir string) *E
 
 	msg := root.children[0]
 	payload := nodePayload(msg)
-	payload["msg_type"] = msg.name // 判别字段，供 name 语义规则提取消息名
-	payload["_raw"] = truncate(string(text))
+	payload["msg_type"] = msg.name // 判别字段（协议根 tag 名），供 name 语义规则提取消息名
 	return &Event{
 		EventType: "wesnoth." + msg.name,
 		SchemaID:  "wesnoth.message.v1",
 		Payload:   payload,
 		Meta: map[string]any{
-			"direction":      dir,
+			"direction":       dir,
 			"decompressed_len": len(text),
+			// 原文属辅助信息，不进 Payload（硬约束：Payload 只含协议真实字段）
+			"raw": truncate(string(text)),
 		},
 	}
 }
@@ -236,18 +237,18 @@ func childrenPayload(children []*wmlNode) map[string]any {
 	return out
 }
 
-// newUnknownEvent 构造兜底事件：保留原因与原始内容，供协议演进排查。
+// newUnknownEvent 构造兜底事件：保留原因与原始内容（进 Meta），供协议演进排查。
 func newUnknownEvent(dir, reason, raw string) *Event {
 	return &Event{
 		EventType: "wesnoth.unknown",
 		SchemaID:  "wesnoth.message.v1",
 		Payload: map[string]any{
-			"msg_type": "unknown",
-			"raw":      raw,
+			"msg_type": "unknown", // 判别字段，保持消息名可显示
 		},
 		Meta: map[string]any{
 			"direction": dir,
 			"reason":    reason,
+			"raw":       raw,
 		},
 	}
 }

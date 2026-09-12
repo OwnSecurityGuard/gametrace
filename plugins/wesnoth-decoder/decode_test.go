@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"net"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/gopacket"
@@ -168,6 +169,58 @@ password="s3cret"
 	if d, _ := metaStr(t, got[0], "direction"); d != dirC2S {
 		t.Errorf("direction = %q, want %s", d, dirC2S)
 	}
+}
+
+// TestPayloadPurity 验证硬约束：Payload 只含协议真实字段。
+// WML 原文（辅助信息）必须进 Meta，不得进入 Payload；
+// unknown 兜底事件 payload 仅保留 msg_type 判别字段。
+func TestPayloadPurity(t *testing.T) {
+	t.Run("normal_event_raw_in_meta", func(t *testing.T) {
+		d := newTestDecoder()
+		got := run(t, d, &pb.DecodeRequest{
+			InputId: "in-1", LinkType: int32(event.LinkTypeProxyPayload),
+			Payload: wmlFrame(t, `[login]
+username="player1"
+[/login]`),
+		})
+		if len(got) != 1 {
+			t.Fatalf("want 1 event, got %d", len(got))
+		}
+		p := payloadOf(t, got[0])
+		for _, banned := range []string{"_raw", "raw"} {
+			if _, exists := p[banned]; exists {
+				t.Errorf("payload must not contain %q (protocol-external field)", banned)
+			}
+		}
+		raw, ok := metaStr(t, got[0], "raw")
+		if !ok || !strings.Contains(raw, "[login]") {
+			t.Errorf("meta.raw must carry WML text, ok=%v raw=%q", ok, raw)
+		}
+	})
+
+	t.Run("unknown_event_raw_in_meta", func(t *testing.T) {
+		d := newTestDecoder()
+		got := run(t, d, &pb.DecodeRequest{
+			InputId: "in-2", LinkType: int32(event.LinkTypeProxyPayload),
+			Payload: wmlFrame(t, "not [valid wml"),
+		})
+		if len(got) != 1 || got[0].GetEventType() != "wesnoth.unknown" {
+			t.Fatalf("want unknown event, got %+v", got)
+		}
+		p := payloadOf(t, got[0])
+		if len(p) != 1 {
+			t.Errorf("unknown payload must only contain msg_type, got %v", p)
+		}
+		if mt, _ := p["msg_type"].AsString(); mt != "unknown" {
+			t.Errorf("msg_type = %q, want unknown", mt)
+		}
+		if reason, ok := metaStr(t, got[0], "reason"); !ok || reason == "" {
+			t.Errorf("meta.reason must be set")
+		}
+		if raw, ok := metaStr(t, got[0], "raw"); !ok || raw == "" {
+			t.Errorf("meta.raw must carry original bytes")
+		}
+	})
 }
 
 // TestDecodeHandshakeSkipped 验证每方向流开头的 4 字节握手被消费，不影响

@@ -15,7 +15,9 @@
 #   [tag]...[/tag] 递归嵌套；消息类型 = 根的首个子 tag 名。
 #
 # 事件载荷：消息节点（根首个子 tag）的属性扁平到顶层，嵌套子节点按 tag 名
-# 分组放入 _children；msg_type 承载消息类型（判别字段），_raw 保留 WML 原文。
+# 分组放入 _children；msg_type 承载消息类型（判别字段，即协议根 tag 名）。
+# WML 原文（辅助信息）进事件 Meta.raw，不进 Payload（硬约束：Payload 只含
+# 协议真实字段）。
 
 api_version: gt.decoder/v2
 name: wesnoth-decoder
@@ -58,10 +60,6 @@ schemas:
         type: object
         optional: true
         description: 嵌套子节点，按 tag 名分组为数组（结构递归同顶层）。
-      _raw:
-        type: string
-        optional: true
-        description: 解压后的 WML 原文（截断至 8KB），用于人工核对协议细节。
 # === 语义规则（Protocol Semantic Rule，spec：插件声明、平台执行）===
 # GJSON path 基于 decoder 产出的事件 payload：业务字段在顶层（含 msg_type），
 # 方向在 _meta（宿主保留 _meta 不剔除）。
