@@ -365,9 +365,75 @@ semantic_rules:
 ```
 
 - `schemas` 必须显式声明 `strict`（true/false），字段类型用受控枚举（string/int/bool/...）。
-- `semantic_rules` 用 `name` 提取消息名（写 `meta.msg_name`）、`pair`/`annotate` 声明配对与角色（request/response/notification）。格式参考 godot-ecs 插件。
+- `semantic_rules` 是接入平台语义能力的入口，effect 闭集 4 类：`name`（消息名→`meta.msg_name`）、`annotate`（角色标签→`meta.semantic`）、`pair`（请求/响应配对→`correlation_id`+`causation_id`）、`extract`（父事件拆子事件→子事件 `parent_id` 指父）。接入要点见下节。
 - `hints` 帮助平台匹配：传输层、压缩、定界方式、端口。
 - 注册前宿主会校验 manifest；规则或 schema 校验失败会在宿主日志输出（`semantic rules:` 前缀），注意查看。
+
+#### 5.1 语义规则接入（semantic_rules）——复用平台的配对/父子能力
+
+规则 = Predicate(`when`) + Effect，**决定事件怎么被解释/关联，权重高于解码器硬编码**。effect 是一个闭集，插件只需声明，执行由平台完成：
+
+| effect | 作用 | 产出(host) | 必填字段 |
+|---|---|---|---|
+| `name` | 从 payload 提取消息名 | `meta.msg_name` | `key` |
+| `annotate` | 打角色标签：request/response/notification/error | `meta.semantic` | `semantic` |
+| `pair` | 请求-响应配对（同一个“来回”） | `correlation_id`（双方相同）+ `causation_id`（后到者→先到者） | `key`，可选 `sides` |
+| `extract` | 父事件拆出子事件（**父子关系**） | 子事件继承父连接等来源，`parent_id` 指父、继承父 `correlation_id` | `source` + `child` |
+
+**① `name` —— 消息名**（替代解码器写死）：
+
+```yaml
+- id: foo.name_msg
+  when: [ { path: msg_type, op: exists } ]
+  effect: { type: name, key: msg_type }
+```
+
+规则求值**先执行 name 并把结果注入 `_meta.msg_name`**，因此后续规则可用 `_meta.msg_name` 判定（见 `pair`）。
+
+**② `annotate` —— 角色**：
+
+```yaml
+- id: foo.annotate_req
+  when: [ { path: _meta.msg_name, op: eq, value: login } ]
+  effect: { type: annotate, semantic: request }   # response/notification/error 同理
+```
+
+**③ `pair` —— 请求/响应配对（跨消息横向关联）**：
+`key` 是配对键 GJSON path，其值相等即同一个来回；`sides` 给双方角色（0 或 2 个谓词，各匹配一个不同 side）。配对成功后双方写同一 `correlation_id`，**后到事件的 `causation_id` 指向先到事件**；前端据此把请求/响应左右并排。典型：请求带 `ts`，响应回显同一 `ts`。
+
+```yaml
+- id: foo.pair_ts
+  when: [ { path: _meta.msg_name, op: in, value: [ping, pong] } ]
+  effect:
+    type: pair
+    key: ts                  # 请求/响应共用回显字段
+    sides:
+      - { path: _meta.msg_name, op: eq, value: ping }
+      - { path: _meta.msg_name, op: eq, value: pong }
+```
+
+**④ `extract` —— 父子关系（一个网络消息承载多个逻辑子事件）**：
+一个帧的 payload 里含数组/对象，每个元素是一个独立的逻辑子事件（如世界快照下的多个实体状态）。`source` 指向该数组（每元素一子事件）或对象（单子事件）；`child` 声明子事件类型与 schema（必须已在 `schemas` 声明）。拆出的子事件**继承父的连接等来源字段，`parent_id` 指向父事件**，并继承父的 `correlation_id`；前端按父子层级折叠展示。
+
+```yaml
+- id: foo.extract_ents
+  when: [ { path: msg_type, op: eq, value: snapshot } ]
+  effect:
+    type: extract
+    source: ents                                        # 数组路径，如 godot_ecs.state 的 ents
+    child:
+      event_type: entity_snapshot
+      schema_id: foo.entity_snapshot                    # 需在 schemas 里声明对应子 schema
+```
+
+**规则通用约束**（不满足会在注册期校验报错，留意宿主 `semantic rules:` 日志）：
+- `when` 谓词 = GJSON `path` + `op`（闭集：`eq/neq/exists/not_exists/gt/gte/lt/lte/in/not_in/contains/prefix/suffix`）+ `value`。
+- 规则 `id`：点分小写段 `[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*`，全局唯一，如 `foo.pair_ts`。
+- 语义标签闭集：`request/response/notification/error`，勿臆造。
+
+**何时用哪个**：跨消息的“一问一答”→ `pair`；**同消息内“一拆多”**（快照→多实体、批量→逐条）→ `extract`；二者可组合（子事件仍可被 `pair` 配对）。**优先声明规则而非解码器硬编码**去表达这类语义，便于复用平台的配对/前端联动能力。
+
+**验证**：注册后 `get_session_status`/宿主日志看规则加载；`list_decoded_data` 抽查 `meta.msg_name`、`meta.semantic`、`trace.correlation_id/causation_id`，以及 `extract` 子事件的 `parent_id` 是否指向父事件。
 
 ### 6. 测试（质量门槛）
 
