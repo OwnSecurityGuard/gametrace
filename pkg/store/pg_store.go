@@ -832,6 +832,17 @@ func (s *PGStore) QueryConnections(ctx context.Context, sessionID string, limit,
 	return conns, nil
 }
 
+// CountConnections 返回会话内的连接总数（PG 版按 session_id 隔离，conn_id 去重计数）。
+func (s *PGStore) CountConnections(ctx context.Context, sessionID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM (
+			SELECT DISTINCT conn_id FROM raw_packets
+			WHERE session_id = $1 AND conn_id IS NOT NULL AND conn_id != ''
+		)`, sessionID).Scan(&n)
+	return n, err
+}
+
 // enrichConnEvents 从 event_index 补充连接的解码事件统计（PG 版，按 session_id 隔离）。
 func (s *PGStore) enrichConnEvents(ctx context.Context, sessionID string, conns []ConnectionSummary, connIDs []string, index map[string]int) {
 	if len(connIDs) == 0 {

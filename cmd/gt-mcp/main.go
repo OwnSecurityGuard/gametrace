@@ -1657,6 +1657,7 @@ func buildCaptureContext(events []*event.Event) map[string]captureContextJSON {
 // 与 captureReader 分离：Connections 页面是代理抓包专有能力，非通用事件查询。
 type connectionReader interface {
 	QueryConnections(ctx context.Context, sessionID string, limit, offset int) ([]store.ConnectionSummary, error)
+	CountConnections(ctx context.Context, sessionID string) (int, error)
 	QueryConnectionDetail(ctx context.Context, sessionID, connID string) (*store.ConnectionDetail, error)
 	QueryConnectionStreams(ctx context.Context, sessionID, connID string, limit, offset int) ([]store.ConnectionStream, error)
 	QueryConnectionFrames(ctx context.Context, connID string, limit, offset int) ([]store.ConnectionFrame, error)
@@ -1702,9 +1703,16 @@ func (m *mcpCapture) handleListConnections(ctx context.Context, req mcp.CallTool
 		return errorResult(fmt.Errorf("query connections: %w", err)), nil
 	}
 
-	slog.Info("list_connections completed", "session_id", sessionID, "count", len(conns))
+	// count 必须是会话内连接总数，而非当页条数：前端用它算分页总数与摘要卡片
+	// 的「连接」数。若直接 len(conns)，翻页或连接数>limit 时统计就偏小（甚至 0）。
+	total, err := cr.CountConnections(ctx, sessionID)
+	if err != nil {
+		return errorResult(fmt.Errorf("count connections: %w", err)), nil
+	}
+
+	slog.Info("list_connections completed", "session_id", sessionID, "returned", len(conns), "count", total)
 	return successResult(map[string]any{
-		"count":       len(conns),
+		"count":       total,
 		"connections": conns,
 	}), nil
 }

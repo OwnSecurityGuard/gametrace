@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/netip"
 	"path/filepath"
 	"testing"
@@ -309,5 +310,67 @@ func TestQueryConnections_IntegerOrdering(t *testing.T) {
 	}
 	if len(frames) != 2 || !frames[0].Timestamp.Equal(base) || !frames[1].Timestamp.Equal(base.Add(20*time.Millisecond)) {
 		t.Fatalf("frames wrong: %+v", frames)
+	}
+}
+
+// TestCountConnections 验证连接总数是 conn_id 去重计数，独立于分页 limit/offset：
+// 回归 list_connections 的 count 曾误用当页条数所导致的「连接总数偏小甚至为 0」。
+func TestCountConnections(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "count.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	base := time.Now().Truncate(time.Second)
+	src := netip.MustParseAddrPort("127.0.0.1:1")
+	dst := netip.MustParseAddrPort("127.0.0.1:2")
+	var pkts []event.Packet
+	// 3 个连接、每连接 2 帧，共 6 帧。
+	for ci, conn := range []string{"connA", "connB", "connC"} {
+		for fi := 0; fi < 2; fi++ {
+			pkts = append(pkts, event.Packet{
+				ID:       fmt.Sprintf("%s-%d", conn, fi),
+				Timestamp: base.Add(time.Duration(ci*2+fi) * time.Millisecond),
+				Src:      src, Dst: dst, Protocol: "tcp",
+				Metadata: map[string]any{"conn_id": conn},
+			})
+		}
+	}
+	if err := s.AppendRawPackets(context.Background(), pkts); err != nil {
+		t.Fatal(err)
+	}
+
+	// 总数必须是 3，与是否分页无关。
+	total, err := s.CountConnections(context.Background(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 {
+		t.Fatalf("CountConnections = %d, want 3", total)
+	}
+
+	// 对照：当页条数受 limit 影响，不能当作总数。
+	page1, err := s.QueryConnections(context.Background(), "s1", 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page1) == total {
+		t.Fatalf("page size collided with total (%d); test needs different values", total)
+	}
+
+	// 空 conn_id 不纳入连接统计。
+	if err := s.AppendRawPackets(context.Background(), []event.Packet{{
+		ID: "orphan", Timestamp: base.Add(time.Second), Src: src, Dst: dst, Protocol: "tcp",
+		Metadata: map[string]any{},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	total, err = s.CountConnections(context.Background(), "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 {
+		t.Fatalf("CountConnections after orphan frame = %d, want 3", total)
 	}
 }

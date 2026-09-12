@@ -163,6 +163,19 @@ func (s *SQLiteStore) QueryConnections(ctx context.Context, sessionID string, li
 	return conns, nil
 }
 
+// CountConnections 返回会话内的连接总数（conn_id 非空的去重计数）。
+// 与 QueryConnections 同一口径；capture.sqlite 为单 session 库，raw_packets 无
+// session_id 列，故只按 conn_id 分组去重。
+func (s *SQLiteStore) CountConnections(ctx context.Context, sessionID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM (
+			SELECT DISTINCT conn_id FROM raw_packets
+			WHERE conn_id IS NOT NULL AND conn_id != ''
+		)`).Scan(&n)
+	return n, err
+}
+
 // enrichConnEvents 从 event_index 补充连接的解码事件统计（无解码事件时保持零值）。
 func (s *SQLiteStore) enrichConnEvents(ctx context.Context, sessionID string, conns []ConnectionSummary, connIDs []string, index map[string]int) {
 	if len(connIDs) == 0 {
