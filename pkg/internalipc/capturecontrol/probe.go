@@ -197,7 +197,7 @@ func (s *Server) ProbeStartCapture(ctx context.Context, req *pb.ProbeStartCaptur
 		Ports:     req.GetPorts(),
 		Hosts:     req.GetHosts(),
 		Protocol:  req.GetProtocol(),
-		SnapLen:   1600,
+		SnapLen:   262144,
 		Promisc:   true,
 	}
 	if err := pa.StartCapture(ctx, req.GetProbeId(), d); err != nil {

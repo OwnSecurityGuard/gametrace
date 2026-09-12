@@ -108,7 +108,7 @@ func TestSimulate(t *testing.T) {
 	}
 
 	// 校验状态变更真的落库了。
-	st, err := store.NewSQLiteStoreReadOnly(dbPath, nil)
+	st, err := store.NewSQLiteStoreReadOnly(dbPath)
 	if err != nil {
 		t.Fatalf("打开会话库失败: %v", err)
 	}

@@ -204,10 +204,6 @@ type Identity struct {
     Type EventType
 
 
-    // payload schema
-    SchemaID string
-
-
     // creator
     Source SourceID
 
@@ -436,8 +432,6 @@ Structure:
 
 ```go
 type Payload struct {
-
-    SchemaID string
 
     Value Value
 }
@@ -767,9 +761,6 @@ CREATE TABLE events (
     type TEXT NOT NULL,
 
 
-    schema_id TEXT NOT NULL,
-
-
     source TEXT NOT NULL,
 
 
@@ -794,10 +785,6 @@ CREATE TABLE events (
     created_at INTEGER NOT NULL
 );
 ```
-
-> **Live schema authority.** The authoritative column set and indexes are returned by
-> the `get_capture_schema` MCP tool at runtime. This section is a snapshot; if it ever
-> drifts from `get_capture_schema`, trust the runtime schema.
 
 ---
 
@@ -870,7 +857,6 @@ ON events(causation_id);
         ID EventID    CausationID    (网络上下文)
         SessionID     CorrelationID
         Type          OriginID
-        SchemaID
         Source
         Timestamp
 
@@ -878,7 +864,7 @@ ON events(causation_id);
              │              │              │
         Payload          Meta           Analysis
              │              │              │
-     SchemaID + Value  direction      _state_changes
+        Value           direction      _state_changes
      (纯业务字段)       msg_name       entity / entity_type
                        role           entity_id / change_count
                        is_push

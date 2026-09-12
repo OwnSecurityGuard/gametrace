@@ -36,10 +36,8 @@ import (
 	"gametrace/pkg/internalipc"
 	pb "gametrace/pkg/internalipc/proto"
 	"gametrace/pkg/logging"
-	"gametrace/pkg/plugin"
 	plugindevclient "gametrace/pkg/plugindev/client"
 	plugindevserver "gametrace/pkg/plugindev/server"
-	"gametrace/pkg/schema"
 	"gametrace/pkg/store"
 	"gametrace/pkg/version"
 
@@ -481,9 +479,9 @@ func newMCPCapture(iface, pluginsDir, workDir, pipelineAddr, httpAddr string, mc
 		controlStore:   controlStore,
 		readerOpener: func(path, sessionID string) (captureReader, error) {
 			if store.IsPostgres(dbDriver) {
-				return store.OpenCaptureStoreReadOnly(dbDriver, dbDSN, nil, sessionID)
+				return store.OpenCaptureStoreReadOnly(dbDriver, dbDSN, sessionID)
 			}
-			return store.NewSQLiteStore(path, nil)
+			return store.NewSQLiteStore(path)
 		},
 		enableRawDebug: enableRawDebug,
 		httpAddr:       httpAddr,
@@ -1003,367 +1001,12 @@ func (m *mcpCapture) handleListLiveSessions(ctx context.Context, req mcp.CallToo
 	return successResult(map[string]any{"count": len(sessions), "sessions": sessions}), nil
 }
 
-func (m *mcpCapture) handleGetCaptureSchema(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	sessionID := req.GetString("session_id", "")
-	dbPath, err := m.getDBPath(ctx, sessionID)
-	if err != nil {
-		return errorResult(err), nil
-	}
-	slog.Info("get_capture_schema requested", "db_path", dbPath, "session_id", sessionID)
-	if dbPath == "" {
-		slog.Warn("get_capture_schema rejected: no capture database available")
-		return errorResult(fmt.Errorf("no capture database available; start a capture first")), nil
-	}
-
-	sessionDir := filepath.Dir(dbPath)
-
-	// 打开 reader 用于 loadDataFields 采样推断（manifest 缺失时的兜底路径）
-	reader, err := m.openReader(ctx, sessionID)
-	if err != nil {
-		return errorResult(fmt.Errorf("open reader: %w", err)), nil
-	}
-	defer reader.Close()
-
-	// 1. events 表的列（包含 data.* 展开后的字段）
-	// 这些字段同时也是 list_decoded_data filter 表达式的 env 变量。
-	queryFields := []map[string]any{
-		{"name": "id", "type": "string", "description": "decoded event uuid"},
-		{"name": "timestamp", "type": "string", "description": "event timestamp (RFC3339)"},
-		{"name": "session_id", "type": "string", "description": "capture session id or tcp flow key"},
-		{"name": "protocol", "type": "string", "description": "transport protocol, e.g. tcp"},
-		{"name": "raw_len", "type": "number", "description": "original packet length"},
-		{"name": "flow_id", "type": "number", "description": "direction-agnostic flow hash (5-tuple)"},
-		{"name": "direction", "type": "string", "description": "client_to_server | server_to_client | unknown"},
-		{"name": "msg_name", "type": "string", "description": "business message name"},
-		{"name": "msg_id", "type": "number", "description": "per-flow auto-increment message id"},
-		{"name": "is_push", "type": "number", "description": "1 if server push, 0 otherwise"},
-		{"name": "correlation_id", "type": "string", "description": "request/response pairing key from plugin semantic pair rules (same value on both sides)"},
-		{"name": "causation_id", "type": "string", "description": "event id of the preceding request this event responds to (response side only)"},
-		{"name": "parent_id", "type": "string", "description": "parent event id of extract child events (empty for top-level)"},
-		{"name": "src", "type": "string", "description": "source addr (ip:port)"},
-		{"name": "dst", "type": "string", "description": "destination addr (ip:port)"},
-		{"name": "tcp_flags", "type": "string", "description": "TCP control flags (FIN|RST|...), non-empty means tcp_close event"},
-	}
-	decodedColumns := make([]map[string]any, len(queryFields))
-	copy(decodedColumns, queryFields)
-
-	// data.* 字段三优先级：manifest 声明（Semantic Contract 真源）> schema.json > event_index 采样。
-	var dataFields []dataField
-	fieldSource := "event_index_sampling"
-	if snapshot := m.getManifestSnapshot(sessionID); snapshot != "" {
-		if mf, ok := manifestDataFields(snapshot); ok {
-			dataFields = mf
-			fieldSource = "manifest"
-		}
-	}
-	if dataFields == nil {
-		mf, err := loadDataFields(ctx, sessionDir, reader)
-		if err != nil {
-			slog.Warn("load data fields failed", "error", err)
-		}
-		if mf != nil {
-			dataFields = mf
-			if _, err := os.Stat(filepath.Join(sessionDir, "schema.json")); err == nil {
-				fieldSource = "schema.json"
-			}
-		}
-	}
-	for _, f := range dataFields {
-		decodedColumns = append(decodedColumns, map[string]any{
-			"name":        "data." + f.name,
-			"type":        f.typ,
-			"description": "plugin decoded field",
-		})
-	}
-
-	// 2. state_changes 投影表的列
-	stateChangeColumns := []map[string]any{
-		{"name": "id", "type": "string", "description": "state change uuid"},
-		{"name": "session_id", "type": "string", "description": "capture session id"},
-		{"name": "flow_id", "type": "string", "description": "flow id"},
-		{"name": "timestamp", "type": "string", "description": "change timestamp (RFC3339)"},
-		{"name": "subject_type", "type": "string", "description": "e.g. Building, Hero"},
-		{"name": "subject_id", "type": "string", "description": "subject identifier"},
-		{"name": "op", "type": "string", "description": "set | delete | merge"},
-		{"name": "path", "type": "string", "description": "changed path/field"},
-		{"name": "before", "type": "any", "description": "previous value (JSON)"},
-		{"name": "after", "type": "any", "description": "new value (JSON)"},
-		{"name": "version", "type": "number", "description": "optional version"},
-	}
-
-	// 3. aggregated_metrics 表的列
-	metricColumns := []map[string]any{
-		{"name": "name", "type": "string", "description": "metric output name, e.g. http_req_count"},
-		{"name": "window", "type": "string", "description": "metric window start (RFC3339)"},
-		{"name": "value", "type": "number", "description": "metric value"},
-		{"name": "group", "type": "map[string]string", "description": "group tags, access by group['data.method']"},
-	}
-
-	// 4. 生成示例表达式
-	examples := buildExamples(dataFields)
-
-	// 5. 契约声明视图（schema/state 层，从 manifest 快照派生）
-	var manifestView map[string]any
-	if snapshot := m.getManifestSnapshot(sessionID); snapshot != "" {
-		manifestView = manifestDeclarationView(snapshot)
-	}
-	result := map[string]any{
-		"sources": []map[string]any{
-			{
-				"name":        "events",
-				"description": "解码后的事件表，list_decoded_data 的数据来源",
-				"columns":     decodedColumns,
-			},
-			{
-				"name":        "state_changes",
-				"description": "状态变更投影表，list_state_changes 的数据来源",
-				"columns":     stateChangeColumns,
-			},
-			{
-				"name":        "aggregated_metrics",
-				"description": "聚合指标表（自有规则引擎已移除，当前不再写入；保留仅为兼容旧数据）",
-				"columns":     metricColumns,
-			},
-		},
-		"query_fields": queryFields,
-		"examples":     examples,
-		"field_source": fieldSource,
-	}
-	if manifestView != nil {
-		result["manifest"] = manifestView
-	}
-
-	slog.Info("get_capture_schema completed", "session_dir", sessionDir, "field_source", fieldSource, "decoded_columns", len(decodedColumns))
-	return successResult(result), nil
-}
-
-type dataField struct {
-	name string
-	typ  string
-}
-
-// getManifestSnapshot 返回会话创建时保存的 plugin manifest 快照（plugin.yaml 原文）。
-// 优先 ControlStore（持久层），无则返回空串。
-func (m *mcpCapture) getManifestSnapshot(sessionID string) string {
-	if m.controlStore != nil && sessionID != "" {
-		if meta, err := m.controlStore.GetSession(context.Background(), sessionID); err == nil && meta != nil {
-			return meta.ManifestSnapshot
-		}
-	}
-	return ""
-}
-
-// manifestDataFields 从 manifest 快照派生 data.* 字段清单（Semantic Contract 真源）。
-// 返回 ok=false 表示快照缺失或未声明任何 schema 字段，调用方回退到 schema.json / 采样。
-func manifestDataFields(snapshot string) ([]dataField, bool) {
-	m, err := plugin.ParseManifest([]byte(snapshot))
-	if err != nil {
-		return nil, false
-	}
-	idx := contract.ManifestSchemaIndex(m)
-	if len(idx) == 0 {
-		return nil, false
-	}
-	var fields []dataField
-	for _, s := range idx {
-		for name, f := range s.Fields {
-			if f == nil {
-				continue
-			}
-			fields = append(fields, dataField{name: name, typ: string(f.Type)})
-		}
-	}
-	if len(fields) == 0 {
-		return nil, false
-	}
-	sort.Slice(fields, func(i, j int) bool { return fields[i].name < fields[j].name })
-	return fields, true
-}
-
-// manifestDeclarationView 把 manifest 的契约声明（schema/state）压成
-// MCP 可返回的紧凑视图，让 Agent 无需连接插件即可了解会话的契约能力。
-func manifestDeclarationView(snapshot string) map[string]any {
-	m, err := plugin.ParseManifest([]byte(snapshot))
-	if err != nil {
-		return nil
-	}
-	// capabilities：转成字符串列表。
-	var caps []string
-	for cap, on := range m.Capabilities {
-		if on {
-			caps = append(caps, string(cap))
-		}
-	}
-	sort.Strings(caps)
-	out := map[string]any{
-		"name":         m.Name,
-		"protocol":     m.Protocol,
-		"capabilities": caps,
-	}
-
-	// schema 层：字段 + semantic / 查询能力位。
-	type fieldView struct {
-		Name         string `json:"name"`
-		Type         string `json:"type"`
-		Semantic     string `json:"semantic,omitempty"`
-		Queryable    bool   `json:"queryable,omitempty"`
-		Aggregatable bool   `json:"aggregatable,omitempty"`
-		Groupable    bool   `json:"groupable,omitempty"`
-		Alias        string `json:"alias,omitempty"`
-	}
-	var schemas []map[string]any
-	idx := contract.ManifestSchemaIndex(m)
-	for wire, s := range idx {
-		var fvs []fieldView
-		for name, f := range s.Fields {
-			if f == nil {
-				continue
-			}
-			fvs = append(fvs, fieldView{
-				Name: name, Type: string(f.Type), Semantic: string(f.Semantic),
-				Queryable: f.Queryable, Aggregatable: f.Aggregatable,
-				Groupable: f.Groupable, Alias: f.Alias,
-			})
-		}
-		sort.Slice(fvs, func(i, j int) bool { return fvs[i].Name < fvs[j].Name })
-		schemas = append(schemas, map[string]any{"id": wire, "fields": fvs})
-	}
-	if len(schemas) > 0 {
-		out["schemas"] = schemas
-	}
-
-	// state 层：subject 类型 + id 字段 + 路径白名单。
-	if len(m.States) > 0 {
-		var states []map[string]any
-		for _, s := range m.States {
-			states = append(states, map[string]any{
-				"subject_type": s.Type, "id_field": s.IDField, "paths": s.Paths,
-			})
-		}
-		out["states"] = states
-	}
-
-	return out
-}
-
-func loadDataFields(ctx context.Context, sessionDir string, reader captureReader) ([]dataField, error) {
-	// 优先读取 schema.json
-	schemaPath := filepath.Join(sessionDir, "schema.json")
-	if schemaData, err := os.ReadFile(schemaPath); err == nil {
-		var s schema.Schema
-		if err := json.Unmarshal(schemaData, &s); err == nil && s.Fields != nil {
-			fields := make([]dataField, 0, len(s.Fields))
-			for name, f := range s.Fields {
-				fields = append(fields, dataField{name: name, typ: string(f.Type)})
-			}
-			sort.Slice(fields, func(i, j int) bool { return fields[i].name < fields[j].name })
-			return fields, nil
-		}
-	}
-
-	// 回退：从 event_index 采样推断 projection_json
-	rows, err := reader.RawQuery(ctx, "SELECT projection_json FROM event_index LIMIT 50")
-	if err != nil {
-		return nil, err
-	}
-
-	seen := map[string]string{}
-	for _, row := range rows {
-		// projection_json 列可能是 []byte 或 string，统一处理
-		var jsonStr string
-		switch v := row["projection_json"].(type) {
-		case []byte:
-			jsonStr = string(v)
-		case string:
-			jsonStr = v
-		default:
-			continue
-		}
-		var data map[string]any
-		if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
-			continue
-		}
-		for k, v := range data {
-			if _, exists := seen[k]; exists {
-				continue
-			}
-			seen[k] = inferType(v)
-		}
-	}
-
-	fields := make([]dataField, 0, len(seen))
-	for name, typ := range seen {
-		fields = append(fields, dataField{name: name, typ: typ})
-	}
-	sort.Slice(fields, func(i, j int) bool { return fields[i].name < fields[j].name })
-	return fields, nil
-}
-
-func inferType(v any) string {
-	switch v.(type) {
-	case string:
-		return "string"
-	case float64:
-		return "number"
-	case bool:
-		return "boolean"
-	case []any:
-		return "array"
-	case map[string]any:
-		return "object"
-	default:
-		return "unknown"
-	}
-}
-
-func buildExamples(fields []dataField) map[string][]string {
-	examples := map[string][]string{}
-
-	// list_decoded_data filter 示例 - 基于实际字段动态生成
-	filterExamples := []string{
-		`protocol == "tcp"`,
-		`raw_len > 100`,
-	}
-
-	// 根据实际 data 字段生成示例
-	hasMethod := false
-	for _, f := range fields {
-		if f.name == "method" {
-			hasMethod = true
-		}
-		switch f.name {
-		case "type":
-			filterExamples = append(filterExamples, `data.type == "request"`)
-		case "method":
-			filterExamples = append(filterExamples, `data.method == "GET"`)
-		case "path":
-			filterExamples = append(filterExamples, `data.path contains "/api"`)
-		case "body_len":
-			filterExamples = append(filterExamples, `data.body_len > 50`)
-		case "status":
-			filterExamples = append(filterExamples, `data.status == "200"`)
-		}
-		// 如果是 number 类型，生成比较示例
-		if f.typ == "number" && f.name != "body_len" {
-			filterExamples = append(filterExamples, fmt.Sprintf(`data.%s > 5`, f.name))
-		}
-	}
-
-	// 添加组合条件示例
-	if hasMethod {
-		filterExamples = append(filterExamples, `data.method == "POST" && data.body_len > 100`)
-	}
-
-	examples["list_decoded_data_filter"] = filterExamples
-
-	return examples
-}
-
 func (m *mcpCapture) handleListDecodedData(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	limit := req.GetInt("limit", 100)
 	offset := req.GetInt("offset", 0)
 	sessionID := req.GetString("session_id", "")
 	filterExpr := req.GetString("filter", "")
+	connID := req.GetString("conn_id", "")
 	// sessionID 为空时解析为当前会话的实际 ID：分页查询（QueryEventPage /
 	// StreamEventsDesc / capture context）都以 events.session_id 过滤，需要真实值。
 	// 旧实现的空串会过滤出 0 行（"默认当前会话"对事件查询从未真正生效）。
@@ -1417,7 +1060,7 @@ func (m *mcpCapture) handleListDecodedData(ctx context.Context, req mcp.CallTool
 	// 仅代理抓包（conn_id 非空）的事件会获得 capture 字段，供前端展示 Capture Context。
 	captureIdx := buildCaptureContextFromIndex(ctx, reader, sessionID)
 
-	pageQ := store.EventPageQuery{SessionID: sessionID, TypeEq: pd.TypeEq, TypeNot: pd.TypeNot}
+	pageQ := store.EventPageQuery{SessionID: sessionID, TypeEq: pd.TypeEq, TypeNot: pd.TypeNot, ConnEq: connID}
 
 	// 纯 SQL 分页路径：filter 为空，或 filter 恰好被 type 谓词完全表达。
 	// LIMIT/OFFSET/COUNT 全部下推到 SQL，payload msgpack 仅对页内行解码。
@@ -1458,6 +1101,12 @@ func (m *mcpCapture) handleListDecodedData(ctx context.Context, req mcp.CallTool
 	err = pager.StreamEventsDesc(ctx, pageQ, 500, func(batch []*event.Event) (bool, error) {
 		rawLenMap := lookupRawLens(ctx, reader, batch)
 		for _, ev := range batch {
+			// 连接过滤（应用路径兜底）：事件必须属于该连接（capture context 命中）。
+			if connID != "" {
+				if cc, ok := captureIdx[string(ev.Identity.ID)]; !ok || cc.ConnID != connID {
+					continue
+				}
+			}
 			eventMap := decodedEventMap(ev, captureIdx, rawLenMap)
 			out, err := expr.Run(program, eventMap)
 			if err != nil {
@@ -1661,6 +1310,7 @@ type connectionReader interface {
 	QueryConnectionDetail(ctx context.Context, sessionID, connID string) (*store.ConnectionDetail, error)
 	QueryConnectionStreams(ctx context.Context, sessionID, connID string, limit, offset int) ([]store.ConnectionStream, error)
 	QueryConnectionFrames(ctx context.Context, connID string, limit, offset int) ([]store.ConnectionFrame, error)
+	QuerySessionFrames(ctx context.Context, sessionID string, limit, offset int) ([]store.ConnectionFrame, error)
 }
 
 // asConnectionReader 把 captureReader 断言为 connectionReader；后端不支持时返回错误。
@@ -1816,9 +1466,6 @@ func (m *mcpCapture) handleListConnectionFrames(ctx context.Context, req mcp.Cal
 	if dbPath == "" {
 		return errorResult(fmt.Errorf("no capture database available; start a capture first")), nil
 	}
-	if connID == "" {
-		return errorResult(fmt.Errorf("conn_id is required")), nil
-	}
 
 	reader, err := m.openReader(ctx, sessionID)
 	if err != nil {
@@ -1831,7 +1478,13 @@ func (m *mcpCapture) handleListConnectionFrames(ctx context.Context, req mcp.Cal
 		return errorResult(err), nil
 	}
 
-	frames, err := cr.QueryConnectionFrames(ctx, connID, limit, offset)
+	// conn_id 为空 = 「全部连接」：返回整个会话的帧（跨连接按时间交错）。
+	var frames []store.ConnectionFrame
+	if connID == "" {
+		frames, err = cr.QuerySessionFrames(ctx, sessionID, limit, offset)
+	} else {
+		frames, err = cr.QueryConnectionFrames(ctx, connID, limit, offset)
+	}
 	if err != nil {
 		return errorResult(fmt.Errorf("query connection frames: %w", err)), nil
 	}
@@ -2885,6 +2538,7 @@ func main() {
 		mcp.WithNumber("limit", mcp.DefaultNumber(100), mcp.Description("Max rows to return")),
 		mcp.WithNumber("offset", mcp.DefaultNumber(0), mcp.Description("Offset")),
 		mcp.WithString("session_id", mcp.Description("Optional session ID to query; defaults to current session")),
+		mcp.WithString("conn_id", mcp.Description("Optional connection ID to filter by; when set, only events of that capture connection (event_index.conn_id) are returned")),
 		mcp.WithString("filter", mcp.Description("Optional expr expression to filter events, e.g. data.entity == \"buff\" && data.hp > 5. Available fields: id, timestamp, session_id, protocol, raw_len, data.*")),
 	), capture.handleListDecodedData)
 
@@ -2912,9 +2566,9 @@ func main() {
 	), capture.handleListConnectionStreams)
 
 	s.AddTool(mcp.NewTool("list_connection_frames",
-		mcp.WithDescription("List the raw reassembled frames within one connection (Frames / Raw view). Each frame has timestamp, direction, src/dst, protocol, link_type and base64 payload."),
+		mcp.WithDescription("List the raw reassembled frames. When conn_id is given, returns that connection's frames; when omitted (all connections), returns the whole session's frames ordered by time. Each frame has timestamp, direction, src/dst, protocol, link_type and base64 payload."),
 		mcp.WithString("session_id", mcp.Description("Optional session ID to query; defaults to current session")),
-		mcp.WithString("conn_id", mcp.Required(), mcp.Description("Connection ID from list_connections")),
+		mcp.WithString("conn_id", mcp.Description("Connection ID from list_connections; omit to list all frames in the session")),
 		mcp.WithNumber("limit", mcp.DefaultNumber(100), mcp.Description("Max rows to return")),
 		mcp.WithNumber("offset", mcp.DefaultNumber(0), mcp.Description("Offset")),
 	), capture.handleListConnectionFrames)
@@ -2955,11 +2609,6 @@ func main() {
 		mcp.WithDescription("Quickly check whether a behavior run has useful data. Returns flow/message counts for fail-fast decisions."),
 		mcp.WithString("run_id", mcp.Required(), mcp.Description("Run ID to check")),
 	), capture.handleGetRunStatus)
-
-	s.AddTool(mcp.NewTool("get_capture_schema",
-		mcp.WithDescription("Describe available fields for decoded events, state_changes projections, aggregation metrics and current rules."),
-		mcp.WithString("session_id", mcp.Description("Optional session ID to query; defaults to current session")),
-	), capture.handleGetCaptureSchema)
 
 	// 受限调试能力：原始包工具仅在 --enable-raw-debug 或 GT_MCP_ENABLE_RAW_DEBUG=1 时注册。
 	if capture.enableRawDebug {
@@ -3145,16 +2794,16 @@ func main() {
 	// 跨域调用 MCP 工具）。未配置任何 origin 时不返回 CORS 头，同源用法不受影响。
 	// 鉴权（B3）：GT_AUTH_TOKENS 配置了 token 时强制 Bearer 校验（auth.Middleware）；
 	// 未配置（匿名模式）时保持旧行为——直接放行、不注入身份。
-	// 身份来源组合（2026-09-05 邀请制）：env bootstrap 优先，users 表兜底
-	//（邀请 claim 创建的身份即时生效，无需重启）。
+	// 身份来源组合（2026-09-05 design）：env bootstrap 优先，users 表兜底
+	//（users 表注册创建的身份即时生效，无需重启）。
 	envResolver, err := auth.LoadFromEnv()
 	if err != nil {
 		slog.Error("load auth tokens failed", "error", err)
 		os.Exit(1)
 	}
 	resolver := auth.NewFirstResolver(envResolver, auth.NewDBResolver(capture.users.db))
-	// 自助注册开关：token 鉴权开启即默认允许（新用户免邀请获取身份）；
-	// GT_AUTH_REGISTER=off 显式关闭（封闭团队走纯邀请制）。匿名模式无意义。
+	// 自助注册开关：token 鉴权开启即默认允许（新用户可直接注册获取身份）；
+	// GT_AUTH_REGISTER=off 显式关闭（封闭团队仅允许 env 与既有注册身份）。匿名模式无意义。
 	capture.envResolver = envResolver
 	capture.openRegister = resolver.Required() && os.Getenv("GT_AUTH_REGISTER") != "off"
 	authed := buildHTTPHandler(strings.Split(*allowedOrigins, ","), resolver, mux)

@@ -79,7 +79,7 @@ func main() {
 	fs.IntVar(&batchSize, "batch-size", 128, "推流批大小（包数阈值）")
 	fs.DurationVar(&batchInterval, "batch-interval", 200*time.Millisecond, "推流批时间阈值（低流量兜底刷批间隔）")
 	fs.StringVar(&spoolDir, "spool-dir", "", "上行链路磁盘缓冲目录根（断电续传+留存）；留空默认取探针当前目录下 spool/")
-	fs.IntVar(&snapLen, "snaplen", 1600, "pcap snaplen")
+	fs.IntVar(&snapLen, "snaplen", 262144, "pcap snaplen")
 	fs.BoolVar(&promisc, "promisc", true, "混杂模式")
 	fs.StringVar(&accessCode, "code", "", "启动码 GT-XXXX-XXXX：无 server/token 时用它自动领取配置并回连")
 	fs.StringVar(&accessHost, "mcp", "127.0.0.1:8781", "服务端 MCP HTTP 地址（启动码领取用）")

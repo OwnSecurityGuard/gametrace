@@ -138,7 +138,6 @@ func decodeSimFrame(stream grpc.BidiStreamingServer[pb.DecodeRequest, pb.DecodeR
 
 	draft := sdkEvent.Draft{
 		Type:             "sim.event",
-		SchemaRef:        "sim_game.event.v1",
 		Value:            sdkEvent.ValueFromMap(business), // 纯业务 payload
 		Meta:             sdkEvent.ValueFromMap(meta),     // direction/msg_name/role/is_push
 		Analysis:         sdkEvent.ValueFromMap(analysis), // entity/_state_changes 等分析
@@ -243,33 +242,15 @@ func startSimDecoder(mgr *plugin.RegistryServer) (string, func(), error) {
 	pb.RegisterDecoderServer(srv, simDecoderServer{})
 	go func() { _ = srv.Serve(lis) }()
 
-	// 声明 schema（id sim_game.event → 线上串 sim_game.event.v1），使 dispatcher 不再
-	// 把事件降级成 unknown.v1；同时让 webui 的状态变更视图能按 schema 正常归类。
-	// 字段类型严格照搬真实插件（int64/bool/string），避免 manifest 校验失败。
 	manifest := "api_version: gt.decoder/v2\n" +
 		"name: " + simPluginName + "\n" +
 		"protocol: tcp\n" +
 		"type: decoder\n" +
 		"capabilities:\n" +
 		"  decode: true\n" +
-		"  schema: true\n" +
 		"contract:\n" +
 		"  name: gta.plugin\n" +
-		"  version: 1\n" +
-		"schemas:\n" +
-		"  - id: sim_game.event\n" +
-		"    version: 1\n" +
-		"    name: Simulated game event\n" +
-		"    description: Synthetic event emitted by the test probe+decoder harness for webui validation.\n" +
-		"    strict: false\n" +
-		"    fields:\n" +
-		"      entity_type:    { type: string, queryable: true }\n" +
-		"      entity_id:      { type: string, queryable: true }\n" +
-		"      msg_name:       { type: string, queryable: true }\n" +
-		"      role:           { type: string, queryable: true }\n" +
-		"      is_push:        { type: bool }\n" +
-		"      change_count:   { type: int64, queryable: true }\n" +
-		"      correlation_id: { type: string, optional: true }\n"
+		"  version: 1\n"
 	// Register 会拨号校验可达性，因此解码服务必须先 Listen。
 	// SocketPath 必须带 unix: 前缀：dialTarget 对裸 Windows 路径（无 '/'）会误判成 tcp。
 	socketTarget := "unix:" + sock

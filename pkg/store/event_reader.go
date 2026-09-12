@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"gametrace/pkg/event"
@@ -31,7 +30,6 @@ func scanEvent(sc eventScanner) (*event.Event, error) {
 		id            string
 		sessionID     string
 		eventType     string
-		schemaID      string
 		source        string
 		timestamp     int64
 		causationID   sql.NullString
@@ -45,7 +43,7 @@ func scanEvent(sc eventScanner) (*event.Event, error) {
 	)
 
 	if err := sc.Scan(
-		&id, &sessionID, &eventType, &schemaID, &source, &timestamp,
+		&id, &sessionID, &eventType, &source, &timestamp,
 		&causationID, &correlationID, &originID, &parentID, &contextBytes, &payloadBytes,
 		&scenarioID, &replayID,
 	); err != nil {
@@ -71,15 +69,13 @@ func scanEvent(sc eventScanner) (*event.Event, error) {
 			ID:        event.EventID(id),
 			SessionID: sessionID,
 			Type:      event.EventType(eventType),
-			SchemaID:  schemaID,
 			Source:    event.SourceID(source),
 			Timestamp: time.Unix(0, timestamp),
 		},
 		Trace:   event.TraceContext{},
 		Context: ctx,
 		Payload: event.Payload{
-			SchemaID: schemaID,
-			Value:    payloadValue,
+			Value: payloadValue,
 		},
 		Meta:     metaValue,
 		Analysis: analysisValue,
@@ -120,7 +116,7 @@ func (s *SQLiteStore) QueryEventsDesc(ctx context.Context, sessionID string, lim
 
 func (s *SQLiteStore) queryEventsOrdered(ctx context.Context, sessionID string, limit, offset int, order string) ([]*event.Event, error) {
 	query := `
-		SELECT id, session_id, type, schema_id, source, timestamp,
+		SELECT id, session_id, type, source, timestamp,
 		       causation_id, correlation_id, origin_id, parent_id, context, payload` + s.eventSelectSuffix() + `
 		FROM events
 		WHERE session_id = ?
@@ -155,7 +151,7 @@ func (s *SQLiteStore) queryEventsOrdered(ctx context.Context, sessionID string, 
 // GetEventByID 根据 ID 查询单个 Event。
 func (s *SQLiteStore) GetEventByID(ctx context.Context, id string) (*event.Event, error) {
 	query := `
-		SELECT id, session_id, type, schema_id, source, timestamp,
+		SELECT id, session_id, type, source, timestamp,
 		       causation_id, correlation_id, origin_id, parent_id, context, payload` + s.eventSelectSuffix() + `
 		FROM events
 		WHERE id = ?
@@ -176,7 +172,7 @@ func (s *SQLiteStore) GetEventByID(ctx context.Context, id string) (*event.Event
 // QueryEventsByType 按事件类型查询 Event。
 func (s *SQLiteStore) QueryEventsByType(ctx context.Context, sessionID, eventType string, limit, offset int) ([]*event.Event, error) {
 	query := `
-		SELECT id, session_id, type, schema_id, source, timestamp,
+		SELECT id, session_id, type, source, timestamp,
 		       causation_id, correlation_id, origin_id, parent_id, context, payload` + s.eventSelectSuffix() + `
 		FROM events
 		WHERE session_id = ? AND type = ?
@@ -210,7 +206,7 @@ func (s *SQLiteStore) QueryEventsByType(ctx context.Context, sessionID, eventTyp
 // QueryEventsByCorrelation 按关联 ID 查询 Event。
 func (s *SQLiteStore) QueryEventsByCorrelation(ctx context.Context, correlationID string, limit, offset int) ([]*event.Event, error) {
 	query := `
-		SELECT id, session_id, type, schema_id, source, timestamp,
+		SELECT id, session_id, type, source, timestamp,
 		       causation_id, correlation_id, origin_id, parent_id, context, payload` + s.eventSelectSuffix() + `
 		FROM events
 		WHERE correlation_id = ?
@@ -295,43 +291,6 @@ FROM raw_packets WHERE 1=1`
 		result = append(result, r)
 	}
 	return result, rows.Err()
-}
-
-// GetSchema 返回事件数据库的表结构信息，供 MCP get_capture_schema 工具使用。
-func (s *SQLiteStore) GetSchema(ctx context.Context, sessionID string) (SchemaInfo, error) {
-	tables := []string{"raw_packets", "events", "aggregated_metrics", "state_changes", "event_index"}
-	var info SchemaInfo
-	for _, tbl := range tables {
-		ts, err := s.getTableSchema(ctx, tbl)
-		if err != nil {
-			slog.Warn("get schema for table", "table", tbl, "error", err)
-			continue
-		}
-		info.Tables = append(info.Tables, ts)
-	}
-	return info, nil
-}
-
-// getTableSchema 查询单个表的列结构。
-func (s *SQLiteStore) getTableSchema(ctx context.Context, tbl string) (TableSchema, error) {
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tbl))
-	if err != nil {
-		return TableSchema{}, err
-	}
-	defer rows.Close()
-	ts := TableSchema{Name: tbl}
-	for rows.Next() {
-		var cid int
-		var name, ctype string
-		var notnull int
-		var dflt sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
-			return ts, err
-		}
-		ts.Columns = append(ts.Columns, ColumnSchema{Name: name, Type: ctype})
-	}
-	return ts, rows.Err()
 }
 
 // RawQuery 执行任意 SQL 查询（逃生舱）。

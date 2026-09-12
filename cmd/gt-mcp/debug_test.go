@@ -20,7 +20,7 @@ func TestDebug_TimeFormat(t *testing.T) {
 	if err := mkdirAll(sessionDir); err != nil {
 		t.Fatal(err)
 	}
-	st, _ := store.NewSQLiteStore(sessionMgr.absDBPath(sessionID), nil)
+	st, _ := store.NewSQLiteStore(sessionMgr.absDBPath(sessionID))
 	defer st.Close()
 
 	// 写入一条事件（使用 Event）
@@ -41,7 +41,6 @@ func TestDebug_TimeFormat(t *testing.T) {
 				ID:        "ev-1",
 				SessionID: sessionID,
 				Type:      "tcp",
-				SchemaID:  "tcp.v1",
 				Source:    "test",
 				Timestamp: now,
 			},
@@ -51,7 +50,6 @@ func TestDebug_TimeFormat(t *testing.T) {
 				Direction: "client_to_server",
 			},
 			Payload: event.Payload{
-				SchemaID: "tcp.v1",
 				Value:    payload,
 			},
 		},
@@ -68,7 +66,7 @@ func TestDebug_TimeFormat(t *testing.T) {
 	if err := row.Scan(&storedTS); err != nil {
 		t.Fatalf("scan timestamp: %v", err)
 	}
-	t.Logf("stored timestamp: %q", storedTS)
+	t.Logf("stored timestamp: %d", storedTS)
 	t.Logf("now (local): %v", now)
 	t.Logf("now.Format(RFC3339Nano): %q", now.Format(time.RFC3339Nano))
 	t.Logf("now.UTC().Format(RFC3339Nano): %q", now.UTC().Format(time.RFC3339Nano))

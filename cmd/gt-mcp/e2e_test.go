@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 // sqliteReaderOpener 返回一个使用 store.NewSQLiteStore 的 readerOpener，供测试注入。
 func sqliteReaderOpener() func(dbPath, sessionID string) (captureReader, error) {
 	return func(dbPath, sessionID string) (captureReader, error) {
-		return store.NewSQLiteStore(dbPath, nil)
+		return store.NewSQLiteStore(dbPath)
 	}
 }
 
@@ -63,7 +63,7 @@ func TestE2E_RunWindowAndTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	dbPath := sessionMgr.absDBPath(sessionID)
-	st, err := store.NewSQLiteStore(dbPath, nil)
+	st, err := store.NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
@@ -124,10 +124,9 @@ func TestE2E_RunWindowAndTrace(t *testing.T) {
 			Identity: event.Identity{
 				ID: "ev-login-req", Timestamp: baseTime,
 				SessionID: sessionID, Type: "tcp",
-				SchemaID: "tcp.v1", Source: "test",
+				Source: "test",
 			},
 			Payload: event.Payload{
-				SchemaID: "tcp.v1",
 				Value: event.Value{
 					Kind: event.Object,
 					Object: map[string]event.Value{
@@ -147,10 +146,9 @@ func TestE2E_RunWindowAndTrace(t *testing.T) {
 			Identity: event.Identity{
 				ID: "ev-login-resp", Timestamp: baseTime.Add(30 * time.Millisecond),
 				SessionID: sessionID, Type: "tcp",
-				SchemaID: "tcp.v1", Source: "test",
+				Source: "test",
 			},
 			Payload: event.Payload{
-				SchemaID: "tcp.v1",
 				Value: event.Value{
 					Kind: event.Object,
 					Object: map[string]event.Value{
@@ -170,10 +168,9 @@ func TestE2E_RunWindowAndTrace(t *testing.T) {
 			Identity: event.Identity{
 				ID: "ev-heartbeat", Timestamp: baseTime.Add(100 * time.Millisecond),
 				SessionID: sessionID, Type: "tcp",
-				SchemaID: "tcp.v1", Source: "test",
+				Source: "test",
 			},
 			Payload: event.Payload{
-				SchemaID: "tcp.v1",
 				Value: event.Value{
 					Kind: event.Object,
 					Object: map[string]event.Value{
@@ -193,10 +190,9 @@ func TestE2E_RunWindowAndTrace(t *testing.T) {
 			Identity: event.Identity{
 				ID: "ev-upgrade-req", Timestamp: baseTime.Add(500 * time.Millisecond),
 				SessionID: sessionID, Type: "tcp",
-				SchemaID: "tcp.v1", Source: "test",
+				Source: "test",
 			},
 			Payload: event.Payload{
-				SchemaID: "tcp.v1",
 				Value: event.Value{
 					Kind: event.Object,
 					Object: map[string]event.Value{
@@ -217,10 +213,9 @@ func TestE2E_RunWindowAndTrace(t *testing.T) {
 			Identity: event.Identity{
 				ID: "ev-upgrade-resp", Timestamp: baseTime.Add(600 * time.Millisecond),
 				SessionID: sessionID, Type: "tcp",
-				SchemaID: "tcp.v1", Source: "test",
+				Source: "test",
 			},
 			Payload: event.Payload{
-				SchemaID: "tcp.v1",
 				Value: event.Value{
 					Kind: event.Object,
 					Object: map[string]event.Value{
@@ -240,10 +235,9 @@ func TestE2E_RunWindowAndTrace(t *testing.T) {
 			Identity: event.Identity{
 				ID: "ev-push", Timestamp: baseTime.Add(650 * time.Millisecond),
 				SessionID: sessionID, Type: "tcp",
-				SchemaID: "tcp.v1", Source: "test",
+				Source: "test",
 			},
 			Payload: event.Payload{
-				SchemaID: "tcp.v1",
 				Value: event.Value{
 					Kind: event.Object,
 					Object: map[string]event.Value{

@@ -32,7 +32,7 @@ func TestStateTools(t *testing.T) {
 	}
 	dbPath := sessionMgr.absDBPath(sessionID)
 
-	st, err := store.NewSQLiteStore(dbPath, nil)
+	st, err := store.NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestStateTools(t *testing.T) {
 func writeUpgradeFixture(t *testing.T, st *store.SQLiteStore, sessionID string, base time.Time) {
 	t.Helper()
 	mkEvent := func(id, msgName, direction string, offsetMS int64, correlation, causation string) *event.Event {
-		ev := event.NewEventWithTime(sessionID, event.EventType(msgName), "schema.test", "test",
+		ev := event.NewEventWithTime(sessionID, event.EventType(msgName), "test",
 			event.ValueFromAny(map[string]any{
 				"_meta": map[string]any{"msg_name": msgName, "direction": direction},
 			}), base.Add(time.Duration(offsetMS)*time.Millisecond),
@@ -257,7 +257,7 @@ func TestStateToolsDefaultSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	dbPath := sessionMgr.absDBPath(sessionID)
-	st, err := store.NewSQLiteStore(dbPath, nil)
+	st, err := store.NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}

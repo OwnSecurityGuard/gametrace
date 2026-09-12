@@ -844,9 +844,6 @@ function SampleEventRow({
         <span className="w-40 shrink-0 truncate font-mono" title={ev.type}>
           {ev.type}
         </span>
-        <span className="w-28 shrink-0 truncate text-muted-foreground" title={ev.schema_id}>
-          {ev.schema_id}
-        </span>
         <span className="flex-1 truncate font-mono text-muted-foreground">{preview}</span>
       </button>
       {expanded && (

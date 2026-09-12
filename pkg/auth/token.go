@@ -73,7 +73,7 @@ func (r *StaticResolver) Required() bool {
 }
 
 // HasOwner 报告 env bootstrap 配置里是否存在指定 owner 名（与 token 值无关）。
-// 用于自助注册时的保留名检查：env 身份与邀请制身份绝不能同名，否则 projects/
+// 用于自助注册时的保留名检查：env 身份与 users 表注册身份绝不能同名，否则 projects/
 // sessions 的 owner 字段会把两个身份混同，权限边界直接击穿。
 func (r *StaticResolver) HasOwner(name string) bool {
 	if r == nil {

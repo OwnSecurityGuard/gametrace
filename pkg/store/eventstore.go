@@ -42,7 +42,6 @@ type EventReader interface {
 	QueryEventsByType(ctx context.Context, sessionID, eventType string, limit, offset int) ([]*event.Event, error)
 	QueryEventsByCorrelation(ctx context.Context, correlationID string, limit, offset int) ([]*event.Event, error)
 	QueryRawPackets(ctx context.Context, q RawPacketQuery) ([]RawPacketRow, error)
-	GetSchema(ctx context.Context, sessionID string) (SchemaInfo, error)
 	// RawQuery 逃生舱：临时查询用；不同后端方言可能不兼容。
 	RawQuery(ctx context.Context, query string, args ...any) ([]map[string]any, error)
 	Close() error
@@ -224,23 +223,6 @@ type EnrichedStateChange struct {
 	AfterResolved bool `json:"after_resolved"`
 	// EntityVersion 是变更后的实体版本。
 	EntityVersion int64 `json:"entity_version"`
-}
-
-// SchemaInfo 描述事件数据库的表结构（供 MCP get_capture_schema 工具使用）。
-type SchemaInfo struct {
-	Tables []TableSchema
-}
-
-// TableSchema 描述一张表的结构。
-type TableSchema struct {
-	Name    string
-	Columns []ColumnSchema
-}
-
-// ColumnSchema 描述一列。
-type ColumnSchema struct {
-	Name string
-	Type string
 }
 
 // ===== 控制元数据类型 =====

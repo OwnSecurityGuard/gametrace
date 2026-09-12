@@ -251,40 +251,37 @@ type Event struct {
 
 // NewEvent 创建新的 Event
 // 自动生成 UUIDv7 作为 ID，使用当前时间作为 Timestamp
-func NewEvent(sessionID string, eventType EventType, schemaID string, source SourceID, payload Value, ctx EventContext) *Event {
+func NewEvent(sessionID string, eventType EventType, source SourceID, payload Value, ctx EventContext) *Event {
 	return &Event{
-		Identity: NewIdentity(sessionID, eventType, schemaID, source),
+		Identity: NewIdentity(sessionID, eventType, source),
 		Trace:    TraceContext{},
 		Context:  ctx,
 		Payload: Payload{
-			SchemaID: schemaID,
-			Value:    payload,
+			Value: payload,
 		},
 	}
 }
 
 // NewEventWithTime 创建新的 Event，使用指定的时间戳
-func NewEventWithTime(sessionID string, eventType EventType, schemaID string, source SourceID, payload Value, ts time.Time, ctx EventContext) *Event {
+func NewEventWithTime(sessionID string, eventType EventType, source SourceID, payload Value, ts time.Time, ctx EventContext) *Event {
 	return &Event{
-		Identity: NewIdentityWithTime(sessionID, eventType, schemaID, source, ts),
+		Identity: NewIdentityWithTime(sessionID, eventType, source, ts),
 		Trace:    TraceContext{},
 		Context:  ctx,
 		Payload: Payload{
-			SchemaID: schemaID,
-			Value:    payload,
+			Value: payload,
 		},
 	}
 }
 
 // NewEventWithTrace 创建带有执行链路上下文的 Event
-func NewEventWithTrace(sessionID string, eventType EventType, schemaID string, source SourceID, payload Value, trace TraceContext, ctx EventContext) *Event {
+func NewEventWithTrace(sessionID string, eventType EventType, source SourceID, payload Value, trace TraceContext, ctx EventContext) *Event {
 	return &Event{
-		Identity: NewIdentity(sessionID, eventType, schemaID, source),
+		Identity: NewIdentity(sessionID, eventType, source),
 		Trace:    trace,
 		Context:  ctx,
 		Payload: Payload{
-			SchemaID: schemaID,
-			Value:    payload,
+			Value: payload,
 		},
 	}
 }

@@ -219,7 +219,7 @@ func (r *captureRunner) Start(p CaptureParams, ingestAddr, token string) error {
 		return errors.New("capture start: session_id is required")
 	}
 	if p.SnapLen <= 0 {
-		p.SnapLen = 1600
+		p.SnapLen = 262144
 	}
 	bpf := deriveBPF(p)
 	p.BPF = bpf

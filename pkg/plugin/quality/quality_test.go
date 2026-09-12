@@ -18,9 +18,9 @@ var (
 	lowEntropy = []byte("AAAAAAAAAAAAAAAA")
 )
 
-// validEventIO 构造一个非终结响应（带 event_type/schema_id/payload 非空）。
+// validEventIO 构造一个非终结响应（带 event_type / payload 非空）。
 func validEventIO(id string) DecodeIO {
-	return DecodeIO{InputID: id, Done: false, EventType: "game.login", SchemaID: "game.login.v1", PayloadLen: 1}
+	return DecodeIO{InputID: id, Done: false, EventType: "game.login", PayloadLen: 1}
 }
 
 // doneIO 构造一个终结响应，可携带原始字节供熵估计。
@@ -55,9 +55,6 @@ func TestVerifyPass(t *testing.T) {
 	}
 	if q.DecodeErrors != 0 {
 		t.Errorf("decode_errors = %d, want 0", q.DecodeErrors)
-	}
-	if q.SchemaVersionedRatio != 1.0 {
-		t.Errorf("schema_versioned_ratio = %v, want 1.0", q.SchemaVersionedRatio)
 	}
 	if q.EntropyEstimate > 1.0 {
 		t.Errorf("entropy_estimate = %v, want near 0 (low entropy payload)", q.EntropyEstimate)
@@ -98,7 +95,7 @@ func TestVerifyFailDecodeErrors(t *testing.T) {
 func TestVerifyViolationPayloadNonEmpty(t *testing.T) {
 	// 一个非终结响应带 event_type 但 payload 为空 -> payload-non-empty 违规。
 	corpus := []DecodeIO{
-		{InputID: "p1", Done: false, EventType: "game.login", SchemaID: ""},
+		{InputID: "p1", Done: false, EventType: "game.login"},
 		doneIO("p1", lowEntropy),
 	}
 	res := Verify(corpus)
@@ -142,24 +139,6 @@ func TestVerifyWarnEncryption(t *testing.T) {
 	}
 	if q.EntropyEstimate < 7.5 {
 		t.Errorf("entropy_estimate = %v, want >= 7.5", q.EntropyEstimate)
-	}
-}
-
-func TestVerifyWarnLowVersioning(t *testing.T) {
-	// 全部有效事件（payload 非空，不触发 error 级违规）但 schema 未带版本后缀
-	// -> schema-id-versioned 味道不足 -> warn。
-	corpus := []DecodeIO{
-		{InputID: "p1", Done: false, EventType: "game.login", SchemaID: "game.login", PayloadLen: 1},
-		doneIO("p1", lowEntropy),
-		{InputID: "p2", Done: false, EventType: "game.logout", SchemaID: "game.logout", PayloadLen: 1},
-		doneIO("p2", lowEntropy),
-	}
-	res := Verify(corpus)
-	if res.Verdict != "warn" {
-		t.Fatalf("verdict = %q, want warn", res.Verdict)
-	}
-	if res.Quality.SchemaVersionedRatio != 0 {
-		t.Errorf("schema_versioned_ratio = %v, want 0", res.Quality.SchemaVersionedRatio)
 	}
 }
 

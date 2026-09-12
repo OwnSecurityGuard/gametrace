@@ -164,14 +164,12 @@ meta:
   description: HTTP protocol decoder
 ```
 
-### 3.1 语义契约声明（Semantic Contract v1，两层）
+### 3.1 语义契约声明（Semantic Contract v1，一层）
 
-> 宿主在**插件注册时**会跑两层声明校验（schema/state），error 级违规直接拒绝注册；
-> `verify_plugin` 还会逐事件校验 payload 与声明 schema 的符合度。声明写错不会再静默通过。
+> 宿主在**插件注册时**会跑语义声明校验，error 级违规直接拒绝注册。
 > 完整规范见 SDK `docs/plugin-semantic-contract-v1.md`。
 
-manifest 在基础字段之外可声明语义契约。`contract:` 块声明契约版本，`capabilities:` 打开对应层，
-随后 `schemas` / `states` 两段声明插件能产出什么：
+manifest 在基础字段之外可声明语义契约。`contract:` 块声明契约版本，语义由 `semantic_rules` 声明：
 
 ```yaml
 api_version: gt.decoder/v2
@@ -185,36 +183,25 @@ contract:
 
 capabilities:
   decode: true
-  schema: true
-  state: true        # 打开后 states 声明必填、_state_changes 参与校验
 
-schemas:
-  - id: game.player.v1
-    version: 1
-    strict: true
-    fields:
-      player_id: { type: string, semantic: entity_id, queryable: true, alias: pid }
-      hp:        { type: uint32, semantic: health, unit: hp, aggregatable: true }
-      level:     { type: uint16, optional: true }
-
-states:
-  - subject_type: player
-    schema: game.player.v1
-    id_field: player_id
-    paths: [hp, level]
+semantic_rules:
+  - id: game.name_msg
+    when:
+      - path: msg_type
+        op: exists
+    effect:
+      type: name
+      key: msg_type
 ```
 
 要点：
 
 | 层 | 声明段 | 作用 | 运行期载体 |
 |----|--------|------|-----------|
-| Schema | `schemas[]` | payload 字段类型/语义/查询位；`get_capture_schema` 与事件校验的真源 | 事件 `schema_id` + payload |
-| State | `states[]` | 实体状态投影白名单（subject/path） | Analysis 保留键 `_state_changes`（经 `analysis_msgpack` 独立传输） |
+| Semantic | `semantic_rules[]` | name/annotate/pair/extract 规则 | `meta` / `trace`（`correlation_id`+`causation_id`）/ 子事件 `parent_id` |
 
-- `schema_id` 必须在 `schemas` 中声明，否则 verify 报 `gta.schema.undeclared`。
-- `event_type` / `schema_id` 不得使用保留前缀 `gametrace.`。
-- 声明了 `state: true` 时，`_state_changes` 的 `subject_type` / `path` 必须落在 `states[]` 白名单内。
-- 旧式 `indexable_fields` 仍可解析，会升格为对应字段的 `queryable + alias`（向后兼容）。
+- `event_type` 不得使用保留前缀 `gametrace.`。
+- 规则求值结果注入 `_meta`，宿主按 `_meta.*` 路径消费；事件业务 payload、Meta、Analysis 三段严格分离。
 
 ---
 
@@ -251,7 +238,6 @@ message DecodeResponseV2 {
   string input_id           = 1; // 对应 DecodeRequest.input_id
   bool   done               = 2; // true = 该 input_id 结果已全部发完
   string event_type         = 3; // 事件类型，done=true 时为空
-  string schema_id          = 4; // Schema 版本，如 "http.request.v1"
   bytes  payload_msgpack    = 5; // MsgPack 编码的 event.Value（纯业务载荷）
   string error              = 6; // 错误信息（设置后代表解码失败）
   string correlation_key    = 7; // 业务关联键
@@ -280,13 +266,12 @@ v2 **不再使用** `data`/`_fields` 顶层 JSON。插件通过 `event.Draft` �
 import "github.com/OwnSecurityGuard/gt-plugin-sdk/event"
 
 draft := event.Draft{
-	Type:      "http.request",
-	SchemaRef: "http.request.v1",
-	Value:     event.ValueFromMap(map[string]any{
-		"method": m.Method,
-		"path":   m.Path,
-		"headers": map[string]any{"host": m.Host},
-	}),
+		Type:  "http.request",
+		Value: event.ValueFromMap(map[string]any{
+			"method": m.Method,
+			"path":   m.Path,
+			"headers": map[string]any{"host": m.Host},
+		}),
 	Meta: event.ValueFromMap(map[string]any{
 		"direction": "client->server",
 		"msg_name":  "Request",
@@ -434,8 +419,7 @@ func parseHTTP(raw []byte) (*http.Request, int) {
 
 func emitHTTP(stream pb.Decoder_DecodeV2Server, inputID string, r *http.Request) error {
 	draft := event.Draft{
-		Type:      "http.request",
-		SchemaRef: "http.request.v1",
+		Type:  "http.request",
 		Value: event.ValueFromMap(map[string]any{
 			"method": r.Method,
 			"path":   r.URL.Path,
@@ -592,9 +576,8 @@ if !ok || len(seg.Payload) == 0 {
 import "github.com/OwnSecurityGuard/gt-plugin-sdk/event"
 
 draft := event.Draft{
-	Type:      "game.login",
-	SchemaRef: "game.login.v1",
-	Value:     event.ValueFromMap(map[string]any{"uid": 12345}),
+		Type:  "game.login",
+		Value: event.ValueFromMap(map[string]any{"uid": 12345}),
 	// 元信息独立上报：direction / msg_name / role / is_push 等
 	Meta: event.ValueFromMap(map[string]any{
 		"direction": req.GetDirection(),

@@ -61,7 +61,7 @@ func TestAgentSessionRawPacketsPersisted(t *testing.T) {
 		t.Fatalf("stop session: %v", err)
 	}
 
-	st, err := store.NewSQLiteStoreReadOnly(res.DBPath, nil)
+	st, err := store.NewSQLiteStoreReadOnly(res.DBPath)
 	if err != nil {
 		t.Fatalf("open session db: %v", err)
 	}

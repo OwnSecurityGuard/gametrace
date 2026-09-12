@@ -755,6 +755,7 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
   } = useDecodedData(sessionId, {
     limit: effectiveLimit,
     offset: effectiveOffset,
+    connId: connFilter?.conn_id ?? null,
   });
 
   const events = useMemo(() => data?.events ?? [], [data]);

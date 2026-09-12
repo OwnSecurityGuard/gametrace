@@ -32,13 +32,10 @@ func listInterfaces() ([]string, error) {
 }
 
 // openLiveSource 打开实时网卡抓包 source。
-// bpf 为空时默认 "tcp port <port>"；snapLen 为 0 时默认 1600。
+// bpf 为空时默认 "tcp port <port>"；snapLen 为 0 时默认 262144。
 func openLiveSource(ctx context.Context, iface string, port int, bpf string, snapLen int32, promisc bool) (capture.Source, error) {
-	if bpf == "" {
-		bpf = fmt.Sprintf("tcp port %d", port)
-	}
-	if snapLen == 0 {
-		snapLen = 1600
+	if snapLen <= 0 {
+		snapLen = 262144
 	}
 	return capture.Open(ctx, "pcap-live", pcaplive.PcapLiveConfig{
 		Device:  iface,

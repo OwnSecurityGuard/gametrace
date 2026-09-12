@@ -87,7 +87,7 @@ func TestDispatcherV2Protocol(t *testing.T) {
 	defer conn.Close()
 
 	client := pb.NewDecoderClient(conn)
-	dispatcher, err := NewDispatcher(client, "test-session", nil, nil)
+	dispatcher, err := NewDispatcher(client, "test-session", nil)
 	if err != nil {
 		t.Fatalf("failed to create dispatcher: %v", err)
 	}

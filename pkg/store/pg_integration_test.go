@@ -1,4 +1,4 @@
-package store
+﻿package store
 
 import (
 	"context"
@@ -95,12 +95,12 @@ func TestPGIntegration(t *testing.T) {
 	}
 
 	// ---- 事件存储后端（共享 PG 库，按 session_id 隔离）----
-	st1, err := OpenCaptureStore("postgres", dsn, nil, s1)
+	st1, err := OpenCaptureStore("postgres", dsn, s1)
 	if err != nil {
 		t.Fatalf("OpenCaptureStore s1: %v", err)
 	}
 	defer st1.Close()
-	st2, err := OpenCaptureStore("postgres", dsn, nil, s2)
+	st2, err := OpenCaptureStore("postgres", dsn, s2)
 	if err != nil {
 		t.Fatalf("OpenCaptureStore s2: %v", err)
 	}
@@ -142,9 +142,13 @@ func TestPGIntegration(t *testing.T) {
 	}}
 	evs := []*event.Event{{
 		Identity: event.Identity{
-			ID: "ev-1", SessionID: s1, Type: "tcp", SchemaID: "tcp.v1", Source: "test", Timestamp: now,
+			ID: "ev-1", SessionID: s1, Type: "tcp", Source: "test", Timestamp: now,
 		},
-		Payload: event.Payload{SchemaID: "tcp.v1", Value: val},
+		Payload: event.Payload{Value: val},
+		Meta: event.Value{Kind: event.Object, Object: map[string]event.Value{
+			"direction": {Kind: event.String, Str: "client_to_server"},
+			"msg_name":  {Kind: event.String, Str: "Login"},
+		}},
 	}}
 	if err := st1.AppendEvents(ctx, evs); err != nil {
 		t.Fatalf("AppendEvents: %v", err)
@@ -171,6 +175,18 @@ func TestPGIntegration(t *testing.T) {
 	}
 	if len(evRows) != 1 || evRows[0].Identity.ID != "ev-1" {
 		t.Fatalf("QueryEvents s1: %+v", evRows)
+	}
+	// Meta 往返：MsgPack 存储须保留 ev.Meta（msg_name/direction 等），
+	// 供前端消息名等展示。此前 PG 路径直接序列化 payload 丢弃了独立 Meta。
+	if v, ok := evRows[0].MetaValue("msg_name"); !ok {
+		t.Fatalf("QueryEvents meta.msg_name lost: meta=%+v", evRows[0].Meta)
+	} else if s, isStr := v.AsString(); !isStr || s != "Login" {
+		t.Fatalf("QueryEvents meta.msg_name=%v, want 'Login'", v)
+	}
+	if v, ok := evRows[0].MetaValue("direction"); !ok {
+		t.Fatalf("QueryEvents meta.direction lost: meta=%+v", evRows[0].Meta)
+	} else if s, isStr := v.AsString(); !isStr || s != "client_to_server" {
+		t.Fatalf("QueryEvents meta.direction=%v, want 'client_to_server'", v)
 	}
 	metRows, err := st1.QueryMetrics(ctx, MetricQuery{SessionID: s1})
 	if err != nil {

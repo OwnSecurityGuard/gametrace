@@ -84,7 +84,7 @@ func (m *mcpCapture) handleListProjects(ctx context.Context, req mcp.CallToolReq
 // handleGetProject 查看单个项目（含其最近会话与调用者的 capabilities）。
 // 项目是协作边界：成员可见项目内全部会话（不做 owner 二次过滤）。
 // members 附带 registered 标注（该用户名是否已有身份：users 表或 env bootstrap），
-// 项目 admin 据此能看到哪些成员还停在"预邀请"状态（对方注册同名后自动生效）。
+// 项目 admin 据此能看到哪些成员还停在"待注册"状态（对方注册同名后自动生效）。
 func (m *mcpCapture) handleGetProject(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	id := strings.TrimSpace(req.GetString("id", ""))
 	if id == "" {
@@ -169,7 +169,7 @@ func (m *mcpCapture) handleDeleteProject(ctx context.Context, req mcp.CallToolRe
 }
 
 // handleAddProjectMember 添加 / 覆盖项目成员（ActionProjectManageMembers：Owner/Admin）。
-// 身份预邀请语义：允许添加尚未注册的用户名（pending=true 返回），对方注册同名
+// 待注册语义：允许添加尚未注册的用户名（pending=true 返回），对方注册同名
 // 身份后自动生效——owner 不必等对方先注册再操作。
 func (m *mcpCapture) handleAddProjectMember(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	id := strings.TrimSpace(req.GetString("project_id", ""))

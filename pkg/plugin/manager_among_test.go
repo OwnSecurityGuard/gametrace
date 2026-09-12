@@ -35,7 +35,7 @@ func TestFindByNameAmong(t *testing.T) {
 	regShared(t, s, "bob")   // bob/shared-decoder
 
 	// 1) 会话 owner 优先：carol 自己没有 → 命中白名单第一个 owner（alice）
-	c, _, ok := s.FindByNameAmong([]string{"carol", "alice", "bob"}, "shared-decoder")
+	c, ok := s.FindByNameAmong([]string{"carol", "alice", "bob"}, "shared-decoder")
 	if !ok || c == nil {
 		t.Fatal("carol should resolve project plugin owned by alice")
 	}
@@ -44,11 +44,11 @@ func TestFindByNameAmong(t *testing.T) {
 	}
 
 	// 2) 无关 owner 不在白名单 → 查不到
-	if _, _, ok := s.FindByNameAmong([]string{"carol", "alice"}, "shared-decoder"); !ok {
+	if _, ok := s.FindByNameAmong([]string{"carol", "alice"}, "shared-decoder"); !ok {
 		// alice 在白名单内，应该命中 —— 这里断言的是它确实可见
 		_ = ok
 	}
-	if _, _, ok := s.FindByNameAmong([]string{"carol", "mallory"}, "shared-decoder"); ok {
+	if _, ok := s.FindByNameAmong([]string{"carol", "mallory"}, "shared-decoder"); ok {
 		t.Fatal("owner outside the allowlist must stay invisible")
 	}
 
@@ -72,23 +72,23 @@ hints:
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, ok := s.FindByNameAmong(nil, "sys-decoder"); !ok {
+	if _, ok := s.FindByNameAmong(nil, "sys-decoder"); !ok {
 		t.Fatal("anonymous/system plugin must be visible with empty owners")
 	}
-	if _, _, ok := s.FindByNameAmong([]string{"carol"}, "sys-decoder"); !ok {
+	if _, ok := s.FindByNameAmong([]string{"carol"}, "sys-decoder"); !ok {
 		t.Fatal("anonymous/system plugin must be visible with owner set")
 	}
 
 	// 4) 完整键寻址：白名单内 owner 可用，白名单外拒绝
-	if _, _, ok := s.FindByNameAmong([]string{"carol", "alice"}, "alice/shared-decoder"); !ok {
+	if _, ok := s.FindByNameAmong([]string{"carol", "alice"}, "alice/shared-decoder"); !ok {
 		t.Fatal("full-key lookup within allowlist should work")
 	}
-	if _, _, ok := s.FindByNameAmong([]string{"carol", "bob"}, "alice/shared-decoder"); ok {
+	if _, ok := s.FindByNameAmong([]string{"carol", "bob"}, "alice/shared-decoder"); ok {
 		t.Fatal("full-key lookup outside allowlist must be rejected")
 	}
 
 	// 5) 多 owner 同名：优先级 = owners 顺序（carol 无同名，alice 在前命中 alice 实例）
-	if c2, _, ok := s.FindByNameAmong([]string{"carol", "alice", "bob"}, "shared-decoder"); !ok || c2 == nil {
+	if c2, ok := s.FindByNameAmong([]string{"carol", "alice", "bob"}, "shared-decoder"); !ok || c2 == nil {
 		t.Fatal("expected a resolvable instance")
 	}
 }
@@ -111,7 +111,7 @@ func TestFindByNameAmong_OfflineSkipped(t *testing.T) {
 	}
 	s.mu.RUnlock()
 
-	c, _, ok := s.FindByNameAmong([]string{"carol", "alice", "bob"}, "shared-decoder")
+	c, ok := s.FindByNameAmong([]string{"carol", "alice", "bob"}, "shared-decoder")
 	if !ok || c == nil {
 		t.Fatal("offline candidate should be skipped in favor of an online one")
 	}

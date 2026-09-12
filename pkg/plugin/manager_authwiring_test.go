@@ -91,10 +91,10 @@ func TestRegistryWiring_TokenModeOwnerScoping(t *testing.T) {
 	}
 
 	// 各 owner 只能命中自己的实例，同名不互相顶替。
-	if _, _, ok := registry.FindByNameFor("alice", "my-plugin"); !ok {
+	if _, ok := registry.FindByNameFor("alice", "my-plugin"); !ok {
 		t.Fatal("alice 应能找到 alice/my-plugin")
 	}
-	if _, _, ok := registry.FindByNameFor("bob", "my-plugin"); !ok {
+	if _, ok := registry.FindByNameFor("bob", "my-plugin"); !ok {
 		t.Fatal("bob 应能找到 bob/my-plugin")
 	}
 	for _, p := range registry.List() {
@@ -125,7 +125,7 @@ func TestRegistryWiring_AnonymousModeBareName(t *testing.T) {
 	if err := regWithToken(t, c, sock, "my-plugin", ""); err != nil {
 		t.Fatalf("anonymous register: %v", err)
 	}
-	if _, _, ok := registry.FindByNameFor("", "my-plugin"); !ok {
+	if _, ok := registry.FindByNameFor("", "my-plugin"); !ok {
 		t.Fatal("匿名模式下 FindByNameFor(\"\", name) 应命中裸 name 键")
 	}
 	for _, p := range registry.List() {

@@ -15,7 +15,15 @@ var Version = "dev"
 // Commit 是构建时的 git commit 短哈希。
 var Commit = "unknown"
 
-// String 返回 "dev (unknown)" 形式的人读版本串。
+// BuildTime 是构建时间（RFC3339），构建时注入。空串时省略不展示，
+// 用于本地 go build / go run 未注入的场景。
+var BuildTime = ""
+
+// String 返回人读版本串：如 "v0.5.0 (abc1234 2026-09-12T09:26:13Z)"，
+// 未注入 BuildTime 时退化为 "dev (unknown)"。
 func String() string {
-	return Version + " (" + Commit + ")"
+	if BuildTime == "" {
+		return Version + " (" + Commit + ")"
+	}
+	return Version + " (" + Commit + " " + BuildTime + ")"
 }

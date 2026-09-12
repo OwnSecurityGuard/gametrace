@@ -206,8 +206,8 @@ func (m *mcpCapture) pluginOwnersFor(ctx context.Context, user string) []string 
 	return out
 }
 
-// isKnownUser 报告用户名当前是否已有可用身份：邀请制 users 表或 env bootstrap。
-// 用于项目成员的"预邀请"标注：false 表示对方还没注册同名身份，加入即 pending。
+// isKnownUser 报告用户名当前是否已有可用身份：users 表注册身份或 env bootstrap。
+// 用于项目成员的"待注册"标注：false 表示对方还没注册同名身份，加入即 pending。
 // 匿名部署（users 空 + env 空）恒返回 false，前端据此不展示注册提示。
 func (m *mcpCapture) isKnownUser(ctx context.Context, user string) bool {
 	if user == "" {

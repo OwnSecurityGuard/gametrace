@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 // 时间严格递增，避免并列时间戳下排序实现的差异影响等价性判定。
 func captureCtxFixture(t *testing.T) *store.SQLiteStore {
 	t.Helper()
-	s, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "ctx.db"), nil)
+	s, err := store.NewSQLiteStore(filepath.Join(t.TempDir(), "ctx.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,12 +24,11 @@ func captureCtxFixture(t *testing.T) *store.SQLiteStore {
 		return &event.Event{
 			Identity: event.Identity{
 				ID: event.EventID(id), SessionID: "s1", Type: "tcp",
-				SchemaID: "tcp.v1", Source: "decoder", Timestamp: base.Add(off),
+				Source: "decoder", Timestamp: base.Add(off),
 			},
 			Trace:   event.TraceContext{CorrelationID: corr},
 			Context: event.EventContext{ConnID: conn, Source: "mobile"},
 			Payload: event.Payload{
-				SchemaID: "tcp.v1",
 				Value:    event.Value{Kind: event.Object, Object: map[string]event.Value{"n": {Kind: event.Int, Int: 1}}},
 			},
 		}

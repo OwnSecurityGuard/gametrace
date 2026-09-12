@@ -67,6 +67,7 @@ FROM golang:1.26-bookworm AS builder
 
 ARG VERSION=dev
 ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=""
 
 # 模块代理：镜像默认 GOPROXY 是 proxy.golang.org（国内网络直连不通，表现为
 # `dial tcp ...:443: connect: connection refused`）。默认改用 goproxy.cn；
@@ -128,15 +129,15 @@ COPY --from=webui /src/dist ./cmd/gt-mcp/webui/
 
 RUN CGO_ENABLED=1 \
 	go build -tags pcap -trimpath \
-	-ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT}" \
+	-ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
 	-o /out/gt-pipeline ./cmd/gt-pipeline \
 	&& CGO_ENABLED=1 \
 	go build -tags pcap -trimpath \
-	-ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT}" \
+	-ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
 	-o /out/gt-mcp ./cmd/gt-mcp \
 	&& CGO_ENABLED=0 \
 	go build -trimpath \
-	-ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT}" \
+	-ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
 	-o /out/gt-singbox-agent ./cmd/gt-singbox-agent
 
 # 远程探针（gt-agent）预置产物：/download/agent 按 /opt/gametrace/agents 目录
@@ -150,11 +151,11 @@ RUN CGO_ENABLED=1 \
 RUN set -e; \
     CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
         go build -tags pcap -trimpath \
-        -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT}" \
+        -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
         -o /out/agents/gt-agent-linux-amd64 ./cmd/gt-agent; \
     CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
         go build -tags pcap -trimpath \
-        -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT}" \
+        -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
         -o /out/agents/gt-agent-windows-amd64.exe ./cmd/gt-agent; \
     if [ -x /osxcross/target/bin/o64-clang ]; then \
         export PATH="/osxcross/target/bin:${PATH}"; \
@@ -162,13 +163,13 @@ RUN set -e; \
         echo "==> cross-compile darwin/amd64 (osxcross)"; \
         CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC=o64-clang \
             go build -tags pcap -trimpath \
-            -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT}" \
+            -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
             -o /out/agents/gt-agent-darwin-amd64 ./cmd/gt-agent \
             || echo "WARN: darwin/amd64 build failed - skipped"; \
         echo "==> cross-compile darwin/arm64 (osxcross)"; \
         CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 CC=oa64-clang \
             go build -tags pcap -trimpath \
-            -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT}" \
+            -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
             -o /out/agents/gt-agent-darwin-arm64 ./cmd/gt-agent \
             || echo "WARN: darwin/arm64 build failed - skipped"; \
     else \

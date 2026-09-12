@@ -12,7 +12,7 @@ import (
 // from/to 为零值时不限制该侧；limit<=0 表示不限制。
 func (s *SQLiteStore) QueryEventsInRange(ctx context.Context, sessionID string, from, to time.Time, limit int) ([]*event.Event, error) {
 	query := `
-		SELECT id, session_id, type, schema_id, source, timestamp,
+		SELECT id, session_id, type, source, timestamp,
 		       causation_id, correlation_id, origin_id, parent_id, context, payload` + s.eventSelectSuffix() + `
 		FROM events
 		WHERE session_id = ?

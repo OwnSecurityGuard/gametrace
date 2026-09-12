@@ -55,7 +55,7 @@ func TestRegister_HappyPath(t *testing.T) {
 	if !res.OK || res.Owner != "carol" || !strings.HasPrefix(res.Token, "gt_") {
 		t.Fatalf("unexpected response: %+v", res)
 	}
-	// created_by 应为空（自主注册，区别于邀请）
+	// created_by 应为空（自主注册，区别于由他人添加）
 	exists, err := m.users.OwnerExists(t.Context(), "carol")
 	if err != nil || !exists {
 		t.Fatalf("carol should exist: %v %v", exists, err)

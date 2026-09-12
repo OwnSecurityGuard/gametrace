@@ -12,7 +12,6 @@ import (
 
 	"gametrace/pkg/capture"
 	"gametrace/pkg/event"
-	"gametrace/pkg/schema"
 
 	"github.com/google/uuid"
 )
@@ -25,11 +24,9 @@ import (
 //   - 占位符用 $N（非 ?）；UPSERT 用 ON CONFLICT ... DO UPDATE（非 INSERT OR REPLACE）。
 //   - raw_packets 用 id 列代替 SQLite 的 rowid 做首帧排序。
 //   - 时间统一 BIGINT（unix nano），扫描走 scanPacketTime 的 int64 分支（无需文本解析）。
-//   - GetSchema 用 information_schema.columns 代替 PRAGMA table_info。
 //   - 共享连接池在进程级缓存，故 Close 为 no-op（不关闭底层池）。
 type PGStore struct {
 	db        *sql.DB
-	schemaReg *schema.Registry
 	sessionID string
 	readOnly  bool
 }
@@ -46,7 +43,7 @@ func (s *PGStore) Close() error { return nil }
 func (s *PGStore) eventSelectSuffix() string { return ", scenario_id, replay_id" }
 
 // eventColsPG 是 events 表固定列清单（与 scanEvent 列顺序一致）。
-const eventColsPG = `id, session_id, type, schema_id, source, timestamp,
+const eventColsPG = `id, session_id, type, source, timestamp,
 		causation_id, correlation_id, origin_id, parent_id, context, payload`
 
 // pgArgs 累积 PostgreSQL 位置参数（$1、$2 …），避免手写编号出错。
@@ -151,11 +148,11 @@ func (s *PGStore) AppendEvents(ctx context.Context, events []*event.Event) error
 	}
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO events(id, session_id, type, schema_id, source, timestamp,
+		INSERT INTO events(id, session_id, type, source, timestamp,
 			causation_id, correlation_id, origin_id, parent_id, context, payload, created_at, scenario_id, replay_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
 		ON CONFLICT(id) DO UPDATE SET
-			session_id = EXCLUDED.session_id, type = EXCLUDED.type, schema_id = EXCLUDED.schema_id,
+			session_id = EXCLUDED.session_id, type = EXCLUDED.type,
 			source = EXCLUDED.source, timestamp = EXCLUDED.timestamp, causation_id = EXCLUDED.causation_id,
 			correlation_id = EXCLUDED.correlation_id, origin_id = EXCLUDED.origin_id, parent_id = EXCLUDED.parent_id,
 			context = EXCLUDED.context,
@@ -172,7 +169,11 @@ func (s *PGStore) AppendEvents(ctx context.Context, events []*event.Event) error
 		if err != nil {
 			return fmt.Errorf("marshal context for event[%d]: %w", i, err)
 		}
-		payloadBytes, err := e.Payload.Value.MarshalMsgpack()
+		// 编码 Payload 为 MsgPack（存储保持扁平：业务 + Meta + Analysis 合并，
+		// 与 SQLiteStore 行为一致读回时再由 scanEvent/SplitReservedKeys 拆分）。
+		// 之前直接序列化 e.Payload.Value，会丢弃独立的 ev.Meta（如 msg_name/
+		// direction）与 ev.Analysis，导致前端消息名展示为 unknown。
+		payloadBytes, err := event.MergeReservedKeys(e.Payload.Value, e.Meta, e.Analysis).MarshalMsgpack()
 		if err != nil {
 			return fmt.Errorf("marshal payload for event[%d]: %w", i, err)
 		}
@@ -199,7 +200,7 @@ func (s *PGStore) AppendEvents(ctx context.Context, events []*event.Event) error
 		}
 
 		if _, err := stmt.ExecContext(ctx,
-			string(e.Identity.ID), e.Identity.SessionID, string(e.Identity.Type), e.Identity.SchemaID,
+			string(e.Identity.ID), e.Identity.SessionID, string(e.Identity.Type),
 			string(e.Identity.Source), timestamp, causationID, correlationID, originID,
 			parentID,
 			contextBytes, payloadBytes, now, scenarioID, replayID,
@@ -218,23 +219,18 @@ func (s *PGStore) AppendEvents(ctx context.Context, events []*event.Event) error
 // appendEventIndex 写入 event_index 投影索引表（PG 版）。
 func (s *PGStore) appendEventIndex(ctx context.Context, tx *sql.Tx, events []*event.Event) error {
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO event_index(event_id, session_id, type, timestamp, flow_id, direction, conn_id, correlation_id, projection_json)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		INSERT INTO event_index(event_id, session_id, type, timestamp, flow_id, direction, conn_id, correlation_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		ON CONFLICT(event_id) DO UPDATE SET
 			session_id = EXCLUDED.session_id, type = EXCLUDED.type, timestamp = EXCLUDED.timestamp,
 			flow_id = EXCLUDED.flow_id, direction = EXCLUDED.direction, conn_id = EXCLUDED.conn_id,
-			correlation_id = EXCLUDED.correlation_id, projection_json = EXCLUDED.projection_json`)
+			correlation_id = EXCLUDED.correlation_id`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
 	for _, e := range events {
-		proj := extractProjection(e, s.schemaReg)
-		projJSON, err := json.Marshal(proj)
-		if err != nil {
-			return err
-		}
 		var flowID, direction, connID, correlationID sql.NullString
 		if e.Context.FlowID != "" {
 			flowID = sql.NullString{String: e.Context.FlowID, Valid: true}
@@ -250,7 +246,7 @@ func (s *PGStore) appendEventIndex(ctx context.Context, tx *sql.Tx, events []*ev
 		}
 		if _, err := stmt.ExecContext(ctx,
 			string(e.Identity.ID), e.Identity.SessionID, string(e.Identity.Type), e.Identity.Timestamp.UnixNano(),
-			flowID, direction, connID, correlationID, string(projJSON),
+			flowID, direction, connID, correlationID,
 		); err != nil {
 			return err
 		}
@@ -390,39 +386,6 @@ func (s *PGStore) QueryRawPackets(ctx context.Context, q RawPacketQuery) ([]RawP
 }
 
 // GetSchema 返回事件库表结构（PG 版用 information_schema 代替 PRAGMA）。
-func (s *PGStore) GetSchema(ctx context.Context, sessionID string) (SchemaInfo, error) {
-	tables := []string{"raw_packets", "events", "aggregated_metrics", "state_changes", "event_index"}
-	var info SchemaInfo
-	for _, tbl := range tables {
-		ts, err := s.getTableSchema(ctx, tbl)
-		if err != nil {
-			slog.Warn("get schema for table", "table", tbl, "error", err)
-			continue
-		}
-		info.Tables = append(info.Tables, ts)
-	}
-	return info, nil
-}
-
-func (s *PGStore) getTableSchema(ctx context.Context, tbl string) (TableSchema, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT column_name, data_type FROM information_schema.columns
-		WHERE table_name = $1 ORDER BY ordinal_position`, tbl)
-	if err != nil {
-		return TableSchema{}, err
-	}
-	defer rows.Close()
-	ts := TableSchema{Name: tbl}
-	for rows.Next() {
-		var name, dtype string
-		if err := rows.Scan(&name, &dtype); err != nil {
-			return ts, err
-		}
-		ts.Columns = append(ts.Columns, ColumnSchema{Name: name, Type: dtype})
-	}
-	return ts, rows.Err()
-}
-
 // RawQuery 执行任意 SQL 查询（逃生舱）。注意：PG 后端下调用方须使用 $N 占位符语法。
 func (s *PGStore) RawQuery(ctx context.Context, query string, args ...any) ([]map[string]any, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -537,6 +500,9 @@ func (s *PGStore) eventPageWhere(q EventPageQuery) (string, []any) {
 		where += " AND type = " + a.next(q.TypeEq)
 	} else if q.TypeNot != "" {
 		where += " AND type != " + a.next(q.TypeNot)
+	}
+	if q.ConnEq != "" {
+		where += " AND id IN (SELECT event_id FROM event_index WHERE conn_id = " + a.next(q.ConnEq) + ")"
 	}
 	return where, a.slice()
 }
@@ -1061,6 +1027,82 @@ func (s *PGStore) QueryConnectionFrames(ctx context.Context, connID string, limi
 		return nil, err
 	}
 	return frames, nil
+}
+
+// QuerySessionFrames 查询会话内的全部原始帧（时间正序）——「原始数据」视图在
+// 「全部连接」下展示整个会话的帧。PG 为共享库，必须按 session_id 隔离。
+func (s *PGStore) QuerySessionFrames(ctx context.Context, sessionID string, limit, offset int) ([]ConnectionFrame, error) {
+	var a pgArgs
+	q := `SELECT id, timestamp, src, dst, protocol, payload, link_type, metadata
+		FROM raw_packets WHERE session_id = ` + a.next(sessionID) + `
+		ORDER BY timestamp ASC` + a.limitOffset(limit, offset)
+	return s.scanFrames(ctx, q, a.slice()...)
+}
+
+func (s *PGStore) scanFrames(ctx context.Context, query string, args ...any) ([]ConnectionFrame, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query frames: %w", err)
+	}
+	defer rows.Close()
+	frames := make([]ConnectionFrame, 0)
+	for rows.Next() {
+		var f ConnectionFrame
+		var meta sql.NullString
+		var ts any
+		if err := rows.Scan(&f.ID, &ts, &f.Src, &f.Dst, &f.Protocol, &f.Payload, &f.LinkType, &meta); err != nil {
+			return nil, err
+		}
+		t, err := scanPacketTime(ts)
+		if err != nil {
+			return nil, err
+		}
+		f.Timestamp = t
+		if meta.Valid {
+			var m map[string]any
+			if json.Unmarshal([]byte(meta.String), &m) == nil {
+				if dir, _ := m["direction"].(string); dir != "" {
+					f.Direction = dir
+				}
+			}
+		}
+		frames = append(frames, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return frames, nil
+}
+
+// QueryEventCaptureContext 返回事件捕获上下文输入行（时间倒序，PG 版）。
+// event_index 仅含 conn_id 非空的事件（代理抓包 / 已派生连接标识的包）。
+func (s *PGStore) QueryEventCaptureContext(ctx context.Context, sessionID string) ([]EventCaptureContextRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e.id, e.context, ei.conn_id, COALESCE(ei.correlation_id, '')
+		FROM events e
+		JOIN event_index ei ON ei.event_id = e.id
+		WHERE e.session_id = $1 AND ei.conn_id IS NOT NULL AND ei.conn_id != ''
+		ORDER BY ei.timestamp DESC`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query event capture context: %w", err)
+	}
+	defer rows.Close()
+
+	list := make([]EventCaptureContextRow, 0, 64)
+	for rows.Next() {
+		var r EventCaptureContextRow
+		var contextBytes []byte
+		if err := rows.Scan(&r.ID, &contextBytes, &r.ConnID, &r.CorrelationID); err != nil {
+			return nil, err
+		}
+		if ec, err := event.UnmarshalContextMsgpack(contextBytes); err == nil {
+			r.Source = ec.Source
+		}
+		list = append(list, r)
+	}
+	return list, rows.Err()
 }
 
 // 编译期断言：PGStore 实现完整 Store 接口。

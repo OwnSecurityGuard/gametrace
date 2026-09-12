@@ -98,13 +98,11 @@ func (s *SQLiteStore) MigrateLegacyEvents(ctx context.Context) (int, error) {
 				ID:        event.EventID(id),
 				SessionID: sessionID,
 				Type:      event.EventType(protocol),
-				SchemaID:  protocol + ".v1",
 				Source:    event.SourceID(protocol),
 			},
 			Trace: event.TraceContext{},
 			Payload: event.Payload{
-				SchemaID: protocol + ".v1",
-				Value:    payloadValue,
+				Value: payloadValue,
 			},
 		}
 
@@ -122,14 +120,13 @@ func (s *SQLiteStore) MigrateLegacyEvents(ctx context.Context) (int, error) {
 
 		_, err = s.db.ExecContext(ctx, `
 			INSERT OR IGNORE INTO events (
-				id, session_id, type, schema_id, source, timestamp,
+				id, session_id, type, source, timestamp,
 				causation_id, correlation_id, origin_id, payload, created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
 			string(e.Identity.ID),
 			e.Identity.SessionID,
 			string(e.Identity.Type),
-			e.Identity.SchemaID,
 			string(e.Identity.Source),
 			e.Identity.Timestamp.UnixNano(),
 			nil, // causation_id

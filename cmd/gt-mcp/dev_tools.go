@@ -462,7 +462,6 @@ func verifyResultFromArg(raw any) *plugindevpb.VerifyResult {
 			CorrelatedInputs     int     `json:"correlated_inputs"`
 			LongPacketErrors     int     `json:"long_packet_errors"`
 			EntropyEstimate      float64 `json:"entropy_estimate"`
-			SchemaVersionedRatio float64 `json:"schema_versioned_ratio"`
 			DecodeErrors         int     `json:"decode_errors"`
 		} `json:"quality"`
 		Verdict string `json:"verdict"`
@@ -489,7 +488,6 @@ func verifyResultFromArg(raw any) *plugindevpb.VerifyResult {
 		CorrelatedInputs:     int32(v.Quality.CorrelatedInputs),
 		LongPacketErrors:     int32(v.Quality.LongPacketErrors),
 		EntropyEstimate:      v.Quality.EntropyEstimate,
-		SchemaVersionedRatio: v.Quality.SchemaVersionedRatio,
 		DecodeErrors:         int32(v.Quality.DecodeErrors),
 	}
 	return out

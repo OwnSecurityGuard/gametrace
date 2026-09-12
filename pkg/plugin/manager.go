@@ -11,10 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"gametrace/pkg/auth"
 	sdkcontract "github.com/OwnSecurityGuard/gt-plugin-sdk/contract"
 	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
-	"gametrace/pkg/auth"
-	"gametrace/pkg/schema"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -39,20 +38,12 @@ type RegisteredPlugin struct {
 	Tunnel bool
 }
 
-// SchemaRegistry returns the schema registry for this plugin's manifest.
-func (rp *RegisteredPlugin) SchemaRegistry() *schema.Registry {
-	if rp.Manifest == nil {
-		return schema.NewRegistry()
-	}
-	return ToSchemaRegistry(rp.Manifest)
-}
-
 // PluginSummary 是插件注册信息的摘要，用于对外暴露。
 type PluginSummary struct {
-	InstanceID    string
-	Name          string
-	Protocol      string
-	Type          string
+	InstanceID string
+	Name       string
+	Protocol   string
+	Type       string
 	// Transports 是插件声明的 L4 传输层能力（tcp|udp）；空表示未声明。
 	Transports    []string
 	APIVersion    string
@@ -476,9 +467,8 @@ func (s *RegistryServer) CheckOffline(timeout time.Duration) {
 
 // Find 根据 protocol hint 查找第一个匹配的解码插件（匿名/本地语境）。
 // 匹配规则：manifest 的 protocol 字段或 hints 列表包含 protocolHint。
-// 返回 DecoderClient、schema registry 和是否找到。
-// 等价于 FindFor("", protocolHint)。
-func (s *RegistryServer) Find(protocolHint string) (pb.DecoderClient, *schema.Registry, bool) {
+// 返回 DecoderClient 和是否找到。等价于 FindFor("", protocolHint)。
+func (s *RegistryServer) Find(protocolHint string) (pb.DecoderClient, bool) {
 	return s.FindFor("", protocolHint)
 }
 
@@ -487,7 +477,7 @@ func (s *RegistryServer) Find(protocolHint string) (pb.DecoderClient, *schema.Re
 // 使多成员同名插件各自路由互不干扰。owner == "" 时与改造前的 Find 一致
 // （只见匿名插件）。
 // 隧道插件在 Connect 绑定前（Client 为 nil）不可见。
-func (s *RegistryServer) FindFor(owner, protocolHint string) (pb.DecoderClient, *schema.Registry, bool) {
+func (s *RegistryServer) FindFor(owner, protocolHint string) (pb.DecoderClient, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, rp := range s.plugins {
@@ -508,29 +498,29 @@ func (s *RegistryServer) FindFor(owner, protocolHint string) (pb.DecoderClient, 
 		// transports 是插件声明的 L4 传输层能力（tcp|udp），供 dispatcher 按
 		// 抓包协议路由——声明 transports:[udp] 的插件可被 FindFor(owner,"udp") 命中。
 		if rp.Manifest.Protocol == protocolHint {
-			return rp.Client, rp.SchemaRegistry(), true
+			return rp.Client, true
 		}
 		for _, h := range rp.Manifest.Hints {
 			if h == protocolHint {
-				return rp.Client, rp.SchemaRegistry(), true
+				return rp.Client, true
 			}
 		}
 		for _, t := range rp.Manifest.Transports {
 			if t == protocolHint {
-				return rp.Client, rp.SchemaRegistry(), true
+				return rp.Client, true
 			}
 		}
 	}
-	return nil, nil, false
+	return nil, false
 }
 
 // GetPlugin 按 name 查找已注册插件，返回 Manifest YAML bytes。
 // FindByName 按插件名（manifest.name）精确查找已注册的解码插件。
 // 用于一次抓包会话绑定特定插件（如 A 项目→插件 A、B 项目→插件 B），
 // 使多项目并行抓包、各用各插件、均不重启主服务成为现实。
-// 返回 DecoderClient、schema registry 和是否找到。插件离线或不存在时返回 nil, nil, false。
+// 返回 DecoderClient 和是否找到。插件离线或不存在时返回 nil, false。
 // 等价于 FindByNameFor("", name)：键为裸 name，仅匹配匿名注册——与改造前行为一致。
-func (s *RegistryServer) FindByName(name string) (pb.DecoderClient, *schema.Registry, bool) {
+func (s *RegistryServer) FindByName(name string) (pb.DecoderClient, bool) {
 	return s.findByKey("", []string{name})
 }
 
@@ -540,7 +530,7 @@ func (s *RegistryServer) FindByName(name string) (pb.DecoderClient, *schema.Regi
 //
 // owner 为空时只按裸 name 查（匿名/本地语境，行为与改造前完全一致）。
 // 解析顺序：先名精确、后退化——调用方（capture_task）的顺序由调用方保持。
-func (s *RegistryServer) FindByNameFor(owner, name string) (pb.DecoderClient, *schema.Registry, bool) {
+func (s *RegistryServer) FindByNameFor(owner, name string) (pb.DecoderClient, bool) {
 	return s.findByKey(owner, pluginKeyCandidates(owner, name))
 }
 
@@ -550,7 +540,7 @@ func (s *RegistryServer) FindByNameFor(owner, name string) (pb.DecoderClient, *s
 // 隔离语义：只允许命中 owners 集合内的插件（匿名/系统插件恒可见，与单 owner 版一致）；
 // 含 "/" 的完整键仍要求键内 owner 属于集合，不能越权寻址。
 // owners 为空时行为等价 FindByNameFor("", name)。
-func (s *RegistryServer) FindByNameAmong(owners []string, name string) (pb.DecoderClient, *schema.Registry, bool) {
+func (s *RegistryServer) FindByNameAmong(owners []string, name string) (pb.DecoderClient, bool) {
 	keys, allowed := amongCandidates(owners, name)
 	if len(keys) == 0 {
 		return s.FindByNameFor("", name)
@@ -580,7 +570,7 @@ func amongCandidates(owners []string, name string) ([]string, map[string]bool) {
 // findByKeyAllowed 是 findByKey 的多 owner 白名单变体：命中键后校验插件 owner
 // 必须在 allowed 集合内。与 findByKey 的差异：某个 owner 的同名实例离线时
 // 继续尝试后续候选（多 owner 共用同名插件时，取第一个在线的）。全部检查锁内完成。
-func (s *RegistryServer) findByKeyAllowed(keys []string, allowed map[string]bool) (pb.DecoderClient, *schema.Registry, bool) {
+func (s *RegistryServer) findByKeyAllowed(keys []string, allowed map[string]bool) (pb.DecoderClient, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, key := range keys {
@@ -593,18 +583,18 @@ func (s *RegistryServer) findByKeyAllowed(keys []string, allowed map[string]bool
 			continue
 		}
 		if !allowed[rp.Owner] {
-			return nil, nil, false
+			return nil, false
 		}
-		return rp.Client, rp.SchemaRegistry(), true
+		return rp.Client, true
 	}
-	return nil, nil, false
+	return nil, false
 }
 
 // findByKey 依序尝试候选键查找在线插件（全部候选检查在 RLock 内完成，
 // 避免与 Register/Deregister 的 map 写并发）；隧道插件绑定前（Client nil）
 // 不可见。callerOwner 用于隔离校验：即使按完整键（owner/name）寻址，
 // 也只能访问自己的或匿名（系统）的插件。
-func (s *RegistryServer) findByKey(callerOwner string, keys []string) (pb.DecoderClient, *schema.Registry, bool) {
+func (s *RegistryServer) findByKey(callerOwner string, keys []string) (pb.DecoderClient, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, key := range keys {
@@ -614,14 +604,14 @@ func (s *RegistryServer) findByKey(callerOwner string, keys []string) (pb.Decode
 		}
 		rp, ok := s.plugins[id]
 		if !ok || !rp.Online.Load() || rp.Client == nil {
-			return nil, nil, false
+			return nil, false
 		}
 		if rp.Owner != "" && rp.Owner != callerOwner {
-			return nil, nil, false
+			return nil, false
 		}
-		return rp.Client, rp.SchemaRegistry(), true
+		return rp.Client, true
 	}
-	return nil, nil, false
+	return nil, false
 }
 
 func (s *RegistryServer) GetPluginManifest(name string) ([]byte, error) {
@@ -864,22 +854,22 @@ func (m *Manager) Start(ctx context.Context) (string, error) {
 }
 
 // Find 按 protocol_hint 查找第一个在线插件。
-func (m *Manager) Find(protocolHint string) (pb.DecoderClient, *schema.Registry, bool) {
+func (m *Manager) Find(protocolHint string) (pb.DecoderClient, bool) {
 	return m.registry.Find(protocolHint)
 }
 
 // FindByName 按插件名精确查找已注册的解码插件。
-func (m *Manager) FindByName(name string) (pb.DecoderClient, *schema.Registry, bool) {
+func (m *Manager) FindByName(name string) (pb.DecoderClient, bool) {
 	return m.registry.FindByName(name)
 }
 
 // FindFor 是 owner 作用域版的 Find。
-func (m *Manager) FindFor(owner, protocolHint string) (pb.DecoderClient, *schema.Registry, bool) {
+func (m *Manager) FindFor(owner, protocolHint string) (pb.DecoderClient, bool) {
 	return m.registry.FindFor(owner, protocolHint)
 }
 
 // FindByNameFor 是 owner 作用域版的 FindByName。
-func (m *Manager) FindByNameFor(owner, name string) (pb.DecoderClient, *schema.Registry, bool) {
+func (m *Manager) FindByNameFor(owner, name string) (pb.DecoderClient, bool) {
 	return m.registry.FindByNameFor(owner, name)
 }
 

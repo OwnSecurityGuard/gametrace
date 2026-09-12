@@ -683,17 +683,16 @@ func (x *VerifyViolation) GetSample() string {
 
 // VerifyQuality gametrace 侧语料级统计（与 plugin.explain 共享判据）。
 type VerifyQuality struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	TotalInputs          int64                  `protobuf:"varint,1,opt,name=total_inputs,json=totalInputs,proto3" json:"total_inputs,omitempty"`
-	UnknownInputs        int64                  `protobuf:"varint,2,opt,name=unknown_inputs,json=unknownInputs,proto3" json:"unknown_inputs,omitempty"`
-	UnknownRatio         float64                `protobuf:"fixed64,3,opt,name=unknown_ratio,json=unknownRatio,proto3" json:"unknown_ratio,omitempty"`
-	CorrelatedInputs     int64                  `protobuf:"varint,4,opt,name=correlated_inputs,json=correlatedInputs,proto3" json:"correlated_inputs,omitempty"`
-	LongPacketErrors     int64                  `protobuf:"varint,5,opt,name=long_packet_errors,json=longPacketErrors,proto3" json:"long_packet_errors,omitempty"`
-	EntropyEstimate      float64                `protobuf:"fixed64,6,opt,name=entropy_estimate,json=entropyEstimate,proto3" json:"entropy_estimate,omitempty"`
-	SchemaVersionedRatio float64                `protobuf:"fixed64,7,opt,name=schema_versioned_ratio,json=schemaVersionedRatio,proto3" json:"schema_versioned_ratio,omitempty"`
-	DecodeErrors         int64                  `protobuf:"varint,8,opt,name=decode_errors,json=decodeErrors,proto3" json:"decode_errors,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	TotalInputs      int64                  `protobuf:"varint,1,opt,name=total_inputs,json=totalInputs,proto3" json:"total_inputs,omitempty"`
+	UnknownInputs    int64                  `protobuf:"varint,2,opt,name=unknown_inputs,json=unknownInputs,proto3" json:"unknown_inputs,omitempty"`
+	UnknownRatio     float64                `protobuf:"fixed64,3,opt,name=unknown_ratio,json=unknownRatio,proto3" json:"unknown_ratio,omitempty"`
+	CorrelatedInputs int64                  `protobuf:"varint,4,opt,name=correlated_inputs,json=correlatedInputs,proto3" json:"correlated_inputs,omitempty"`
+	LongPacketErrors int64                  `protobuf:"varint,5,opt,name=long_packet_errors,json=longPacketErrors,proto3" json:"long_packet_errors,omitempty"`
+	EntropyEstimate  float64                `protobuf:"fixed64,6,opt,name=entropy_estimate,json=entropyEstimate,proto3" json:"entropy_estimate,omitempty"`
+	DecodeErrors     int64                  `protobuf:"varint,7,opt,name=decode_errors,json=decodeErrors,proto3" json:"decode_errors,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *VerifyQuality) Reset() {
@@ -764,13 +763,6 @@ func (x *VerifyQuality) GetLongPacketErrors() int64 {
 func (x *VerifyQuality) GetEntropyEstimate() float64 {
 	if x != nil {
 		return x.EntropyEstimate
-	}
-	return 0
-}
-
-func (x *VerifyQuality) GetSchemaVersionedRatio() float64 {
-	if x != nil {
-		return x.SchemaVersionedRatio
 	}
 	return 0
 }
@@ -5610,16 +5602,15 @@ const file_pkg_internalipc_proto_internal_proto_rawDesc = "" +
 	"\tstatement\x18\x04 \x01(\tR\tstatement\x12\x17\n" +
 	"\adoc_ref\x18\x05 \x01(\tR\x06docRef\x12\x14\n" +
 	"\x05count\x18\x06 \x01(\x05R\x05count\x12\x16\n" +
-	"\x06sample\x18\a \x01(\tR\x06sample\"\xdf\x02\n" +
+	"\x06sample\x18\a \x01(\tR\x06sample\"\xa9\x02\n" +
 	"\rVerifyQuality\x12!\n" +
 	"\ftotal_inputs\x18\x01 \x01(\x03R\vtotalInputs\x12%\n" +
 	"\x0eunknown_inputs\x18\x02 \x01(\x03R\runknownInputs\x12#\n" +
 	"\runknown_ratio\x18\x03 \x01(\x01R\funknownRatio\x12+\n" +
 	"\x11correlated_inputs\x18\x04 \x01(\x03R\x10correlatedInputs\x12,\n" +
 	"\x12long_packet_errors\x18\x05 \x01(\x03R\x10longPacketErrors\x12)\n" +
-	"\x10entropy_estimate\x18\x06 \x01(\x01R\x0fentropyEstimate\x124\n" +
-	"\x16schema_versioned_ratio\x18\a \x01(\x01R\x14schemaVersionedRatio\x12#\n" +
-	"\rdecode_errors\x18\b \x01(\x03R\fdecodeErrors\"\x8e\x02\n" +
+	"\x10entropy_estimate\x18\x06 \x01(\x01R\x0fentropyEstimate\x12#\n" +
+	"\rdecode_errors\x18\a \x01(\x03R\fdecodeErrors\"\x8e\x02\n" +
 	"\x0eVerifyResponse\x12\x18\n" +
 	"\averdict\x18\x01 \x01(\tR\averdict\x12F\n" +
 	"\n" +

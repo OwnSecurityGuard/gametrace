@@ -181,7 +181,7 @@ func Decide(p Principal, a Action, r Resource, role Role) error {
 	case KindProbe:
 		return decideProbe(p, a, r)
 	case KindUser:
-		// 用户管理（发放邀请之外的列表 / 撤销）仅 global admin；
+		// 用户管理（列表 / 撤销 / 添加注册用户）仅 global admin；
 		// admin 已在 Decide 开头放行，落到这里的一律拒绝。
 		return fmt.Errorf("%w: action %s requires global admin", ErrForbidden, a)
 	case KindProject:

@@ -30,7 +30,7 @@ func newTestCaptureTask(t *testing.T) *captureTask {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	dbPath := filepath.Join(sessionDir, "capture.sqlite")
-	st, err := store.NewSQLiteStore(dbPath, nil)
+	st, err := store.NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}

@@ -11,7 +11,7 @@ import (
 
 func TestSQLiteStoreMetrics(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "test.db")
-	s, err := NewSQLiteStore(db, nil)
+	s, err := NewSQLiteStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}

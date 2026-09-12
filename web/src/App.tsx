@@ -452,7 +452,7 @@ export default function App() {
               size="sm"
               className="h-8"
               onClick={() => setMembersOpen(true)}
-              title="成员管理（邀请码 / 成员账号列表与撤销）"
+              title="成员管理（成员账号列表与撤销）"
               aria-label="成员管理"
             >
               <Users className="h-4 w-4" />
@@ -608,7 +608,7 @@ export default function App() {
       />
       {/* MCP 接入弹窗（复制给 AI 的提示词） */}
       <McpAccessDialog open={mcpAccessOpen} onClose={() => setMcpAccessOpen(false)} />
-      {/* 成员管理弹窗（邀请码 / 成员账号列表与撤销） */}
+      {/* 成员管理弹窗（成员账号列表与撤销） */}
       <MembersAdminDialog open={membersOpen} onClose={() => setMembersOpen(false)} />
       {/* 探针管理弹窗（三维度状态 / 停抓 / 改名 / 吊销 / 本地留存离线导入） */}
       <ProbeAdminDialog

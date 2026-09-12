@@ -33,7 +33,7 @@ function formatExpiry(ts: string): string {
  * 复制一条接入命令，在目标机执行即可自动注册设备、领取回连配置并接入，
  * 全程无需手填 token/回连地址。抓包端口与解码插件不在接入时决定 ——
  * 设备在「我的设备」里显示在线后，用「开始抓包」选它并指定。
- * 成员管理（邀请码/账号列表）已拆分至 members-admin-dialog。
+ * 成员管理（成员账号列表与撤销）拆分至 members-admin-dialog。
  */
 export function AccessCodePanel() {
   const { data, isLoading } = useAgentDownloadOptions();

@@ -12,7 +12,7 @@ import (
 // TestQueryEventsInRange 验证时间窗口查询与 state_changes 的时间/事件过滤下推。
 // 状态变更分析依赖这两个条件做「操作后 N 秒」的窗口，SQL 层错了上层算得再对也没用。
 func TestQueryEventsInRange(t *testing.T) {
-	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"), nil)
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestQueryEventsInRange(t *testing.T) {
 	sess := "sess-range"
 	var evs []*event.Event
 	for i, off := range []int{0, 500, 1000, 3000} {
-		ev := event.NewEventWithTime(sess, event.EventType("msg"), "schema.test", "test",
+		ev := event.NewEventWithTime(sess, event.EventType("msg"), "test",
 			event.ValueFromAny(map[string]any{"_meta": map[string]any{"msg_name": "M"}}),
 			base.Add(time.Duration(off)*time.Millisecond), event.EventContext{FlowID: "f1"})
 		ev.Identity.ID = event.EventID(string(rune('a'+i)) + "1")
@@ -60,7 +60,7 @@ func TestQueryEventsInRange(t *testing.T) {
 }
 
 func TestQueryStateChangesWindowAndEventFilter(t *testing.T) {
-	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"), nil)
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

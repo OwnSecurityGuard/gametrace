@@ -1,4 +1,4 @@
-package store
+﻿package store
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 // pageFixture 构造一个含 3 种类型、6 条事件的测试会话，时间严格递增。
 func pageFixture(t *testing.T) (*SQLiteStore, time.Time) {
 	t.Helper()
-	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "page.db"), nil)
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "page.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,11 +21,10 @@ func pageFixture(t *testing.T) (*SQLiteStore, time.Time) {
 		return &event.Event{
 			Identity: event.Identity{
 				ID: event.EventID(id), SessionID: "s1", Type: event.EventType(typ),
-				SchemaID: "x.v1", Source: "test", Timestamp: base.Add(off),
+				Source: "test", Timestamp: base.Add(off),
 			},
 			Trace: event.TraceContext{CorrelationID: corr},
 			Payload: event.Payload{
-				SchemaID: "x.v1",
 				Value:    event.Value{Kind: event.Object, Object: map[string]event.Value{"n": {Kind: event.Int, Int: int64(len(id))}}},
 			},
 		}

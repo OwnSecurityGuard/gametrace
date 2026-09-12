@@ -7,8 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"gametrace/pkg/schema"
-
 	_ "github.com/jackc/pgx/v5/stdlib" // 注册 "pgx" driver
 )
 
@@ -59,33 +57,27 @@ func openPG(dsn string) (*sql.DB, error) {
 //
 // driver=="postgres"：dsnOrPath 为共享 PG 连接串；sessionID 隔离该会话的全部行
 // （raw_packets / events / state_changes / event_index 均带 session_id）。
-func OpenCaptureStore(driver, dsnOrPath string, schemaReg *schema.Registry, sessionID string) (Store, error) {
-	if schemaReg == nil {
-		schemaReg = schema.NewRegistry()
-	}
+func OpenCaptureStore(driver, dsnOrPath string, sessionID string) (Store, error) {
 	if IsPostgres(driver) {
 		db, err := openPG(dsnOrPath)
 		if err != nil {
 			return nil, err
 		}
-		return &PGStore{db: db, schemaReg: schemaReg, sessionID: sessionID}, nil
+		return &PGStore{db: db, sessionID: sessionID}, nil
 	}
-	return NewSQLiteStore(dsnOrPath, schemaReg)
+	return NewSQLiteStore(dsnOrPath)
 }
 
 // OpenCaptureStoreReadOnly 以只读方式打开指定会话的事件存储（供 test_plugin 等采样场景）。
-func OpenCaptureStoreReadOnly(driver, dsnOrPath string, schemaReg *schema.Registry, sessionID string) (Store, error) {
-	if schemaReg == nil {
-		schemaReg = schema.NewRegistry()
-	}
+func OpenCaptureStoreReadOnly(driver, dsnOrPath string, sessionID string) (Store, error) {
 	if IsPostgres(driver) {
 		db, err := openPG(dsnOrPath)
 		if err != nil {
 			return nil, err
 		}
-		return &PGStore{db: db, schemaReg: schemaReg, sessionID: sessionID, readOnly: true}, nil
+		return &PGStore{db: db, sessionID: sessionID, readOnly: true}, nil
 	}
-	return NewSQLiteStoreReadOnly(dsnOrPath, schemaReg)
+	return NewSQLiteStoreReadOnly(dsnOrPath)
 }
 
 // ControlStoreBackend 是控制元数据存储的统一接口（SQLite / PG 双实现）。

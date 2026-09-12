@@ -1468,17 +1468,16 @@ func (x *Violation) GetSample() string {
 // fields are optional; a missing QualityStats means no statistical evidence is
 // available and explain falls back to violations only.
 type QualityStats struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	TotalInputs          int32                  `protobuf:"varint,1,opt,name=total_inputs,json=totalInputs,proto3" json:"total_inputs,omitempty"`
-	UnknownInputs        int32                  `protobuf:"varint,2,opt,name=unknown_inputs,json=unknownInputs,proto3" json:"unknown_inputs,omitempty"`
-	UnknownRatio         float64                `protobuf:"fixed64,3,opt,name=unknown_ratio,json=unknownRatio,proto3" json:"unknown_ratio,omitempty"`
-	CorrelatedInputs     int32                  `protobuf:"varint,4,opt,name=correlated_inputs,json=correlatedInputs,proto3" json:"correlated_inputs,omitempty"`
-	LongPacketErrors     int32                  `protobuf:"varint,5,opt,name=long_packet_errors,json=longPacketErrors,proto3" json:"long_packet_errors,omitempty"`
-	EntropyEstimate      float64                `protobuf:"fixed64,6,opt,name=entropy_estimate,json=entropyEstimate,proto3" json:"entropy_estimate,omitempty"`
-	SchemaVersionedRatio float64                `protobuf:"fixed64,7,opt,name=schema_versioned_ratio,json=schemaVersionedRatio,proto3" json:"schema_versioned_ratio,omitempty"`
-	DecodeErrors         int32                  `protobuf:"varint,8,opt,name=decode_errors,json=decodeErrors,proto3" json:"decode_errors,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	TotalInputs      int32                  `protobuf:"varint,1,opt,name=total_inputs,json=totalInputs,proto3" json:"total_inputs,omitempty"`
+	UnknownInputs    int32                  `protobuf:"varint,2,opt,name=unknown_inputs,json=unknownInputs,proto3" json:"unknown_inputs,omitempty"`
+	UnknownRatio     float64                `protobuf:"fixed64,3,opt,name=unknown_ratio,json=unknownRatio,proto3" json:"unknown_ratio,omitempty"`
+	CorrelatedInputs int32                  `protobuf:"varint,4,opt,name=correlated_inputs,json=correlatedInputs,proto3" json:"correlated_inputs,omitempty"`
+	LongPacketErrors int32                  `protobuf:"varint,5,opt,name=long_packet_errors,json=longPacketErrors,proto3" json:"long_packet_errors,omitempty"`
+	EntropyEstimate  float64                `protobuf:"fixed64,6,opt,name=entropy_estimate,json=entropyEstimate,proto3" json:"entropy_estimate,omitempty"`
+	DecodeErrors     int32                  `protobuf:"varint,7,opt,name=decode_errors,json=decodeErrors,proto3" json:"decode_errors,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *QualityStats) Reset() {
@@ -1549,13 +1548,6 @@ func (x *QualityStats) GetLongPacketErrors() int32 {
 func (x *QualityStats) GetEntropyEstimate() float64 {
 	if x != nil {
 		return x.EntropyEstimate
-	}
-	return 0
-}
-
-func (x *QualityStats) GetSchemaVersionedRatio() float64 {
-	if x != nil {
-		return x.SchemaVersionedRatio
 	}
 	return 0
 }
@@ -1686,16 +1678,15 @@ const file_pkg_plugindev_proto_plugindev_proto_rawDesc = "" +
 	"\tstatement\x18\x04 \x01(\tR\tstatement\x12\x17\n" +
 	"\adoc_ref\x18\x05 \x01(\tR\x06docRef\x12\x14\n" +
 	"\x05count\x18\x06 \x01(\x05R\x05count\x12\x16\n" +
-	"\x06sample\x18\a \x01(\tR\x06sample\"\xde\x02\n" +
+	"\x06sample\x18\a \x01(\tR\x06sample\"\xa8\x02\n" +
 	"\fQualityStats\x12!\n" +
 	"\ftotal_inputs\x18\x01 \x01(\x05R\vtotalInputs\x12%\n" +
 	"\x0eunknown_inputs\x18\x02 \x01(\x05R\runknownInputs\x12#\n" +
 	"\runknown_ratio\x18\x03 \x01(\x01R\funknownRatio\x12+\n" +
 	"\x11correlated_inputs\x18\x04 \x01(\x05R\x10correlatedInputs\x12,\n" +
 	"\x12long_packet_errors\x18\x05 \x01(\x05R\x10longPacketErrors\x12)\n" +
-	"\x10entropy_estimate\x18\x06 \x01(\x01R\x0fentropyEstimate\x124\n" +
-	"\x16schema_versioned_ratio\x18\a \x01(\x01R\x14schemaVersionedRatio\x12#\n" +
-	"\rdecode_errors\x18\b \x01(\x05R\fdecodeErrors2\xf7\x04\n" +
+	"\x10entropy_estimate\x18\x06 \x01(\x01R\x0fentropyEstimate\x12#\n" +
+	"\rdecode_errors\x18\a \x01(\x05R\fdecodeErrors2\xf7\x04\n" +
 	"\tPluginDev\x12W\n" +
 	"\bScaffold\x12$.gametrace.plugindev.ScaffoldRequest\x1a%.gametrace.plugindev.ScaffoldResponse\x12`\n" +
 	"\vListPlugins\x12'.gametrace.plugindev.ListPluginsRequest\x1a(.gametrace.plugindev.ListPluginsResponse\x12N\n" +

@@ -27,39 +27,3 @@ export interface ListDecodedDataResult {
   count: number;
   events: DecodedEvent[];
 }
-
-/** get_capture_schema 返回的列信息 */
-export interface SchemaColumn {
-  name: string;
-  type: string;
-  description: string;
-}
-
-/** get_capture_schema 返回的数据源 */
-export interface SchemaSource {
-  name: string;
-  description: string;
-  columns: SchemaColumn[];
-}
-
-/** get_capture_schema 返回的规则 */
-export interface SchemaRule {
-  name: string;
-  filter: string;
-  type: string;
-  window: string;
-  group_by: string[];
-  value: string;
-  output: string;
-}
-
-/** get_capture_schema 完整响应 */
-export interface CaptureSchemaResult {
-  ok: boolean;
-  sources: SchemaSource[];
-  query_fields: SchemaColumn[];
-  rules: SchemaRule[];
-  examples?: {
-    list_decoded_data_filter?: string[];
-  };
-}

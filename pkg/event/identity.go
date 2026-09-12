@@ -33,9 +33,6 @@ type Identity struct {
 	// Type 是事件类型（如 "network.packet", "http.request"）
 	Type EventType
 
-	// SchemaID 是载荷的 schema 版本标识（如 "http.request.v1"）
-	SchemaID string
-
 	// Source 是事件的创建者/来源
 	Source SourceID
 
@@ -136,24 +133,22 @@ func formatUUID(uuid [16]byte) string {
 
 // NewIdentity 创建新的 Identity
 // 自动生成 UUIDv7 作为 ID，使用当前时间作为 Timestamp
-func NewIdentity(sessionID string, eventType EventType, schemaID string, source SourceID) Identity {
+func NewIdentity(sessionID string, eventType EventType, source SourceID) Identity {
 	return Identity{
 		ID:        NewEventID(),
 		SessionID: sessionID,
 		Type:      eventType,
-		SchemaID:  schemaID,
 		Source:    source,
 		Timestamp: time.Now(),
 	}
 }
 
 // NewIdentityWithTime 创建新的 Identity，使用指定的时间戳
-func NewIdentityWithTime(sessionID string, eventType EventType, schemaID string, source SourceID, timestamp time.Time) Identity {
+func NewIdentityWithTime(sessionID string, eventType EventType, source SourceID, timestamp time.Time) Identity {
 	return Identity{
 		ID:        NewEventID(),
 		SessionID: sessionID,
 		Type:      eventType,
-		SchemaID:  schemaID,
 		Source:    source,
 		Timestamp: timestamp,
 	}

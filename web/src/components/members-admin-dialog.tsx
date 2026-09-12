@@ -109,7 +109,7 @@ function AccountsSection() {
                 </span>
               )}
               <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                {u.created_by ? `由 ${u.created_by} 邀请` : "自助注册"}
+                {u.created_by ? `由 ${u.created_by} 添加` : "自助注册"}
               </span>
               <span className="ml-auto text-[11px] text-muted-foreground">{formatTime(u.created_at)}</span>
               {u.owner !== self && (

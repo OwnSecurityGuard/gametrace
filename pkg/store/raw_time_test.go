@@ -65,7 +65,7 @@ func TestScanPacketTime_DualFormat(t *testing.T) {
 }
 
 func TestAppendRawPackets_IntegerTimestamp(t *testing.T) {
-	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"), nil)
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestMigrateRawTimestamps_LegacyTextDB(t *testing.T) {
 	}()
 
 	// 2) 以写入方身份打开：init 触发迁移。
-	s, err := NewSQLiteStore(dbPath, nil)
+	s, err := NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestMigrateRawTimestamps_LegacyTextDB(t *testing.T) {
 	check(s.db)
 
 	// 3) 幂等：重开不再改行（值不变、user_version 不回退）。
-	s2, err := NewSQLiteStore(dbPath, nil)
+	s2, err := NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ CREATE TABLE IF NOT EXISTS raw_packets (
 
 func TestMigrateRawTimestamps_EmptyDBNoop(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "empty.db")
-	s, err := NewSQLiteStore(dbPath, nil)
+	s, err := NewSQLiteStore(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestMigrateRawTimestamps_EmptyDBNoop(t *testing.T) {
 }
 
 func TestQueryConnections_IntegerOrdering(t *testing.T) {
-	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "conn.db"), nil)
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "conn.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestQueryConnections_IntegerOrdering(t *testing.T) {
 // TestCountConnections 验证连接总数是 conn_id 去重计数，独立于分页 limit/offset：
 // 回归 list_connections 的 count 曾误用当页条数所导致的「连接总数偏小甚至为 0」。
 func TestCountConnections(t *testing.T) {
-	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "count.db"), nil)
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "count.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

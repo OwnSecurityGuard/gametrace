@@ -5,11 +5,11 @@ import (
 	"log/slog"
 )
 
-// DBResolver 从持久化用户表（users）解析身份：邀请制身份发放的运行时侧。
+// DBResolver 从持久化用户表（users）解析身份：users 表注册身份的运行时侧。
 // 与 StaticResolver（GT_AUTH_TOKENS bootstrap）组合使用，见 FirstResolver。
 //
 // 故意每次请求都查库：控制面 QPS 极低（人手操作 + agent 回连），换来的是
-// 邀请发放 / 撤销即时生效，无需重启。token 是 256bit 随机值，走主键等值查询。
+// 注册发放 / 撤销即时生效，无需重启。token 是 256bit 随机值，走主键等值查询。
 type DBResolver struct {
 	db *sql.DB
 }
@@ -54,7 +54,7 @@ func (r *DBResolver) Resolve(token string) (*Principal, bool) {
 //
 // 组合语义（与匿名模式兼容）：
 //   - primary（env bootstrap）配置了 token：env 命中优先；否则查 users 表；
-//   - primary 为匿名模式但 users 表非空：只查 users 表（env 为空也能跑邀请制部署）；
+//   - primary 为匿名模式但 users 表非空：只查 users 表（env 为空也能跑 users 表注册部署）；
 //   - 仍未命中时按序查 extra（探针凭证等子系统的 resolver）；
 //   - 皆未命中：纯匿名模式，Resolve 恒返回 local 身份（现状兼容底线）。
 //

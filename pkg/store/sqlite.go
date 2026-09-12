@@ -8,16 +8,14 @@ import (
 	"log/slog"
 
 	"gametrace/pkg/event"
-	"gametrace/pkg/schema"
 
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 
 type SQLiteStore struct {
-	db        *sql.DB
-	schemaReg *schema.Registry
-	readOnly  bool
+	db       *sql.DB
+	readOnly bool
 	// traceCols 表示 events 表是否含 scenario_id/replay_id 列
 	//（旧库无此列时读取侧用 NULL 占位，保持 Scan 列数一致）。
 	traceCols bool
@@ -29,16 +27,13 @@ func (s *SQLiteStore) DB() *sql.DB {
 	return s.db
 }
 
-func NewSQLiteStore(path string, schemaReg *schema.Registry) (*SQLiteStore, error) {
-	if schemaReg == nil {
-		schemaReg = schema.NewRegistry()
-	}
+func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	slog.Info("opening sqlite store", "path", path)
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
-	s := &SQLiteStore{db: db, schemaReg: schemaReg}
+	s := &SQLiteStore{db: db}
 	if err := s.init(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -51,16 +46,13 @@ func NewSQLiteStore(path string, schemaReg *schema.Registry) (*SQLiteStore, erro
 //   - 跳过全部 DDL（CREATE TABLE/ALTER/CREATE INDEX），这些表已由写入方（captureTask）建好；
 //   - 仅设置 busy_timeout，使读取在 WAL 下与运行中 writer 安全并发（读不阻塞写、写不阻塞读）；
 //   - 全程只发 SELECT，绝不写库，因此不会与 captureTask 的写操作冲突。
-func NewSQLiteStoreReadOnly(path string, schemaReg *schema.Registry) (*SQLiteStore, error) {
-	if schemaReg == nil {
-		schemaReg = schema.NewRegistry()
-	}
+func NewSQLiteStoreReadOnly(path string) (*SQLiteStore, error) {
 	slog.Info("opening sqlite store (read-only)", "path", path)
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
-	s := &SQLiteStore{db: db, schemaReg: schemaReg, readOnly: true}
+	s := &SQLiteStore{db: db, readOnly: true}
 	if err := s.init(); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -101,7 +93,6 @@ CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     type TEXT NOT NULL,
-    schema_id TEXT NOT NULL,
     source TEXT NOT NULL,
     timestamp INTEGER NOT NULL,
     causation_id TEXT,
@@ -139,8 +130,7 @@ CREATE TABLE IF NOT EXISTS event_index (
     flow_id TEXT,
     direction TEXT,
     conn_id TEXT,
-    correlation_id TEXT,
-    projection_json TEXT NOT NULL
+    correlation_id TEXT
 );`
 	if _, err := s.db.Exec(schemaText); err != nil {
 		return err
@@ -167,6 +157,11 @@ CREATE TABLE IF NOT EXISTS event_index (
 	_, _ = s.db.Exec("ALTER TABLE events ADD COLUMN replay_id TEXT")
 	// 迁移：为已存在的 events 表添加 parent_id 列（extract 子事件父链接）
 	_, _ = s.db.Exec("ALTER TABLE events ADD COLUMN parent_id TEXT")
+
+	// 迁移：物理删除 schema 子系统残留列（旧库含 schema_id / projection_json；
+	// 新库无此列时 DROP COLUMN 报错被忽略）。
+	_, _ = s.db.Exec("ALTER TABLE events DROP COLUMN schema_id")
+	_, _ = s.db.Exec("ALTER TABLE event_index DROP COLUMN projection_json")
 
 	// 索引：支持高效查询
 	indexes := []string{

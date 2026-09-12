@@ -25,7 +25,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const [saved, setSaved] = useState(false);
   const queryClient = useQueryClient();
 
-  // 自助注册（新用户免邀请获取身份）
+  // 自助注册（新用户直接注册获取身份）
   const [regName, setRegName] = useState("");
   const [regBusy, setRegBusy] = useState(false);
   const [regError, setRegError] = useState("");

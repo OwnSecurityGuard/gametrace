@@ -16,6 +16,8 @@ type EventPageQuery struct {
 	TypeEq string
 	// TypeNot 是 type 不等下推（非空时排除该类型）。
 	TypeNot string
+	// ConnEq 是连接过滤下推：非空时仅返回该连接（event_index.conn_id）的解码事件。
+	ConnEq string
 }
 
 // QueryEventPage 按 timestamp DESC 分页返回事件与 SQL 条件命中总数。
@@ -37,7 +39,7 @@ func (s *SQLiteStore) QueryEventPage(ctx context.Context, q EventPageQuery, limi
 		return nil, 0, fmt.Errorf("count events: %w", err)
 	}
 
-	pageQuery := `SELECT id, session_id, type, schema_id, source, timestamp,
+	pageQuery := `SELECT id, session_id, type, source, timestamp,
 	       causation_id, correlation_id, origin_id, parent_id, context, payload` + s.eventSelectSuffix() + `
 FROM events ` + where + `
 ORDER BY timestamp DESC LIMIT ? OFFSET ?`
@@ -72,7 +74,7 @@ func (s *SQLiteStore) StreamEventsDesc(ctx context.Context, q EventPageQuery, ba
 		batch = 500
 	}
 	where, args := eventPageWhere(q)
-	streamQuery := `SELECT id, session_id, type, schema_id, source, timestamp,
+	streamQuery := `SELECT id, session_id, type, source, timestamp,
 	       causation_id, correlation_id, origin_id, parent_id, context, payload` + s.eventSelectSuffix() + `
 FROM events ` + where + `
 ORDER BY timestamp DESC`
@@ -118,6 +120,10 @@ func eventPageWhere(q EventPageQuery) (string, []any) {
 	} else if q.TypeNot != "" {
 		where += " AND type != ?"
 		args = append(args, q.TypeNot)
+	}
+	if q.ConnEq != "" {
+		where += " AND id IN (SELECT event_id FROM event_index WHERE conn_id = ?)"
+		args = append(args, q.ConnEq)
 	}
 	return where, args
 }

@@ -28,7 +28,7 @@ const (
 // projectMember 是项目的一个成员（user + role）。Owner 不在此列，见 project.Owner。
 // projectMember 是项目的一名成员（持久化在 project_members 表，不再用 JSON 列）。
 // Registered 不持久化：由 get_project 在响应时填充，标注该用户名是否已有身份
-//（false = 预邀请，对方注册同名身份后自动生效）。
+//（false = 待注册，对方注册同名身份后自动生效）。
 type projectMember struct {
 	User       string      `json:"user"`
 	Role       projectRole `json:"role"`

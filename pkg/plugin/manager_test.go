@@ -137,15 +137,15 @@ func TestRegistryServer_RegisterAndLifecycle(t *testing.T) {
 	}
 
 	// Find by protocol
-	if client, _, ok := s.Find("test_proto"); !ok || client == nil {
+	if client, ok := s.Find("test_proto"); !ok || client == nil {
 		t.Errorf("Find by protocol failed: ok=%v client=%v", ok, client)
 	}
 	// Find by hint
-	if _, _, ok := s.Find("port:7000"); !ok {
+	if _, ok := s.Find("port:7000"); !ok {
 		t.Errorf("Find by hint port:7000 failed")
 	}
 	// Find by unknown must not match
-	if _, _, ok := s.Find("nope"); ok {
+	if _, ok := s.Find("nope"); ok {
 		t.Errorf("Find by unknown should not match")
 	}
 
@@ -182,7 +182,7 @@ func TestRegistryServer_RegisterAndLifecycle(t *testing.T) {
 	if _, err := s.Deregister(context.Background(), &pb.DeregisterRequest{InstanceId: resp.InstanceId}); err != nil {
 		t.Fatalf("Deregister: %v", err)
 	}
-	if _, _, ok := s.Find("test_proto"); ok {
+	if _, ok := s.Find("test_proto"); ok {
 		t.Errorf("after Deregister, Find should not match")
 	}
 }
@@ -235,16 +235,16 @@ func TestRegistryServer_FindByName(t *testing.T) {
 		t.Fatalf("register b-decoder: %v", err)
 	}
 
-	ca, _, okA := s.FindByName("a-decoder")
+	ca, okA := s.FindByName("a-decoder")
 	if !okA || ca == nil {
 		t.Fatalf("FindByName a-decoder failed: ok=%v client=%v", okA, ca)
 	}
-	cb, _, okB := s.FindByName("b-decoder")
+	cb, okB := s.FindByName("b-decoder")
 	if !okB || cb == nil {
 		t.Fatalf("FindByName b-decoder failed: ok=%v client=%v", okB, cb)
 	}
 	// 同名解析必须稳定返回同一 client，且与另一插件不同
-	if ca2, _, ok2 := s.FindByName("a-decoder"); !ok2 || ca2 != ca {
+	if ca2, ok2 := s.FindByName("a-decoder"); !ok2 || ca2 != ca {
 		t.Errorf("FindByName a-decoder should return stable client: ok=%v client=%v", ok2, ca2)
 	}
 	if ca == cb {
@@ -252,12 +252,12 @@ func TestRegistryServer_FindByName(t *testing.T) {
 	}
 
 	// 未知名应返回 not-found
-	if _, _, ok := s.FindByName("missing"); ok {
+	if _, ok := s.FindByName("missing"); ok {
 		t.Error("FindByName missing should return not-found")
 	}
 
 	// 协议 hint 退化路径：Find("tcp") 仍能命中（两个插件之一）
-	if c, _, ok := s.Find("tcp"); !ok || c == nil {
+	if c, ok := s.Find("tcp"); !ok || c == nil {
 		t.Errorf("Find tcp fallback failed: ok=%v client=%v", ok, c)
 	}
 
@@ -274,10 +274,10 @@ func TestRegistryServer_FindByName(t *testing.T) {
 	if _, err := s.Deregister(context.Background(), &pb.DeregisterRequest{InstanceId: bInstance}); err != nil {
 		t.Fatalf("deregister b-decoder: %v", err)
 	}
-	if _, _, ok := s.FindByName("b-decoder"); ok {
+	if _, ok := s.FindByName("b-decoder"); ok {
 		t.Error("FindByName b-decoder should fail after deregister")
 	}
-	if _, _, ok := s.FindByName("a-decoder"); !ok {
+	if _, ok := s.FindByName("a-decoder"); !ok {
 		t.Error("a-decoder should still resolve after b-decoder deregistered")
 	}
 }

@@ -109,9 +109,9 @@ export function ProjectPage({
       const res = await addMember.mutateAsync({ user, role: memberRole });
       setMemberUser("");
       if (res.pending) {
-        // 预邀请：对方还没注册这个用户名。
+        // 待注册：对方还没注册这个用户名。
         toast.success(
-          "已加入（预邀请）",
+          "已加入（待注册）",
           `${user} 尚未注册：对方在「设置 → 没有令牌？快速开始」注册同名身份后自动生效`,
         );
       } else {
@@ -351,7 +351,7 @@ export function ProjectPage({
             )}
             {isProjectAdmin && (
               <p className="mt-2 text-xs text-muted-foreground">
-                成员以用户名标识：对方若尚未注册，会以「待注册」状态预邀请加入；对方在
+                成员以用户名标识：对方若尚未注册，会以「待注册」状态加入；对方在
                 「设置 → 没有令牌？快速开始」注册同名身份后自动生效，即可看到本项目并使用项目插件。
               </p>
             )}

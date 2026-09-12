@@ -155,7 +155,7 @@ func main() {
 		slog.Info("reconciled stale running sessions from previous run", "count", reconciled)
 	}
 
-	// authResolver：env bootstrap（GT_AUTH_TOKENS）+ users 表（自助注册/邀请用户）
+	// authResolver：env bootstrap（GT_AUTH_TOKENS）+ users 表（自助注册/注册用户）
 	// 组合的 Bearer 鉴权，供 PluginRegistry 与 AgentIngest 两个 gRPC server 共用。
 	// 两者皆空时为匿名模式（拦截器放行、不注入 Principal），本地单机用法行为不变。
 	// users 表让插件凭自助注册 token 注册即归属 owner（否则一律匿名、对所有人可见）。

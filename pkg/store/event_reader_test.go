@@ -1,4 +1,4 @@
-package store
+﻿package store
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 
 func TestSQLiteStore_QueryEventsV2(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "test.db")
-	s, err := NewSQLiteStore(db, nil)
+	s, err := NewSQLiteStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,13 +57,11 @@ func TestSQLiteStore_QueryEventsV2(t *testing.T) {
 				ID:        "e1",
 				SessionID: "s1",
 				Type:      "tcp",
-				SchemaID:  "tcp.v1",
 				Source:    "test",
 				Timestamp: now,
 			},
 			Trace: event.TraceContext{},
 			Payload: event.Payload{
-				SchemaID: "tcp.v1",
 				Value:    payload1,
 			},
 		},
@@ -72,13 +70,11 @@ func TestSQLiteStore_QueryEventsV2(t *testing.T) {
 				ID:        "e2",
 				SessionID: "s1",
 				Type:      "tcp",
-				SchemaID:  "tcp.v1",
 				Source:    "test",
 				Timestamp: now.Add(time.Millisecond),
 			},
 			Trace: event.TraceContext{},
 			Payload: event.Payload{
-				SchemaID: "tcp.v1",
 				Value:    payload2,
 			},
 		},
@@ -87,13 +83,11 @@ func TestSQLiteStore_QueryEventsV2(t *testing.T) {
 				ID:        "e3",
 				SessionID: "s2",
 				Type:      "udp",
-				SchemaID:  "udp.v1",
 				Source:    "test",
 				Timestamp: now.Add(2 * time.Millisecond),
 			},
 			Trace: event.TraceContext{},
 			Payload: event.Payload{
-				SchemaID: "udp.v1",
 				Value:    payload3,
 			},
 		},
@@ -161,36 +155,9 @@ func TestSQLiteStore_QueryEventsV2(t *testing.T) {
 	}
 }
 
-func TestSQLiteStore_GetSchema(t *testing.T) {
-	db := filepath.Join(t.TempDir(), "test.db")
-	s, err := NewSQLiteStore(db, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ctx := context.Background()
-
-	info, err := s.GetSchema(ctx, "ignored")
-	if err != nil {
-		t.Fatal(err)
-	}
-	names := map[string]bool{}
-	for _, tbl := range info.Tables {
-		names[tbl.Name] = true
-		if len(tbl.Columns) == 0 {
-			t.Errorf("table %q has no columns", tbl.Name)
-		}
-	}
-	for _, want := range []string{"raw_packets", "events", "aggregated_metrics", "state_changes", "event_index"} {
-		if !names[want] {
-			t.Errorf("schema missing table %q", want)
-		}
-	}
-}
-
 func TestSQLiteStore_RawQuery(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "test.db")
-	s, err := NewSQLiteStore(db, nil)
+	s, err := NewSQLiteStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +176,7 @@ func TestSQLiteStore_RawQuery(t *testing.T) {
 
 func TestSQLiteStore_QueryRawPackets(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "test.db")
-	s, err := NewSQLiteStore(db, nil)
+	s, err := NewSQLiteStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}

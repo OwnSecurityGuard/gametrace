@@ -64,7 +64,7 @@ openssl rand -hex 24   # 输出前加 gt_tok_ 前缀
 
 新成员通过自助注册获得个人独立身份（users 表 + 即时生效的 `gt_` token）：
 
-1. **自助注册（默认开放）**：Web UI「设置」弹窗 →「没有令牌？快速开始」输入用户名即可创建身份，无需管理员介入。注册者可立即创建自己的项目、抓原始包；**别人项目的解码插件需要该项目把你加为成员（项目邀请）才能按名解析使用**。接口为 `POST /access/register {"name":"carol"}`；`GT_AUTH_REGISTER=off` 可显式关闭（禁用自助注册）；匿名模式下无意义（恒关闭）。保留名不可注册：env bootstrap 的 owner、匿名 owner `local`、已存在用户。
+1. **自助注册（默认开放）**：Web UI「设置」弹窗 →「没有令牌？快速开始」输入用户名即可创建身份，无需管理员介入。注册者可立即创建自己的项目、抓原始包；**别人项目的解码插件需要该项目把你加为成员（项目成员）才能按名解析使用**。接口为 `POST /access/register {"name":"carol"}`；`GT_AUTH_REGISTER=off` 可显式关闭（禁用自助注册）；匿名模式下无意义（恒关闭）。保留名不可注册：env bootstrap 的 owner、匿名 owner `local`、已存在用户。
 
 成员管理（撤销等）：global admin（`:admin` token）可用 `list_users` / `revoke_user` 查看与撤销自助注册用户；撤销即删 users 行，token **立即失效**。env bootstrap 身份（`GT_AUTH_TOKENS`）不在其列，天然不可被撤销。注意：env bootstrap token 默认**不是** global admin，需带 `:admin` 后缀才能使用成员管理工具。
 

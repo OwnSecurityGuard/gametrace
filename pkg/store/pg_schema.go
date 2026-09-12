@@ -35,7 +35,6 @@ CREATE TABLE IF NOT EXISTS events (
     id          TEXT PRIMARY KEY,
     session_id  TEXT NOT NULL,
     type        TEXT NOT NULL,
-    schema_id   TEXT NOT NULL,
     source      TEXT NOT NULL,
     timestamp   BIGINT NOT NULL,
     causation_id TEXT,
@@ -73,8 +72,7 @@ CREATE TABLE IF NOT EXISTS event_index (
     flow_id        TEXT,
     direction      TEXT,
     conn_id        TEXT,
-    correlation_id TEXT,
-    projection_json TEXT NOT NULL
+    correlation_id TEXT
 );
 CREATE TABLE IF NOT EXISTS aggregated_metrics (
     session_id TEXT NOT NULL,
@@ -195,6 +193,13 @@ func InitPGEventSchema(ctx context.Context, db *sql.DB) error {
 	}
 	if _, err := db.ExecContext(ctx, pgEventIndexes); err != nil {
 		return fmt.Errorf("init pg event indexes: %w", err)
+	}
+	// 迁移：物理删除 schema 子系统残留列（持久化旧库含 schema_id / projection_json）。
+	if _, err := db.ExecContext(ctx, `ALTER TABLE events DROP COLUMN IF EXISTS schema_id`); err != nil {
+		return fmt.Errorf("drop events.schema_id: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE event_index DROP COLUMN IF EXISTS projection_json`); err != nil {
+		return fmt.Errorf("drop event_index.projection_json: %w", err)
 	}
 	return nil
 }

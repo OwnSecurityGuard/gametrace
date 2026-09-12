@@ -55,9 +55,6 @@ type QualityStats struct {
 	// EntropyEstimate is the mean Shannon entropy of payloads in bits/byte
 	// (0..8). High values with high unknown ratio suggest encryption/compression.
 	EntropyEstimate float64
-	// SchemaVersionedRatio is the ratio of emitted schema_ids that carry a
-	// version suffix (e.g. game.login.v1). Low values trip schema-id-versioned.
-	SchemaVersionedRatio float64
 	// DecodeErrors is the total number of decode errors across the corpus.
 	DecodeErrors int
 }

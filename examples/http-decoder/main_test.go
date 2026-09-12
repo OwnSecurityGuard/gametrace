@@ -40,7 +40,7 @@ func loadManifest(t *testing.T) *sdk.Manifest {
 }
 
 // TestManifestContractCheck runs the declaration-phase contract check on
-// plugin.yaml: runtime / schema / state layers must be violation-free.
+// plugin.yaml: the semantic_rules declaration must be violation-free.
 func TestManifestContractCheck(t *testing.T) {
 	m := loadManifest(t)
 	rep := sdkcontract.NewPluginChecker().Check(m)
@@ -138,7 +138,7 @@ func TestParseEnvelopeFormats(t *testing.T) {
 }
 
 // TestEmitSchemaConformance emits request and response events and runs the
-// runtime event/schema/state checks against the declared manifest, so any drift
+// semantic rule checks against the declared manifest, so any drift
 // between emit.go and plugin.yaml surfaces as a test failure.
 func TestEmitSchemaConformance(t *testing.T) {
 	m := loadManifest(t)
@@ -178,9 +178,8 @@ func TestEmitSchemaConformance(t *testing.T) {
 			t.Fatalf("unmarshal payload for %s: %v", r.EventType, err)
 		}
 		draft := &sdkevent.Draft{
-			Type:      sdkevent.EventType(r.EventType),
-			SchemaRef: r.SchemaId,
-			Value:     v,
+			Type:  sdkevent.EventType(r.EventType),
+			Value: v,
 		}
 		rep := pc.CheckEvent(m, draft)
 		for _, viol := range rep.Violations {

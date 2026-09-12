@@ -133,16 +133,16 @@ func (s *pipelineService) DecodeRawPackets(ctx context.Context, req capturecontr
 	dbPath := meta.DBPath
 
 	// 3. 检查插件可用：优先按名精确路由（FindByName），退化按协议 hint（Find）。
-	client, schemaReg, ok := s.registry.FindByNameFor(auth.OwnerFrom(ctx), req.Plugin)
+	client, ok := s.registry.FindByNameFor(auth.OwnerFrom(ctx), req.Plugin)
 	if !ok {
-		client, schemaReg, ok = s.registry.FindFor(auth.OwnerFrom(ctx), req.Plugin)
+		client, ok = s.registry.FindFor(auth.OwnerFrom(ctx), req.Plugin)
 	}
 	if !ok {
 		return capturecontrol.DecodeRawPacketsResult{}, fmt.Errorf("plugin %s not found or not a decoder", req.Plugin)
 	}
 
 	// 4. 按 dbDriver 打开会话存储（sqlite 走 capture.sqlite；postgres 走共享 PG 库）。
-	st, err := s.openSessionStore(req.SessionID, dbPath, schemaReg)
+	st, err := s.openSessionStore(req.SessionID, dbPath)
 	if err != nil {
 		return capturecontrol.DecodeRawPacketsResult{}, fmt.Errorf("open store: %w", err)
 	}
@@ -157,7 +157,7 @@ func (s *pipelineService) DecodeRawPackets(ctx context.Context, req capturecontr
 	}
 
 	// 6. 创建 dispatcher（使用真实 sessionID，并携带服务端端口提示以辅助方向推断）
-	dispatcher, err := decode.NewDispatcher(client, req.SessionID, logger, schemaReg, decode.WithServerPort(meta.Port))
+	dispatcher, err := decode.NewDispatcher(client, req.SessionID, logger, decode.WithServerPort(meta.Port))
 	if err != nil {
 		return capturecontrol.DecodeRawPacketsResult{}, fmt.Errorf("new dispatcher: %w", err)
 	}
@@ -277,23 +277,23 @@ func (s *pipelineService) TestPlugin(ctx context.Context, req capturecontrol.Tes
 	dbPath := meta.DBPath
 
 	// 检查插件可用：优先按名精确路由（FindByName），退化按协议 hint（Find）。
-	client, schemaReg, ok := s.registry.FindByNameFor(auth.OwnerFrom(ctx), req.Plugin)
+	client, ok := s.registry.FindByNameFor(auth.OwnerFrom(ctx), req.Plugin)
 	if !ok {
-		client, schemaReg, ok = s.registry.FindFor(auth.OwnerFrom(ctx), req.Plugin)
+		client, ok = s.registry.FindFor(auth.OwnerFrom(ctx), req.Plugin)
 	}
 	if !ok {
 		return capturecontrol.TestPluginResult{}, fmt.Errorf("plugin %s not found or not a decoder", req.Plugin)
 	}
 
 	// 按 dbDriver 打开会话存储（只读：与运行中 writer 并发安全，且不回写会话库）
-	st, err := s.openSessionStoreReadOnly(req.SessionID, dbPath, schemaReg)
+	st, err := s.openSessionStoreReadOnly(req.SessionID, dbPath)
 	if err != nil {
 		return capturecontrol.TestPluginResult{}, fmt.Errorf("open store: %w", err)
 	}
 	defer st.Close()
 
 	// 创建 dispatcher（不写库，仅解码采样）
-	dispatcher, err := decode.NewDispatcher(client, req.SessionID, logger, schemaReg, decode.WithServerPort(meta.Port))
+	dispatcher, err := decode.NewDispatcher(client, req.SessionID, logger, decode.WithServerPort(meta.Port))
 	if err != nil {
 		return capturecontrol.TestPluginResult{}, fmt.Errorf("new dispatcher: %w", err)
 	}
@@ -351,7 +351,6 @@ func eventToLite(ev *event.Event) capturecontrol.TestEventLite {
 		ID:            string(ev.Identity.ID),
 		TimestampUnix: ev.Identity.Timestamp.Unix(),
 		Type:          string(ev.Identity.Type),
-		SchemaID:      ev.Payload.SchemaID,
 		DataJSON:      string(js),
 	}
 }

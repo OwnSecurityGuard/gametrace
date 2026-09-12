@@ -1,17 +1,18 @@
 // RawDataView — 协议数据页「原始数据」子视图。
 //
-// 展示所选连接的原始帧（hex dump），与事件 / 关系 / 状态变更不同：这里不做
-// 三段分离（payload/meta/analysis）、不做提炼与配对分析，把抓到的原始帧原样
-// 铺开（时间 / 方向 / 源→目标 / 字节数 / 完整 hex），用于排查解码器产出。
+// 展示原始帧（hex dump），与事件 / 关系 / 状态变更不同：这里不做三段分离
+// （payload/meta/analysis）、不做提炼与配对分析，把抓到的原始帧原样铺开
+// （时间 / 方向 / 源→目标 / 字节数 / 完整 hex），用于排查解码器产出。
 //
-// 原始帧按连接聚合，选中哪条连接由顶部过滤栏的「连接」下拉（与其余子视图
-// 共享的 connFilter）决定；本视图不再自带连接下拉。未选择连接时展示空态引导。
+// 连接下拉框（与其余子视图共享的 connFilter）选定版展示该连接的帧；未选定
+// （「全部连接」）时展示整个会话的帧（跨连接按时间交错，走 list_connection_frames
+// 的 conn_id 缺省分支）。
 import { useMemo } from "react";
 import { useConnectionFrames } from "@/hooks/use-mcp";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
-import { Network, RotateCw, ListTree, Inbox, Radio } from "lucide-react";
+import { Network, RotateCw, ListTree, Radio } from "lucide-react";
 import type { ConnectionFrame, ConnectionSummary } from "@/types/connection";
 import { DirectionIcon, formatTimestamp } from "@/lib/event-display";
 import { base64ToBytes, hexDump } from "@/lib/hex";
@@ -39,7 +40,7 @@ function frameHex(frame: ConnectionFrame): string {
 
 interface RawDataViewProps {
   sessionId: string | null;
-  /** 连接过滤（null = 未选择）；原始帧按连接聚合，用顶部「连接」下拉选择。 */
+  /** 连接过滤（null = 全部连接 → 展示整个会话的帧）；用顶部「连接」下拉选择。 */
   connFilter: ConnectionSummary | null;
 }
 
@@ -77,29 +78,26 @@ export function RawDataView({ sessionId, connFilter }: RawDataViewProps) {
 
   return (
     <div className="space-y-3">
-      {/* 当前连接的简要说明（连接本身由顶部过滤栏的「连接」下拉切换） */}
-      {connFilter && (
-        <div className="flex flex-wrap items-center gap-2 px-1 text-xs text-muted-foreground" aria-live="polite">
+      {/* 当前连接/全部连接的简要说明（连接由顶部过滤栏的「连接」下拉切换） */}
+      <div className="flex flex-wrap items-center gap-2 px-1 text-xs text-muted-foreground" aria-live="polite">
+        {connFilter ? (
+          <>
+            <span className="inline-flex items-center gap-1.5">
+              <Radio className="h-3.5 w-3.5" />
+              当前连接
+            </span>
+            <span className="font-mono">{connFilter.client || "-"} → {connFilter.server || "-"}</span>
+          </>
+        ) : (
           <span className="inline-flex items-center gap-1.5">
             <Radio className="h-3.5 w-3.5" />
-            当前连接
+            全部连接
           </span>
-          <span className="font-mono">{connFilter.client || "-"} → {connFilter.server || "-"}</span>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* 未选择连接 */}
-      {!connFilter && (
-        <EmptyState
-          icon={<Inbox className="h-5 w-5" />}
-          title="未选择连接"
-          hint="在顶部过滤栏的「连接」下拉中选择一条连接，此处展示其原始帧（hex dump）。"
-          className="h-48 justify-center"
-        />
-      )}
-
-      {/* 已选择连接：加载 / 错误 / 空 / 帧列表 */}
-      {connFilter && isLoading && (
+      {/* 加载 / 错误 / 空 */}
+      {isLoading && (
         <div className="space-y-2">
           {Array.from({ length: 3 }).map((_, i) => (
             <Skeleton key={i} className="h-24 w-full" />
@@ -107,7 +105,7 @@ export function RawDataView({ sessionId, connFilter }: RawDataViewProps) {
         </div>
       )}
 
-      {connFilter && isError && (
+      {isError && (
         <div
           role="alert"
           className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive"
@@ -120,16 +118,16 @@ export function RawDataView({ sessionId, connFilter }: RawDataViewProps) {
         </div>
       )}
 
-      {connFilter && !isLoading && !isError && frames.length === 0 && (
+      {!isLoading && !isError && frames.length === 0 && (
         <EmptyState
           icon={<ListTree className="h-5 w-5" />}
           title="暂无原始帧"
-          hint="该连接尚无原始帧记录。（非代理抓包不产出 connection frames）"
+          hint="该会话尚无原始帧记录。（非代理抓包不产出 connection frames）"
           className="h-48 justify-center"
         />
       )}
 
-      {connFilter && !isLoading && !isError && frames.length > 0 && (
+      {!isLoading && !isError && frames.length > 0 && (
         <>
           <div className="px-1 text-xs text-muted-foreground" aria-live="polite">
             <span className="tabular-nums">

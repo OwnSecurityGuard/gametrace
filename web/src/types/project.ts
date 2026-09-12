@@ -3,7 +3,7 @@ export type ProjectRole = "admin" | "member";
 export interface ProjectMember {
   user: string;
   role: ProjectRole;
-  /** 该用户名是否已有身份（users 表 / env bootstrap）。false = 预邀请，对方注册同名后生效。 */
+  /** 该用户名是否已有身份（users 表 / env bootstrap）。false = 待注册，对方注册同名后生效。 */
   registered?: boolean;
 }
 

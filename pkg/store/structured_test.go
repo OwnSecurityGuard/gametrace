@@ -1,4 +1,4 @@
-package store
+﻿package store
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 // TestWriteEventsV2_StructuredFields 验证 Event 结构化字段正确落库。
 func TestWriteEventsV2_StructuredFields(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "test.db")
-	s, err := NewSQLiteStore(db, nil)
+	s, err := NewSQLiteStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,13 +57,11 @@ func TestWriteEventsV2_StructuredFields(t *testing.T) {
 				ID:        "ev-1",
 				SessionID: "test-session",
 				Type:      "tcp",
-				SchemaID:  "tcp.v1",
 				Source:    "test",
 				Timestamp: now,
 			},
 			Trace: event.TraceContext{},
 			Payload: event.Payload{
-				SchemaID: "tcp.v1",
 				Value:    payload1,
 			},
 		},
@@ -72,13 +70,11 @@ func TestWriteEventsV2_StructuredFields(t *testing.T) {
 				ID:        "ev-2",
 				SessionID: "test-session",
 				Type:      "tcp",
-				SchemaID:  "tcp.v1",
 				Source:    "test",
 				Timestamp: now.Add(50 * time.Millisecond),
 			},
 			Trace: event.TraceContext{},
 			Payload: event.Payload{
-				SchemaID: "tcp.v1",
 				Value:    payload2,
 			},
 		},
@@ -152,7 +148,7 @@ func TestWriteEventsV2_StructuredFields(t *testing.T) {
 // TestWriteEventsV2_EmptyPayload 验证 Event 空 payload 能正常落库。
 func TestWriteEventsV2_EmptyPayload(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "test.db")
-	s, err := NewSQLiteStore(db, nil)
+	s, err := NewSQLiteStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,13 +162,11 @@ func TestWriteEventsV2_EmptyPayload(t *testing.T) {
 				ID:        "ev-empty",
 				SessionID: "test-session",
 				Type:      "tcp",
-				SchemaID:  "tcp.v1",
 				Source:    "test",
 				Timestamp: time.Now(),
 			},
 			Trace: event.TraceContext{},
 			Payload: event.Payload{
-				SchemaID: "tcp.v1",
 				Value: event.Value{
 					Kind:   event.Object,
 					Object: map[string]event.Value{},
@@ -201,7 +195,7 @@ func TestWriteEventsV2_EmptyPayload(t *testing.T) {
 // TestWriteStateChanges 验证 WriteStateChanges 写入 state_changes 表与查询。
 func TestWriteStateChanges(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "test.db")
-	s, err := NewSQLiteStore(db, nil)
+	s, err := NewSQLiteStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +231,7 @@ func TestWriteStateChanges(t *testing.T) {
 		}},
 	})
 	events := []*event.Event{
-		event.NewEvent("test-session", "tcp", "tcp.v1", "test", payload, event.EventContext{FlowID: flowID}),
+		event.NewEvent("test-session", "tcp", "test", payload, event.EventContext{FlowID: flowID}),
 	}
 
 	if err := s.WriteStateChanges(ctx, "test-session", events); err != nil {
@@ -294,7 +288,7 @@ func TestWriteStateChanges(t *testing.T) {
 // TestWriteStateChanges_SkipsInvalid 验证不完整的 StateChange 会被跳过，不会写入投影。
 func TestWriteStateChanges_SkipsInvalid(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "test.db")
-	s, err := NewSQLiteStore(db, nil)
+	s, err := NewSQLiteStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +322,7 @@ func TestWriteStateChanges_SkipsInvalid(t *testing.T) {
 		}},
 	})
 	events := []*event.Event{
-		event.NewEvent("test-session", "tcp", "tcp.v1", "test", payload, event.EventContext{FlowID: flowID}),
+		event.NewEvent("test-session", "tcp", "test", payload, event.EventContext{FlowID: flowID}),
 	}
 
 	if err := s.WriteStateChanges(ctx, "test-session", events); err != nil {
@@ -351,14 +345,14 @@ func TestSchemaMigration_Idempotent(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "test.db")
 
 	// 第一次创建
-	s1, err := NewSQLiteStore(db, nil)
+	s1, err := NewSQLiteStore(db)
 	if err != nil {
 		t.Fatalf("first NewSQLiteStore: %v", err)
 	}
 	s1.Close()
 
 	// 第二次打开（模拟重启），迁移应幂等
-	s2, err := NewSQLiteStore(db, nil)
+	s2, err := NewSQLiteStore(db)
 	if err != nil {
 		t.Fatalf("second NewSQLiteStore: %v", err)
 	}

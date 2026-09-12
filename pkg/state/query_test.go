@@ -117,7 +117,7 @@ func makeEvent(id, msgName, direction string, offsetMS int64, correlation, causa
 		},
 		"level": 1,
 	})
-	ev := event.NewEventWithTime(sessID, event.EventType(msgName), "schema.test", "test", payload,
+	ev := event.NewEventWithTime(sessID, event.EventType(msgName), "test", payload,
 		baseTime.Add(time.Duration(offsetMS)*time.Millisecond),
 		event.EventContext{FlowID: "flow-1", Direction: direction})
 	ev.Identity.ID = event.EventID(id)

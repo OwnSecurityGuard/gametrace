@@ -57,16 +57,16 @@ func TestRegister_OwnerScopedCoexistence(t *testing.T) {
 
 	// 各 owner 只在自己的作用域找到；无主第三方 carol 看不到
 	for _, owner := range []string{"alice", "bob"} {
-		c, _, ok := s.FindByNameFor(owner, "shared-decoder")
+		c, ok := s.FindByNameFor(owner, "shared-decoder")
 		if !ok || c == nil {
 			t.Fatalf("FindByNameFor(%q) should find the plugin", owner)
 		}
 	}
-	if _, _, ok := s.FindByNameFor("carol", "shared-decoder"); ok {
+	if _, ok := s.FindByNameFor("carol", "shared-decoder"); ok {
 		t.Fatal("unrelated owner must not see others' plugins")
 	}
 	// 匿名视角看不到有主插件
-	if _, _, ok := s.FindByName("shared-decoder"); ok {
+	if _, ok := s.FindByName("shared-decoder"); ok {
 		t.Fatal("anonymous FindByName must not see owner-scoped plugins")
 	}
 
@@ -94,10 +94,10 @@ func TestRegister_FullKeyLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, ok := s.FindByNameFor("bob", "alice/shared-decoder"); ok {
+	if _, ok := s.FindByNameFor("bob", "alice/shared-decoder"); ok {
 		t.Fatal("bob must not address alice's plugin via full key")
 	}
-	if c, _, ok := s.FindByNameFor("alice", "alice/shared-decoder"); !ok || c == nil {
+	if c, ok := s.FindByNameFor("alice", "alice/shared-decoder"); !ok || c == nil {
 		t.Fatal("alice should address own plugin via full key")
 	}
 }
@@ -120,7 +120,7 @@ func TestTunnelRegisterLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tunnel register: %v", err)
 	}
-	if _, _, ok := s.FindByNameFor("alice", "shared-decoder"); ok {
+	if _, ok := s.FindByNameFor("alice", "shared-decoder"); ok {
 		t.Fatal("unbound tunnel plugin must not be findable")
 	}
 
@@ -130,12 +130,12 @@ func TestTunnelRegisterLifecycle(t *testing.T) {
 	go func() { _ = s.tunnelHub.Connect(hubEnd{p}) }()
 	waitTunnelBound(t, s, resp.GetInstanceId())
 
-	c, _, ok := s.FindByNameFor("alice", "shared-decoder")
+	c, ok := s.FindByNameFor("alice", "shared-decoder")
 	if !ok || c == nil {
 		t.Fatal("bound tunnel plugin should be findable via owner scope")
 	}
 	// 其他 owner 不可见
-	if _, _, ok := s.FindByNameFor("bob", "shared-decoder"); ok {
+	if _, ok := s.FindByNameFor("bob", "shared-decoder"); ok {
 		t.Fatal("bob must not see alice's tunnel plugin")
 	}
 
@@ -159,7 +159,7 @@ func TestTunnelRegisterLifecycle(t *testing.T) {
 	s.plugins[resp.GetInstanceId()].LastHeartbeat = time.Now().Add(-time.Hour)
 	s.mu.Unlock()
 	s.CheckOffline(time.Second)
-	if _, _, ok := s.FindByNameFor("alice", "shared-decoder"); !ok {
+	if _, ok := s.FindByNameFor("alice", "shared-decoder"); !ok {
 		t.Fatal("tunnel plugin must not be killed by heartbeat CheckOffline")
 	}
 
@@ -168,7 +168,7 @@ func TestTunnelRegisterLifecycle(t *testing.T) {
 	defer unsub()
 	p.close()
 	waitEvent(t, events, PluginEventOffline)
-	if _, _, ok := s.FindByNameFor("alice", "shared-decoder"); ok {
+	if _, ok := s.FindByNameFor("alice", "shared-decoder"); ok {
 		t.Fatal("tunnel plugin should be offline after disconnect")
 	}
 
@@ -189,7 +189,7 @@ func TestTunnelRegisterLifecycle(t *testing.T) {
 	p2 := newTunnelHubPipe(ctx2)
 	go func() { _ = s.tunnelHub.Connect(hubEnd{p2}) }()
 	waitTunnelBound(t, s, resp2.GetInstanceId())
-	if _, _, ok := s.FindByNameFor("alice", "shared-decoder"); !ok {
+	if _, ok := s.FindByNameFor("alice", "shared-decoder"); !ok {
 		t.Fatal("re-registered tunnel plugin should be findable after reconnect")
 	}
 }
@@ -227,7 +227,7 @@ func TestTunnelConnectBeforeRegister(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tunnel register: %v", err)
 	}
-	if _, _, ok := s.FindByNameFor("alice", "shared-decoder"); !ok {
+	if _, ok := s.FindByNameFor("alice", "shared-decoder"); !ok {
 		t.Fatal("register after connect should bind the pending tunnel immediately")
 	}
 	_ = resp
@@ -251,7 +251,7 @@ func TestAnonymousTunnelRegisterUnchanged(t *testing.T) {
 	p := newTunnelHubPipe(ctx)
 	go func() { _ = s.tunnelHub.Connect(hubEnd{p}) }()
 	waitTunnelBound(t, s, resp.GetInstanceId())
-	if _, _, ok := s.FindByNameFor("", "shared-decoder"); !ok {
+	if _, ok := s.FindByNameFor("", "shared-decoder"); !ok {
 		t.Fatal("anonymous tunnel plugin should be findable by bare name")
 	}
 }
@@ -348,7 +348,7 @@ func TestTunnelBoundDeadClientOffline(t *testing.T) {
 	// 不依赖断开钩子（钩子本身也会触发，这里断言最终一致：判离线即可）
 	waitEvent(t, events, PluginEventOffline)
 	s.CheckOffline(time.Second)
-	if _, _, ok := s.FindByNameFor("alice", "shared-decoder"); ok {
+	if _, ok := s.FindByNameFor("alice", "shared-decoder"); ok {
 		t.Fatal("tunnel plugin with dead session should be offline")
 	}
 	cancel()
@@ -390,7 +390,7 @@ func TestHeartbeatIgnoredForTunnel(t *testing.T) {
 	if _, err := s.Heartbeat(context.Background(), &pb.HeartbeatRequest{InstanceId: resp.GetInstanceId()}); err != nil {
 		t.Fatalf("heartbeat should be acked (ignored), got %v", err)
 	}
-	if _, _, ok := s.FindByNameFor("alice", "shared-decoder"); ok {
+	if _, ok := s.FindByNameFor("alice", "shared-decoder"); ok {
 		t.Fatal("heartbeat must not resurrect a tunnel instance with a dead session")
 	}
 	cancel()
@@ -432,8 +432,8 @@ func TestConcurrentRegisterAndLookup(t *testing.T) {
 					SocketPath: "unix:/nonexistent/decoder.sock",
 					Manifest:   []byte(sharedManifest),
 				})
-				_, _, _ = s.FindByNameFor(owner, "shared-decoder")
-				_, _, _ = s.Find("tcp")
+				_, _ = s.FindByNameFor(owner, "shared-decoder")
+				_, _ = s.Find("tcp")
 				_, _ = s.GetPluginManifestFor(owner, "shared-decoder")
 				s.List()
 			}

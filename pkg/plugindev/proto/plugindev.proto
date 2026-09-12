@@ -220,6 +220,5 @@ message QualityStats {
   int32 correlated_inputs = 4;
   int32 long_packet_errors = 5;
   double entropy_estimate = 6;
-  double schema_versioned_ratio = 7;
-  int32 decode_errors = 8;
+  int32 decode_errors = 7;
 }

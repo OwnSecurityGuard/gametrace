@@ -83,7 +83,7 @@ func TestDispatcherPipeline_MultiInFlight(t *testing.T) {
 	}
 	defer conn.Close()
 
-	dispatcher, err := NewDispatcher(pb.NewDecoderClient(conn), "test-session", nil, nil)
+	dispatcher, err := NewDispatcher(pb.NewDecoderClient(conn), "test-session", nil)
 	if err != nil {
 		t.Fatalf("failed to create dispatcher: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestDispatcherPipeline_StreamErrorFailsPending(t *testing.T) {
 	}
 	defer conn.Close()
 
-	dispatcher, err := NewDispatcher(pb.NewDecoderClient(conn), "test-session", nil, nil)
+	dispatcher, err := NewDispatcher(pb.NewDecoderClient(conn), "test-session", nil)
 	if err != nil {
 		t.Fatalf("failed to create dispatcher: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestDispatcherPipeline_CloseFailsPending(t *testing.T) {
 	}
 	defer conn.Close()
 
-	dispatcher, err := NewDispatcher(pb.NewDecoderClient(conn), "test-session", nil, nil)
+	dispatcher, err := NewDispatcher(pb.NewDecoderClient(conn), "test-session", nil)
 	if err != nil {
 		t.Fatalf("failed to create dispatcher: %v", err)
 	}

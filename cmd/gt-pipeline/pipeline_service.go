@@ -18,7 +18,6 @@ import (
 	"gametrace/pkg/plugin"
 	"gametrace/pkg/probe"
 	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
-	"gametrace/pkg/schema"
 	"gametrace/pkg/store"
 )
 
@@ -97,20 +96,20 @@ func newPipelineService(workDir string, controlStore store.ControlStoreBackend, 
 // sessionID 被忽略。
 // postgres 模式：dbDSN 为共享 PG 连接串，sessionID 隔离该会话全部行。
 // 这样 DecodeRaw/Verify 等离线路径与 StartSession 在线路径共用同一路由逻辑。
-func (s *pipelineService) openSessionStore(sessionID, dbPath string, schemaReg *schema.Registry) (store.Store, error) {
+func (s *pipelineService) openSessionStore(sessionID, dbPath string) (store.Store, error) {
 	if store.IsPostgres(s.dbDriver) {
-		return store.OpenCaptureStore(s.dbDriver, s.dbDSN, schemaReg, sessionID)
+		return store.OpenCaptureStore(s.dbDriver, s.dbDSN, sessionID)
 	}
-	return store.OpenCaptureStore("sqlite", dbPath, schemaReg, sessionID)
+	return store.OpenCaptureStore("sqlite", dbPath, sessionID)
 }
 
 // openSessionStoreReadOnly 是 openSessionStore 的只读版本（供采样/校验场景，
 // 与运行中 writer 并发安全，且不回写会话库）。
-func (s *pipelineService) openSessionStoreReadOnly(sessionID, dbPath string, schemaReg *schema.Registry) (store.Store, error) {
+func (s *pipelineService) openSessionStoreReadOnly(sessionID, dbPath string) (store.Store, error) {
 	if store.IsPostgres(s.dbDriver) {
-		return store.OpenCaptureStoreReadOnly(s.dbDriver, s.dbDSN, schemaReg, sessionID)
+		return store.OpenCaptureStoreReadOnly(s.dbDriver, s.dbDSN, sessionID)
 	}
-	return store.OpenCaptureStoreReadOnly("sqlite", dbPath, schemaReg, sessionID)
+	return store.OpenCaptureStoreReadOnly("sqlite", dbPath, sessionID)
 }
 
 // 编译期断言：pipelineService 实现 capturecontrol.CaptureEngine 接口。
@@ -186,14 +185,14 @@ func (s *pipelineService) StartSession(ctx context.Context, req capturecontrol.S
 	}
 	dbPath := filepath.Join(sessionDir, "capture.sqlite")
 
-	st, err := s.openSessionStore(sessionID, dbPath, nil)
+	st, err := s.openSessionStore(sessionID, dbPath)
 	if err != nil {
 		return capturecontrol.StartSessionResult{}, fmt.Errorf("open store: %w", err)
 	}
 
 	startTime := time.Now()
 
-	// 获取插件 manifest 快照，用于 MCP 层查询两层契约声明（Schema/State）。
+	// 获取插件 manifest 快照，供 MCP 层查询插件语义契约声明（semantic_rules）。
 	// owner 作用域查找：调用方（gt-mcp）自己的插件可见，匿名（系统）插件兜底。
 	var manifestSnapshot string
 	if manifestBytes, err := s.registry.GetPluginManifestFor(auth.OwnerFrom(ctx), req.Plugin); err == nil && len(manifestBytes) > 0 {

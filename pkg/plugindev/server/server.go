@@ -200,7 +200,6 @@ func mapVerifyResult(v *pb.VerifyResult) *plugindev.VerifyResult {
 			CorrelatedInputs:     int(q.GetCorrelatedInputs()),
 			LongPacketErrors:     int(q.GetLongPacketErrors()),
 			EntropyEstimate:      q.GetEntropyEstimate(),
-			SchemaVersionedRatio: q.GetSchemaVersionedRatio(),
 			DecodeErrors:         int(q.GetDecodeErrors()),
 		}
 	}

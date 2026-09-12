@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -25,10 +24,10 @@ func (s *SQLiteStore) AppendEvents(ctx context.Context, events []*event.Event) e
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO events (
-			id, session_id, type, schema_id, source, timestamp,
+			id, session_id, type, source, timestamp,
 			causation_id, correlation_id, origin_id, parent_id, context, payload, created_at,
 			scenario_id, replay_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare stmt: %w", err)
@@ -80,7 +79,6 @@ func (s *SQLiteStore) AppendEvents(ctx context.Context, events []*event.Event) e
 			string(e.Identity.ID),
 			e.Identity.SessionID,
 			string(e.Identity.Type),
-			e.Identity.SchemaID,
 			string(e.Identity.Source),
 			timestamp,
 			causationID,
@@ -113,8 +111,8 @@ func (s *SQLiteStore) AppendEvents(ctx context.Context, events []*event.Event) e
 // appendEventIndex 写入 event_index 投影索引表。
 func (s *SQLiteStore) appendEventIndex(ctx context.Context, tx *sql.Tx, events []*event.Event) error {
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO event_index (event_id, session_id, type, timestamp, flow_id, direction, conn_id, correlation_id, projection_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO event_index (event_id, session_id, type, timestamp, flow_id, direction, conn_id, correlation_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -122,12 +120,6 @@ func (s *SQLiteStore) appendEventIndex(ctx context.Context, tx *sql.Tx, events [
 	defer stmt.Close()
 
 	for _, e := range events {
-		proj := extractProjection(e, s.schemaReg)
-		projJSON, err := json.Marshal(proj)
-		if err != nil {
-			return err
-		}
-
 		var flowID, direction, connID, correlationID sql.NullString
 		if e.Context.FlowID != "" {
 			flowID = sql.NullString{String: e.Context.FlowID, Valid: true}
@@ -151,7 +143,6 @@ func (s *SQLiteStore) appendEventIndex(ctx context.Context, tx *sql.Tx, events [
 			direction,
 			connID,
 			correlationID,
-			string(projJSON),
 		)
 		if err != nil {
 			return err

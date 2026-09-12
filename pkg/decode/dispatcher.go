@@ -8,10 +8,9 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 	"gametrace/pkg/capture"
 	"gametrace/pkg/event"
-	"gametrace/pkg/schema"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
 )
 
 // ErrDispatcherClosed 在流已关闭后提交请求时返回。
@@ -112,7 +111,6 @@ type Dispatcher struct {
 
 	pending      map[string]*pendingInput
 	causationIdx *causationIndex
-	schemaReg    *schema.Registry
 
 	serverPort int // 服务端端口提示，用于方向推断（如游戏服 8989）
 }
@@ -130,10 +128,7 @@ func WithServerPort(port int) DispatcherOption {
 // NewDispatcher 创建解码分发器。logger 用于记录 _fields 校验警告等业务降级信息。
 // sessionID 會被寫入產出事件的 Identity.SessionID，應使用真實的 capture session ID。
 // 错误通过 return 传递，由调用方记录日志（避免重复记录）。
-func NewDispatcher(client pb.DecoderClient, sessionID string, logger *slog.Logger, schemaReg *schema.Registry, opts ...DispatcherOption) (*Dispatcher, error) {
-	if schemaReg == nil {
-		schemaReg = schema.NewRegistry()
-	}
+func NewDispatcher(client pb.DecoderClient, sessionID string, logger *slog.Logger, opts ...DispatcherOption) (*Dispatcher, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -151,7 +146,6 @@ func NewDispatcher(client pb.DecoderClient, sessionID string, logger *slog.Logge
 		streamDone:   make(chan struct{}),
 		pending:      make(map[string]*pendingInput),
 		causationIdx: newCausationIndex(1024),
-		schemaReg:    schemaReg,
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -316,14 +310,6 @@ func (d *Dispatcher) convertResultsToEvents(req *pb.DecodeRequest, results []*pb
 			analysisValue = a
 		}
 
-		schemaID := r.SchemaId
-		if schemaID != "" {
-			if _, ok := d.schemaReg.Lookup(schemaID); !ok {
-				d.logger.Warn("schema not registered, falling back to unknown.v1", "schema_id", schemaID)
-				schemaID = "unknown.v1"
-			}
-		}
-
 		ctx := event.EventContext{
 			FlowID:         req.FlowId,
 			RawPacketID:    req.PacketId,
@@ -339,7 +325,6 @@ func (d *Dispatcher) convertResultsToEvents(req *pb.DecodeRequest, results []*pb
 		ev := event.NewEventWithTime(
 			d.sessionID,
 			event.EventType(r.EventType),
-			schemaID,
 			event.SourceID(req.ProtocolHint),
 			payloadValue,
 			time.Unix(0, req.TimestampNs),

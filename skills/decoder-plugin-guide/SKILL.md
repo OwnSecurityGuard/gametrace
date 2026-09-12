@@ -117,7 +117,7 @@ plugins/<protocol>-decoder/
 ├── main.go         # 入口：RunRegisterLoopWithOptions + loadDotEnv(".env")
 ├── decode.go       # 核心：Decode(req) → []*Event
 ├── <fmt>.go        # 负载解析器（解压/解帧/解文本）
-├── plugin.yaml     # manifest：schemas + semantic_rules
+├── plugin.yaml     # manifest：semantic_rules
 ├── .env.example    # 连接配置模板：复制为 .env 后调 get_registry_addr 自动回填地址，仅 token 手填（见步骤 0）
 ├── <fmt>_test.go   # 解析器单测
 └── decode_test.go  # 全链路解码测试 + manifest 一致性
@@ -186,7 +186,6 @@ func (d *decoder) decodePacket(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2
 		if err := stream.Send(&pb.DecodeResponseV2{
 			InputId:        req.GetInputId(),
 			EventType:      e.EventType,
-			SchemaId:       e.SchemaID,
 			PayloadMsgpack: mp,
 			MetaMsgpack:    metaData,
 			CorrelationKey: e.CorrelationKey,
@@ -208,7 +207,6 @@ func (d *decoder) decodePacket(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2
 // Event 是一条解码结果。
 type Event struct {
 	EventType      string         // 形如 "<protocol>.<msg_type>"，如 "wesnoth.login"
-	SchemaID       string         // 对应 plugin.yaml schemas[].id，如 "wesnoth.message"
 	Payload        map[string]any // 业务字段（payload 根对象），纯业务，不带平台字段
 	Meta           map[string]any // 元信息（direction 等），前端「元信息」弹窗展示
 	CorrelationKey string         // 会话标识：seg.Flow.Canonical()，宿主按连接配对
@@ -318,7 +316,7 @@ func (d *decoder) Decode(req *pb.DecodeRequest) (events []*Event, err error) {
 
 - 每个字段都能在协议中找到出处（属性名 + 值）。
 - 协议中不存在的字段（推导值、平台时间戳、内部 ID、原文副本）一律**不进 Payload**。
-- 原始文本等辅助信息：默认进 **Meta**；仅当用户明确要求保留原文时，才以 `_raw` 字段进入 schema（声明 `optional: true`）并截断上限（如 8KB）。
+- 原始文本等辅助信息：默认进 **Meta**；仅当用户明确要求保留原文时，才以 `_raw` 字段进入 Payload 并截断上限（如 8KB）。
 
 #### 4.3 解析实现要点（以 wesnoth simple_wml 为例，通用）
 
@@ -343,17 +341,6 @@ hints:
   - port:12345
 capabilities:
   decode: true
-  schema: true
-schemas:
-  - id: foo.message
-    version: 1
-    name: Foo message
-    strict: false
-    fields:
-      msg_type:
-        type: string
-        queryable: true
-        description: 消息类型（第一个子 tag 名）
 semantic_rules:
   - id: foo.name_msg
     when:
@@ -364,10 +351,9 @@ semantic_rules:
       key: msg_type
 ```
 
-- `schemas` 必须显式声明 `strict`（true/false），字段类型用受控枚举（string/int/bool/...）。
 - `semantic_rules` 是接入平台语义能力的入口，effect 闭集 4 类：`name`（消息名→`meta.msg_name`）、`annotate`（角色标签→`meta.semantic`）、`pair`（请求/响应配对→`correlation_id`+`causation_id`）、`extract`（父事件拆子事件→子事件 `parent_id` 指父）。接入要点见下节。
 - `hints` 帮助平台匹配：传输层、压缩、定界方式、端口。
-- 注册前宿主会校验 manifest；规则或 schema 校验失败会在宿主日志输出（`semantic rules:` 前缀），注意查看。
+- 注册前宿主会校验 manifest；规则校验失败会在宿主日志输出（`semantic rules:` 前缀），注意查看。
 
 #### 5.1 语义规则接入（semantic_rules）——复用平台的配对/父子能力
 
@@ -413,7 +399,7 @@ semantic_rules:
 ```
 
 **④ `extract` —— 父子关系（一个网络消息承载多个逻辑子事件）**：
-一个帧的 payload 里含数组/对象，每个元素是一个独立的逻辑子事件（如世界快照下的多个实体状态）。`source` 指向该数组（每元素一子事件）或对象（单子事件）；`child` 声明子事件类型与 schema（必须已在 `schemas` 声明）。拆出的子事件**继承父的连接等来源字段，`parent_id` 指向父事件**，并继承父的 `correlation_id`；前端按父子层级折叠展示。
+一个帧的 payload 里含数组/对象，每个元素是一个独立的逻辑子事件（如世界快照下的多个实体状态）。`source` 指向该数组（每元素一子事件）或对象（单子事件）；`child` 声明子事件的事件类型（event_type）。拆出的子事件**继承父的连接等来源字段，`parent_id` 指向父事件**，并继承父的 `correlation_id`；前端按父子层级折叠展示。
 
 ```yaml
 - id: foo.extract_ents
@@ -423,7 +409,6 @@ semantic_rules:
     source: ents                                        # 数组路径，如 godot_ecs.state 的 ents
     child:
       event_type: entity_snapshot
-      schema_id: foo.entity_snapshot                    # 需在 schemas 里声明对应子 schema
 ```
 
 **规则通用约束**（不满足会在注册期校验报错，留意宿主 `semantic rules:` 日志）：
@@ -446,7 +431,7 @@ semantic_rules:
 5. 畸形输入：非法长度、截断、压缩损坏 → 不 panic、不无限循环。
 6. **多连接**：两条独立连接互不干扰，correlation_key 不同。
 7. **5-tuple 复用（重连，TCP）**：SYN 后新连接握手被再次正确消费（回归坑 1/坑 2）。
-8. manifest 一致性：解出的 payload 字段都在 schema 中声明。
+8. manifest 一致性：`semantic_rules` 引用的 payload 路径（`when.path`/`effect.key`/`effect.source`）能实际解析，无死规则。
 9. **Payload 纯度**：断言 payload 中不含协议外字段（对照 4.2 硬约束）。
 
 固件构造用 `gopacket` 拼以太网 + IPv4 + TCP 帧，使 `framing.ExtractL7` 能读出端口（用于方向判定）；测试内对压缩负载直接预压缩后写入。

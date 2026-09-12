@@ -176,8 +176,7 @@ message VerifyQuality {
   int64 correlated_inputs = 4;
   int64 long_packet_errors = 5;
   double entropy_estimate = 6;
-  double schema_versioned_ratio = 7;
-  int64 decode_errors = 8;
+  int64 decode_errors = 7;
 }
 
 // VerifyResponse 验证结论：violations + quality + verdict，外加溯源字段。

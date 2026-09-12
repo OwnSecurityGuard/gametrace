@@ -14,7 +14,6 @@ package quality
 
 import (
 	"math"
-	"regexp"
 
 	sdkcontract "github.com/OwnSecurityGuard/gt-plugin-sdk/contract"
 
@@ -29,25 +28,20 @@ type DecodeIO struct {
 	InputID     string // echoed input_id (raw_packet_id in practice)
 	Done        bool   // final response flag
 	EventType   string // first emitted event_type, "" if none
-	SchemaID    string // first emitted schema_id, "" if none
 	PayloadLen  int    // len of the emitted payload (non-empty check)
 	DecodeError string // non-empty => the response carried a decode error
 	Correlated  bool   // any emitted event carried a correlation_key
 	Payload     []byte // undecoded bytes, only for the entropy estimate
 }
 
-// versionSuffix matches a ".vN" schema version suffix, e.g. game.login.v1.
-var versionSuffix = regexp.MustCompile(`\.[vV]\d+$`)
-
 // packetAgg folds every DecodeIO belonging to one input packet into a single
 // verdict-relevant record. A packet normally produces N event responses plus a
 // terminating done-response; counting those separately would report the empty
-// done-response as an "unknown" packet and halve the versioned-schema ratio.
+// done-response as an "unknown" packet.
 type packetAgg struct {
 	decodeErr  bool     // any response for this packet carried a decode error
-	hasEvent   bool     // any response emitted an event_type/schema_id
+	hasEvent   bool     // any response emitted an event_type
 	correlated bool     // any emitted event carried a correlation key
-	versioned  bool     // any emitted schema_id had a .vN suffix
 	payloads   [][]byte // raw bytes seen, for the entropy estimate
 }
 
@@ -62,7 +56,7 @@ func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
 	}
 
 	// 1) 单消息协议自洽检查。SDK v0.7.0 移除了运行时层 CheckDecodeResponse，
-	// 其有效语义在此保留：非终止响应必须携带 event_type / schema_id / 非空 payload。
+	// 其有效语义在此保留：非终止响应必须携带 event_type / 非空 payload。
 	// （旧版 input_id 回显检查在本语料构造下恒真，无需保留。）
 	viol := map[string]*plugindev.Violation{}
 	var order []string
@@ -74,8 +68,6 @@ func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
 		switch {
 		case io.EventType == "":
 			ruleID, msg = "payload-non-empty", "non-final response requires event_type"
-		case io.SchemaID == "":
-			ruleID, msg = "payload-non-empty", "non-final response requires schema_id"
 		case io.PayloadLen == 0:
 			ruleID, msg = "payload-non-empty", "non-final response requires non-empty payload_msgpack"
 		default:
@@ -117,14 +109,11 @@ func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
 		if io.DecodeError != "" {
 			a.decodeErr = true
 		}
-		if io.EventType != "" || io.SchemaID != "" {
+		if io.EventType != "" {
 			a.hasEvent = true
 		}
 		if io.Correlated {
 			a.correlated = true
-		}
-		if versionSuffix.MatchString(io.SchemaID) {
-			a.versioned = true
 		}
 		if len(io.Payload) > 0 {
 			a.payloads = append(a.payloads, io.Payload)
@@ -135,7 +124,7 @@ func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
 	}
 
 	q.TotalInputs = len(agg)
-	var unknown, correlated, decodeErrors, versioned int
+	var unknown, correlated, decodeErrors int
 	var entropySum float64
 	entropyN := 0
 	for _, a := range agg {
@@ -149,9 +138,6 @@ func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
 		if a.correlated {
 			correlated++
 		}
-		if a.versioned {
-			versioned++
-		}
 		for _, p := range a.payloads {
 			entropySum += shannonBits(p)
 			entropyN++
@@ -162,10 +148,6 @@ func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
 	q.DecodeErrors = decodeErrors
 	if q.TotalInputs > 0 {
 		q.UnknownRatio = float64(unknown) / float64(q.TotalInputs)
-		withSchema := q.TotalInputs - decodeErrors
-		if withSchema > 0 {
-			q.SchemaVersionedRatio = float64(versioned) / float64(withSchema)
-		}
 	}
 	if entropyN > 0 {
 		q.EntropyEstimate = entropySum / float64(entropyN)
@@ -205,13 +187,11 @@ func verdict(res *plugindev.VerifyResult, q *plugindev.QualityStats) string {
 	// High entropy + majority undecodable looks encrypted/compressed.
 	suspectEnc := q.UnknownRatio >= plugindev.EncryptionUnknownRatioThreshold &&
 		q.EntropyEstimate >= plugindev.HighEntropyThreshold
-	// Low schema versioning is a quality smell (schema-id-versioned rule).
-	lowVersioning := q.TotalInputs > 0 && q.SchemaVersionedRatio < 0.5
 
 	if hasErr || allErrored || allUnknown {
 		return "fail"
 	}
-	if hasWarn || suspectEnc || lowVersioning {
+	if hasWarn || suspectEnc {
 		return "warn"
 	}
 	return "pass"

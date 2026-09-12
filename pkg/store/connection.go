@@ -93,6 +93,57 @@ type ConnectionFrame struct {
 	Payload   []byte    `json:"payload"`
 }
 
+// EventCaptureContextRow 是事件捕获上下文计算的一行输入（无 payload 解码）。
+// 来自 events JOIN event_index 的轻量查询，仅代理抓包（conn_id 非空）的事件命中。
+type EventCaptureContextRow struct {
+	ID            string
+	Source        string
+	ConnID        string
+	CorrelationID string
+}
+
+// EventCaptureContextQuerier 由 gt-mcp 用于计算每个事件的连接/流序号
+//（Capture Context）。SQLiteStore 与 PGStore 均实现，各自使用对应方言占位符。
+// 此前该查询在 gt-mcp 侧以 SQLite 的 "?" 占位符手写，PG 模式下必然失败，
+// 导致 capture 字段缺失——下沉到 store 层统一管理方言。
+type EventCaptureContextQuerier interface {
+	QueryEventCaptureContext(ctx context.Context, sessionID string) ([]EventCaptureContextRow, error)
+}
+
+// QueryEventCaptureContext 返回事件捕获上下文输入行（时间倒序）。
+// event_index 仅含 conn_id 非空的事件（代理抓包 / 已派生连接标识的包），
+// 网卡抓包会话无命中时返回空 slice。
+func (s *SQLiteStore) QueryEventCaptureContext(ctx context.Context, sessionID string) ([]EventCaptureContextRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e.id, e.context, ei.conn_id, COALESCE(ei.correlation_id, '')
+		FROM events e
+		JOIN event_index ei ON ei.event_id = e.id
+		WHERE e.session_id = ? AND ei.conn_id IS NOT NULL AND ei.conn_id != ''
+		ORDER BY ei.timestamp DESC`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query event capture context: %w", err)
+	}
+	defer rows.Close()
+
+	list := make([]EventCaptureContextRow, 0, 64)
+	for rows.Next() {
+		var r EventCaptureContextRow
+		var contextBytes []byte
+		if err := rows.Scan(&r.ID, &contextBytes, &r.ConnID, &r.CorrelationID); err != nil {
+			return nil, err
+		}
+		// context 只承载 flow/raw_packet_id/conn_id/source 等小字段，解码成本远低于 payload；
+		// 解码失败按空 source 容错（旧数据兼容）。
+		if ec, err := event.UnmarshalContextMsgpack(contextBytes); err == nil {
+			r.Source = ec.Source
+		}
+		list = append(list, r)
+	}
+	return list, rows.Err()
+}
+
 // QueryConnections 按 conn_id 聚合返回连接列表（最新在前）。
 // 数据主源为 raw_packets（原始帧，连接必然有帧）；event_index 仅用于补充解码事件统计。
 // capture.sqlite 为单 session 库，raw_packets 无 session_id 列，故仅按 conn_id 分组。
@@ -308,7 +359,7 @@ func (s *SQLiteStore) QueryConnectionDetail(ctx context.Context, sessionID, conn
 // QueryConnectionEvents 查询连接内全部解码事件（时间正序）。
 func (s *SQLiteStore) QueryConnectionEvents(ctx context.Context, sessionID, connID string, limit, offset int) ([]*event.Event, error) {
 	query := `
-		SELECT e.id, e.session_id, e.type, e.schema_id, e.source, e.timestamp,
+		SELECT e.id, e.session_id, e.type, e.source, e.timestamp,
 		       e.causation_id, e.correlation_id, e.origin_id, e.parent_id, e.context, e.payload` + s.eventSelectSuffix() + `
 		FROM events e
 		JOIN event_index ei ON ei.event_id = e.id
@@ -394,6 +445,7 @@ func (s *SQLiteStore) QueryConnectionStreams(ctx context.Context, sessionID, con
 }
 
 // QueryConnectionFrames 查询连接内的原始帧（时间正序），方向从 metadata 还原。
+// capture.sqlite 为单 session 库，无需 session_id 边界；帧本身就带 conn_id。
 func (s *SQLiteStore) QueryConnectionFrames(ctx context.Context, connID string, limit, offset int) ([]ConnectionFrame, error) {
 	query := `
 		SELECT id, timestamp, src, dst, protocol, payload, link_type, metadata
@@ -401,10 +453,26 @@ func (s *SQLiteStore) QueryConnectionFrames(ctx context.Context, connID string, 
 		WHERE conn_id = ?
 		ORDER BY timestamp ASC`
 	query, args := applyLimitOffset(query, []any{connID}, limit, offset)
+	return s.scanFrames(ctx, query, args...)
+}
 
+// QuerySessionFrames 查询会话内的全部原始帧（时间正序）——「原始数据」视图
+// 在「全部连接」下展示整个会话的帧（跨连接按时间交错）。capture.sqlite 为
+// 单 session 库，raw_packets 无 session_id 列，故不加边界直接全量返回。
+func (s *SQLiteStore) QuerySessionFrames(ctx context.Context, sessionID string, limit, offset int) ([]ConnectionFrame, error) {
+	query := `
+		SELECT id, timestamp, src, dst, protocol, payload, link_type, metadata
+		FROM raw_packets
+		ORDER BY timestamp ASC`
+	query, args := applyLimitOffset(query, nil, limit, offset)
+	return s.scanFrames(ctx, query, args...)
+}
+
+// scanFrames 执行帧查询 SQL 并扫描为 ConnectionFrame（方向从 metadata 还原）。
+func (s *SQLiteStore) scanFrames(ctx context.Context, query string, args ...any) ([]ConnectionFrame, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query connection frames: %w", err)
+		return nil, fmt.Errorf("query frames: %w", err)
 	}
 	defer rows.Close()
 

@@ -24,6 +24,8 @@
 # 因此 `docker compose up -d` 等价于从零重建服务；要连带强制重建容器
 # （镜像 ID 恰好没变时）补一个 --force-recreate：
 #   docker compose up -d --force-recreate
+# 避免"以为改了代码却还在跑老版本"的完整用法（构建+部署+核验运行版本）：
+#   make deploy        # 推荐：一键做上面全流程，结尾打印各服务 -version 供核对
 # 两个服务共用同一构建定义（x-build 锚点）。
 #
 # 端口策略：容器内端口拓扑不变（9888/9091/9092/8781）；宿主侧映射端口默认
@@ -48,8 +50,19 @@ x-build: &server-build
   # 探针 4 平台编译开关：默认 1（osxcross 交叉编译 darwin/amd64 + darwin/arm64，
   # 见 Dockerfile；SDK 下载/编译失败会自动退化为 linux+windows 并 WARN）。
   # 网络受限环境可设 0 跳过，darwin 探针由 macOS 宿主 make build-agents 补充。
+  #
+  # 版本戳：把宿主 git 的版本埋进镜像二进制（-version 输出），避免"看不出跑的是
+  # 不是新版本"。不设时退回 Dockerfile 默认 dev/unknown（BuildTime 为空则不展示）。
+  # 推荐用 `make deploy` 一键构建+部署+核验（自动填这三个变量）；手动等价命令：
+  #   $env:GT_VERSION=(git describe --tags --always --dirty); `
+  #   $env:GT_GIT_COMMIT=(git rev-parse --short HEAD); `
+  #   $env:GT_BUILD_TIME=(Get-Date -AsUtc -Format o); `
+  #   docker compose up -d --build --force-recreate
   args:
     BUILD_DARWIN_AGENT: ${GT_BUILD_DARWIN_AGENT:-1}
+    VERSION: ${GT_VERSION:-dev}
+    GIT_COMMIT: ${GT_GIT_COMMIT:-unknown}
+    BUILD_TIME: ${GT_BUILD_TIME:-}
 
 services:
   postgres:

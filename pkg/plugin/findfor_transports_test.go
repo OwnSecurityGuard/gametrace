@@ -28,10 +28,10 @@ transports:
 		t.Fatalf("register udp decoder: %v", err)
 	}
 
-	if _, _, ok := s.FindFor("", "udp"); !ok {
+	if _, ok := s.FindFor("", "udp"); !ok {
 		t.Fatal("FindFor(udp) should match plugin declaring transports:[udp]")
 	}
-	if _, _, ok := s.FindFor("", "tcp"); ok {
+	if _, ok := s.FindFor("", "tcp"); ok {
 		t.Fatal("FindFor(tcp) must not match a udp-only plugin")
 	}
 }

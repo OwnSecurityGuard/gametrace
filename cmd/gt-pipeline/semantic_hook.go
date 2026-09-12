@@ -97,6 +97,7 @@ func (e *semanticEngine) refreshRules(owner, name string) {
 		}
 	}
 	e.setRules(m.SemanticRules)
+	e.logger.Info("semantic rules refreshed", "plugin", name, "owner", owner, "rules", len(m.SemanticRules))
 }
 
 func (e *semanticEngine) setRules(rules []rule.Rule) {
@@ -116,6 +117,9 @@ func (e *semanticEngine) getRules() []rule.Rule {
 func (e *semanticEngine) enrichSemantics(ev *event.Event) []*event.Event {
 	rules := e.getRules()
 	if len(rules) == 0 || ev == nil {
+		if ev != nil {
+			e.logger.Debug("semantic: no rules to evaluate", "event_id", ev.Identity.ID, "event_type", ev.Identity.Type)
+		}
 		return nil
 	}
 
@@ -132,11 +136,29 @@ func (e *semanticEngine) enrichSemantics(ev *event.Event) []*event.Event {
 		e.logger.Warn("semantic: evaluate", "event_id", ev.Identity.ID, "error", err)
 		return nil
 	}
+	// 诊断：观测 Evaluate 是否产出 name/semantic，以及写入后 meta 是否含 msg_name。
+	e.logger.Info("semantic eval",
+		"event_id", ev.Identity.ID,
+		"event_type", ev.Identity.Type,
+		"n_rules", len(rules),
+		"n_names", len(res.Names),
+		"names", func() []string { out := make([]string, 0, len(res.Names)); for _, n := range res.Names {
+			out = append(out, n.Value)
+		}; return out }(),
+		"n_sems", len(res.Semantics),
+	)
 
 	e.applyMsgNames(ev, res.Names)
 	e.applySemantics(ev, res.Semantics)
 	e.applyPairs(ev, res.Pairs)
-	return e.buildChildren(ev, res.Children)
+	children := e.buildChildren(ev, res.Children)
+
+	if mn, ok := ev.Meta.Get("msg_name"); ok {
+		e.logger.Info("semantic msg_name set", "event_id", ev.Identity.ID, "msg_name", mn.String())
+	} else {
+		e.logger.Info("semantic msg_name absent", "event_id", ev.Identity.ID)
+	}
+	return children
 }
 
 // withMetaObject 把独立的 Meta（新模型）并进求值视图的 _meta 键。
@@ -302,7 +324,6 @@ func (e *semanticEngine) buildChildren(parent *event.Event, children []rule.Chil
 			Identity: event.NewIdentity(
 				parent.Identity.SessionID,
 				event.EventType(c.EventType),
-				c.SchemaID,
 				parent.Identity.Source,
 			),
 			Trace: event.TraceContext{
@@ -310,7 +331,7 @@ func (e *semanticEngine) buildChildren(parent *event.Event, children []rule.Chil
 				OriginID:      parent.Identity.ID,
 			},
 			Context: parent.Context,
-			Payload: event.Payload{SchemaID: c.SchemaID, Value: val},
+			Payload: event.Payload{Value: val},
 		}
 		child.Identity.ParentID = parent.Identity.ID
 		out = append(out, child)

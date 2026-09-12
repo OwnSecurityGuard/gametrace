@@ -18,7 +18,7 @@ export default defineConfig({
         target: "http://localhost:8781",
         changeOrigin: true,
       },
-      // 自助注册（/access/register）：新用户免邀请获取身份，设置弹窗直连。
+      // 自助注册（/access/register）：新用户直接注册获取身份，设置弹窗直连。
       "/access": {
         target: "http://localhost:8781",
         changeOrigin: true,

@@ -53,7 +53,7 @@ func validateConfig(cfg any) error {
 func newSource(cfg any) (capture.Source, error) {
 	c := cfg.(PcapLiveConfig)
 	if c.SnapLen == 0 {
-		c.SnapLen = 1600
+		c.SnapLen = 262144
 	}
 	s := &pcapLiveSource{
 		cfg: c,

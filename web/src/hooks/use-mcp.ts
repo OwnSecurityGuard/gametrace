@@ -4,7 +4,7 @@ import { mcpClient } from "@/lib/mcp-client";
 import { useAuthToken } from "@/hooks/use-auth";
 import { withTokenParam, notifyAuthError, wasRecentlyUnauthorized } from "@/lib/auth";
 import type { ListSessionsResult } from "@/types/session";
-import type { ListDecodedDataResult, CaptureSchemaResult } from "@/types/event";
+import type { ListDecodedDataResult } from "@/types/event";
 import type {
   QueryStateChangesResult,
   StateChangeDetailResult,
@@ -87,7 +87,7 @@ export function useSessions() {
 /** 查询指定 session 的解码数据 */
 export function useDecodedData(
   sessionId: string | null,
-  options: { limit?: number; offset?: number; filter?: string },
+  options: { limit?: number; offset?: number; filter?: string; connId?: string | null },
 ) {
   return useQuery({
     queryKey: ["decodedData", sessionId, options],
@@ -97,6 +97,7 @@ export function useDecodedData(
         limit: options.limit,
         offset: options.offset,
         filter: options.filter,
+        conn_id: options.connId ?? undefined,
       }),
     enabled: !!sessionId,
     placeholderData: keepPreviousData, // 翻页/筛选时不闪骨架屏，沿用上一页数据
@@ -188,18 +189,7 @@ export function useStateChangeDetail(
   });
 }
 
-/** 查询指定 session 的 schema 信息 */
-export function useCaptureSchema(sessionId: string | null) {
-  return useQuery({
-    queryKey: ["schema", sessionId],
-    queryFn: () =>
-      mcpClient.callTool<CaptureSchemaResult>("get_capture_schema", {
-        session_id: sessionId ?? undefined,
-      }),
-    enabled: !!sessionId,
-    staleTime: 5 * 60_000, // schema 变化不频繁，缓存 5 分钟
-  });
-}
+
 
 /** 查询指定 session 的原始包 */
 export function useRawPackets(
@@ -553,7 +543,7 @@ export function useSetSessionProject() {
   });
 }
 
-/** add_project_member：向项目添加成员。pending=true 表示用户名尚未注册（预邀请，对方注册同名后生效）。 */
+/** add_project_member：向项目添加成员。pending=true 表示用户名尚未注册（待注册，对方注册同名后生效）。 */
 export function useAddProjectMember(projectId?: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -780,24 +770,25 @@ export function useConnectionStreams(
   });
 }
 
-/** list_connection_frames：查询连接内的原始帧（Frames / Raw）。 */
+/** list_connection_frames：查询连接内的原始帧（Frames / Raw）。
+ * connId 为 null 指「全部连接」——返回整个会话的帧（conn_id 传空串）。 */
 export function useConnectionFrames(
   sessionId: string | null,
   connId: string | null,
   options: { limit?: number; offset?: number },
 ) {
   return useQuery({
-    queryKey: ["connectionFrames", sessionId, connId, options],
+    queryKey: ["connectionFrames", sessionId, connId ?? "", options],
     queryFn: () =>
       mcpClient.callTool<ListConnectionFramesResult>("list_connection_frames", {
         session_id: sessionId ?? undefined,
-        conn_id: connId!,
+        conn_id: connId ?? "",
         limit: options.limit ?? 100,
         offset: options.offset ?? 0,
       }),
-    enabled: !!sessionId && !!connId,
+    enabled: !!sessionId,
     placeholderData: keepPreviousData,
-    refetchInterval: sessionId && connId ? 2000 : false,
+    refetchInterval: sessionId ? 2000 : false,
   });
 }
 
@@ -941,7 +932,7 @@ export function useCreateAccessCode() {
   });
 }
 
-/** list_users：列出邀请制用户（仅 global admin；非 admin 调用会抛错，由调用方降级隐藏）。 */
+/** list_users：列出注册制用户（仅 global admin；非 admin 调用会抛错，由调用方降级隐藏）。 */
 export function useListUsers() {
   return useQuery({
     queryKey: ["users"],
@@ -950,7 +941,7 @@ export function useListUsers() {
   });
 }
 
-/** revoke_user：撤销邀请制用户（删除 users 行，token 即时失效；仅 global admin）。 */
+/** revoke_user：撤销注册制用户（删除 users 行，token 即时失效；仅 global admin）。 */
 export function useRevokeUser() {
   const queryClient = useQueryClient();
   return useMutation({

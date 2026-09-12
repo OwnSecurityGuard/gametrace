@@ -51,21 +51,21 @@ func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyR
 		return capturecontrol.VerifyResult{}, fmt.Errorf("session %s not found or has no db_path", req.SessionID)
 	}
 
-	client, schemaReg, ok := s.registry.FindByNameFor(auth.OwnerFrom(ctx), req.Plugin)
+	client, ok := s.registry.FindByNameFor(auth.OwnerFrom(ctx), req.Plugin)
 	if !ok {
-		client, schemaReg, ok = s.registry.FindFor(auth.OwnerFrom(ctx), req.Plugin)
+		client, ok = s.registry.FindFor(auth.OwnerFrom(ctx), req.Plugin)
 	}
 	if !ok {
 		return capturecontrol.VerifyResult{}, fmt.Errorf("plugin %s not found or not a decoder", req.Plugin)
 	}
 
-	st, err := s.openSessionStoreReadOnly(req.SessionID, meta.DBPath, schemaReg)
+	st, err := s.openSessionStoreReadOnly(req.SessionID, meta.DBPath)
 	if err != nil {
 		return capturecontrol.VerifyResult{}, fmt.Errorf("open store: %w", err)
 	}
 	defer st.Close()
 
-	dispatcher, err := decode.NewDispatcher(client, req.SessionID, logger, schemaReg, decode.WithServerPort(meta.Port))
+	dispatcher, err := decode.NewDispatcher(client, req.SessionID, logger, decode.WithServerPort(meta.Port))
 	if err != nil {
 		return capturecontrol.VerifyResult{}, fmt.Errorf("new dispatcher: %w", err)
 	}
@@ -147,7 +147,6 @@ func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyR
 			CorrelatedInputs:     q.CorrelatedInputs,
 			LongPacketErrors:     q.LongPacketErrors,
 			EntropyEstimate:      q.EntropyEstimate,
-			SchemaVersionedRatio: q.SchemaVersionedRatio,
 			DecodeErrors:         q.DecodeErrors,
 		}
 	}
@@ -182,8 +181,8 @@ func (s *pipelineService) SampleBytes(ctx context.Context, req capturecontrol.Sa
 		maxBytes = sampleBytesHardCapBytes
 	}
 
-	// 只读打开；schemaReg 取默认空 registry（仅读 raw_packets，无需 schema）。
-	st, err := s.openSessionStoreReadOnly(req.SessionID, meta.DBPath, nil)
+	// 只读打开（仅读 raw_packets）。
+	st, err := s.openSessionStoreReadOnly(req.SessionID, meta.DBPath)
 	if err != nil {
 		return capturecontrol.SampleBytesResult{}, fmt.Errorf("open store: %w", err)
 	}
@@ -280,7 +279,6 @@ func decodeIOsFromResult(r rawDecodeResult) []quality.DecodeIO {
 			InputID:    r.RawID,
 			Done:       false,
 			EventType:  string(ev.Identity.Type),
-			SchemaID:   ev.Payload.SchemaID,
 			PayloadLen: 1, // 事件存在即代表响应带非空 payload
 			Correlated: ev.Trace.CorrelationID != "",
 		})
@@ -369,9 +367,8 @@ func (c *semCollector) checkEvent(m *sdk.Manifest, ev *event.Event) {
 		return
 	}
 	d := &sdkevent.Draft{
-		Type:      sdkevent.EventType(ev.Identity.Type),
-		SchemaRef: ev.Payload.SchemaID,
-		Value:     v,
+		Type:  sdkevent.EventType(ev.Identity.Type),
+		Value: v,
 	}
 	c.addReport(sdkcontract.NewPluginChecker().CheckEvent(m, d))
 }

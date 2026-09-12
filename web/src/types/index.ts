@@ -7,7 +7,7 @@ export type {
   DeregisterPluginResult,
   StartCaptureResult,
 } from "./registered-plugin";
-export type { DecodedEvent, ListDecodedDataResult, SchemaColumn, SchemaSource, SchemaRule, CaptureSchemaResult } from "./event";
+export type { DecodedEvent, ListDecodedDataResult } from "./event";
 export type { TestEventLite, TestErrorLite, TestPluginResult, TestPluginVars } from "./plugin-test";
 export type {
   SessionStatusResult,

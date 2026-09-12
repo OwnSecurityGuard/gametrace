@@ -35,7 +35,6 @@ type QualityView struct {
 	CorrelatedInputs     int
 	LongPacketErrors     int
 	EntropyEstimate      float64
-	SchemaVersionedRatio float64
 	DecodeErrors         int
 }
 
@@ -119,7 +118,6 @@ func (s *Server) Verify(ctx context.Context, req *pb.VerifyRequest) (*pb.VerifyR
 		CorrelatedInputs:     int64(res.Quality.CorrelatedInputs),
 		LongPacketErrors:     int64(res.Quality.LongPacketErrors),
 		EntropyEstimate:      res.Quality.EntropyEstimate,
-		SchemaVersionedRatio: res.Quality.SchemaVersionedRatio,
 		DecodeErrors:         int64(res.Quality.DecodeErrors),
 	}
 	return vr, nil

@@ -197,7 +197,6 @@ type TestEventLite struct {
 	ID           string
 	TimestampUnix int64
 	Type         string
-	SchemaID     string
 	DataJSON     string // 拍平后的关键 data.* 字段 JSON（可能截断）
 }
 
@@ -492,7 +491,6 @@ func (s *Server) TestPlugin(ctx context.Context, req *pb.TestPluginRequest) (*pb
 			Id:            e.ID,
 			TimestampUnix: e.TimestampUnix,
 			Type:          e.Type,
-			SchemaId:      e.SchemaID,
 			DataJson:      e.DataJSON,
 		})
 	}

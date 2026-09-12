@@ -1,4 +1,4 @@
-.PHONY: proto test build build-mcp build-pipeline build-plugin-dev build-agent build-agents build-examples run-mcp run-pipeline run-plugin-dev release release-matrix web-build docs
+.PHONY: proto test build build-mcp build-pipeline build-plugin-dev build-agent build-agents build-examples run-mcp run-pipeline run-plugin-dev deploy release release-matrix web-build docs
 
 TAGS := pcap
 
@@ -12,11 +12,18 @@ TAGS := pcap
 # ============================================================================
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+# 构建时间戳：默认留空（-version 会省略该字段）。Windows 下的 make/date 对
+# `date` 与 git log 的 `%cI` 处理均不可靠（% 会被 make 吞掉、date 是交互版），
+# 因此不在 make 内自动推导；需要时手动传：
+#   make deploy BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)   （MSYS/linux）
+#   docker compose up 前设 $env:GT_BUILD_TIME=...             （PowerShell）
+BUILD_TIME ?=
 
 # 注入 pkg/version 的包级变量（见 pkg/version/version.go）。
 LDFLAGS := -s -w \
 	-X gametrace/pkg/version.Version=$(VERSION) \
-	-X gametrace/pkg/version.Commit=$(GIT_COMMIT)
+	-X gametrace/pkg/version.Commit=$(GIT_COMMIT) \
+	-X gametrace/pkg/version.BuildTime=$(BUILD_TIME)
 
 # ============================================================================
 # 交叉编译矩阵（T14 release 产物）
@@ -120,6 +127,23 @@ run-pipeline:
 
 run-plugin-dev:
 	go run -tags $(TAGS) ./cmd/gt-plugin-dev
+
+# deploy：Docker 部署与"确认跑的是刚构建的新版本"一键流程。
+#
+# compose 文件头"镜像策略"已保证每次 up 都从源码重建（pull_policy: build +
+# no_cache）。本 target 补两块之前缺失的能力：
+#   1) 把宿主 git 的 VERSION / GIT_COMMIT / BUILD_TIME 注入镜像（-version 才
+#      有意义，不再是恒定的 dev (unknown)）；
+#   2) 部署完自动 exec 各服务打印 -version，给出"确实跑到新代码"的直接证据。
+# 用法：make deploy  （依赖 docker compose + git，均为项目既有约定）
+deploy:
+	@echo "==> build+deploy  gt-server: VERSION=$(VERSION) GIT_COMMIT=$(GIT_COMMIT) BUILD_TIME=$(BUILD_TIME)"
+	GT_VERSION="$(VERSION)" GT_GIT_COMMIT="$(GIT_COMMIT)" GT_BUILD_TIME="$(BUILD_TIME)" \
+		docker compose up -d --build --force-recreate
+	@echo
+	@echo "==> 运行版本核对（应与上面 VERSION/GIT_COMMIT/BUILD_TIME 一致才算部署成功）："
+	@echo "--- gt-pipeline ---"; docker exec gt-pipeline-1 /usr/local/bin/gt-pipeline -version 2>&1 || true
+	@echo "--- gt-mcp ---"; docker exec gt-mcp-1 /usr/local/bin/gt-mcp -version 2>&1 || true
 
 # 重新生成 README 中的 MCP 工具目录（与 cmd/gt-mcp/main.go 对齐）。
 docs:

@@ -44,8 +44,8 @@ export class McpClient {
   }
 
   /**
-   * 自助注册：完全的新用户免邀请获取独立身份（POST /access/register）。
-   * 返回的 token 与邀请凭证同待遇 —— 仅此一次展示，由调用方立即保存。
+   * 自助注册：完全的新用户直接注册获取独立身份（POST /access/register）。
+   * 返回的 token 与注册凭证同待遇 —— 仅此一次展示，由调用方立即保存。
    * 服务端关闭注册（GT_AUTH_REGISTER=off / 匿名模式）时返回 403。
    */
   async register(name: string): Promise<{ owner: string; token: string }> {

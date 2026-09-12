@@ -108,7 +108,6 @@ func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string,
 		payload["requests"] = c.requests
 		draft = event.Draft{
 			Type:      "http.request",
-			SchemaRef: "http.request.v1",
 			Value:     event.ValueFromMap(payload),
 			Meta:      event.ValueFromMap(meta),
 			Analysis: event.ValueFromMap(map[string]any{
@@ -134,7 +133,6 @@ func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string,
 		payload["is_error"] = sem.IsError
 		draft = event.Draft{
 			Type:      "http.response",
-			SchemaRef: "http.response.v1",
 			Value:     event.ValueFromMap(payload),
 			Meta:      event.ValueFromMap(meta),
 			Analysis: event.ValueFromMap(map[string]any{

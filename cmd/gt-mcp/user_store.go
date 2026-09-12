@@ -1,8 +1,8 @@
-// user_store.go — 邀请制身份的持久化（users 表，2026-09-05 设计讨论定案）。
+// user_store.go — users 表注册身份的持久化（users 表，2026-09-05 设计讨论定案）。
 //
 // 身份来源分层：
 //   - env（GT_AUTH_TOKENS）：bootstrap / 首个 admin，启动时静态载入；
-//   - users 表：邀请制发放的运行时身份，claim 时创建、revoke_user 撤销，
+//   - users 表：注册的运行时身份，注册时创建、revoke_user 撤销，
 //     经 pkg/auth.DBResolver 即时生效，无需重启。
 package main
 
@@ -65,8 +65,8 @@ func newUserToken() (string, error) {
 	return "gt_" + hex.EncodeToString(b), nil
 }
 
-// CreateUser 创建邀请制用户并返回为其生成的 token。
-// owner 已存在返回错误（邀请面向新人；复用身份应直接共享既有 token）。
+// CreateUser 创建一个 users 表用户并返回为其生成的 token。
+// owner 已存在返回错误（面向新注册用户；复用身份应直接共享既有 token）。
 func (us *userStore) CreateUser(ctx context.Context, owner, createdBy string) (*user, string, error) {
 	if !validOwnerName(owner) {
 		return nil, "", fmt.Errorf("invalid owner name %q: letters/digits/._- , starts with letter or digit, max 64 chars", owner)
@@ -85,7 +85,7 @@ func (us *userStore) CreateUser(ctx context.Context, owner, createdBy string) (*
 		CreatedAt: time.Now().UTC().Format(time.RFC3339)}, token, nil
 }
 
-// OwnerExists 报告用户名是否已被占用（发邀请前的预检）。
+// OwnerExists 报告用户名是否已被占用（注册前的预检）。
 func (us *userStore) OwnerExists(ctx context.Context, owner string) (bool, error) {
 	var one int
 	err := us.db.QueryRowContext(ctx, `SELECT 1 FROM users WHERE owner=?`, owner).Scan(&one)

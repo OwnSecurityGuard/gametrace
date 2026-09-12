@@ -51,7 +51,7 @@ func runCapture(ctx context.Context, cfg captureConfig, out chan<- *proto.RawPac
 		return nil, fmt.Errorf("capture requires an interface")
 	}
 	if cfg.SnapLen <= 0 {
-		cfg.SnapLen = 1600
+		cfg.SnapLen = 262144
 	}
 	h, err := openLiveWithFallback(cfg.Iface, cfg.SnapLen, cfg.Promisc)
 	if err != nil {

@@ -85,7 +85,7 @@ func TestDispatcherDecodeV2Error(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	d, err := NewDispatcher(pb.NewDecoderClient(conn), "test-session", nil, nil)
+	d, err := NewDispatcher(pb.NewDecoderClient(conn), "test-session", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestDispatcherDecodeV2Success(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	d, err := NewDispatcher(pb.NewDecoderClient(conn), "test-session", nil, nil)
+	d, err := NewDispatcher(pb.NewDecoderClient(conn), "test-session", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestDispatcherIsHealthy(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	d, err := NewDispatcher(pb.NewDecoderClient(conn), "test-session", nil, nil)
+	d, err := NewDispatcher(pb.NewDecoderClient(conn), "test-session", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
