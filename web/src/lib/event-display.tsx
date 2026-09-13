@@ -231,7 +231,7 @@ export function SemanticBadge({ label }: { label: string }) {
 export function MessageCell({ msgName, semantic }: { msgName: string; semantic: string[] }) {
   return (
     <div className="flex items-center gap-1.5 min-w-0">
-      <span className="font-mono text-xs font-semibold truncate" title={msgName}>
+      <span className="font-mono text-[13px] font-semibold truncate" title={msgName}>
         {msgName || "(unknown)"}
       </span>
       {semantic.map((s) => (

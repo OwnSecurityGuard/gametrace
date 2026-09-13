@@ -4,7 +4,6 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/toast";
 import {
   ChevronLeft,
@@ -25,7 +24,7 @@ import {
   FileCode2,
 } from "lucide-react";
 import type { DecodedEvent } from "@/types/event";
-import type { CaptureContext, ConnectionSummary } from "@/types/connection";
+import type { ConnectionSummary } from "@/types/connection";
 import {
   extractMeta,
   formatTimestamp,
@@ -57,30 +56,55 @@ const PAGE_SIZES = [20, 50, 100];
 /** 有查询词时向前端内存过滤提供的事件批次上限。 */
 const QUERY_FETCH_LIMIT = 1000;
 
-/** 生成一行 payload 摘要文本 */
-function summarizePayload(data: Record<string, unknown>, meta: EventMeta): string {
-  const parts: string[] = [];
+/** 生成一行 payload 摘要：结构化键值对（键 = 业务字段名，值 = 标量值）。 */
+interface SummaryPart {
+  k: string;
+  v: string;
+}
+
+function summarizePayload(data: Record<string, unknown>, meta: EventMeta): SummaryPart[] {
+  const parts: SummaryPart[] = [];
 
   // Blocks 数量
   if (meta.blocks != null) {
-    parts.push(`${meta.blocks} block${meta.blocks > 1 ? "s" : ""}`);
+    parts.push({ k: "blocks", v: String(meta.blocks) });
   }
 
   // 提取顶层非 _meta 的标量字段作为补充信息
   for (const [k, v] of Object.entries(data)) {
     if (k.startsWith("_") || k === "Blocks") continue;
     if (typeof v === "string" && v.length < 40) {
-      parts.push(`${k}: ${v}`);
-    } else if (typeof v === "number") {
-      parts.push(`${k}: ${v}`);
-    } else if (typeof v === "boolean") {
-      parts.push(`${k}: ${v}`);
+      parts.push({ k, v });
+    } else if (typeof v === "number" || typeof v === "boolean") {
+      parts.push({ k, v: String(v) });
     }
     // 超过 3 个字段就停止，保持摘要简洁
     if (parts.length >= 4) break;
   }
 
-  return parts.length > 0 ? parts.join(" · ") : "(empty)";
+  return parts;
+}
+
+/**
+ * 摘要单元格：业务字段值用大字号前景色突出（视觉锚点），
+ * 键名作为等宽小字标签，避免整行都是 70% 透明度的弱文本。
+ */
+function SummaryCell({ parts }: { parts: SummaryPart[] }) {
+  if (parts.length === 0) {
+    return <span className="text-xs text-muted-foreground">(empty)</span>;
+  }
+  const title = parts.map((p) => `${p.k}: ${p.v}`).join(" · ");
+  return (
+    <span className="block truncate text-[13px] leading-snug text-foreground" title={title}>
+      {parts.map((p, i) => (
+        <span key={i}>
+          {i > 0 && <span className="mx-1 text-muted-foreground/50">·</span>}
+          <span className="font-mono text-[11px] font-medium text-muted-foreground">{p.k}</span>
+          <span className="ml-1">{p.v}</span>
+        </span>
+      ))}
+    </span>
+  );
 }
 
 /** 复制 JSON 到剪贴板（失败给 toast，不静默）。 */
@@ -91,25 +115,6 @@ async function copyJson(data: unknown) {
   } catch {
     toast.error("复制失败", "浏览器拒绝访问剪贴板");
   }
-}
-
-// ─── 捕获上下文（Capture Context，代理抓包特有） ────────────────
-
-/** 展示 Captured By / Connection / Stream / Source 归属徽标组。 */
-function CaptureCell({ capture }: { capture: CaptureContext }) {
-  return (
-    <div className="flex flex-wrap items-center gap-1 min-w-0" title={`连接 ${capture.conn_id} · 流 ${capture.stream_id} · 来源 ${capture.source || ""}`}>
-      <Badge variant="outline" className="text-[10px] font-normal whitespace-nowrap">
-        {capture.captured_by || "Proxy"}
-      </Badge>
-      <Badge variant="secondary" className="font-mono text-[10px] whitespace-nowrap">
-        C#{String(capture.conn_seq).padStart(3, "0")}
-      </Badge>
-      <Badge variant="secondary" className="font-mono text-[10px] whitespace-nowrap">
-        S#{capture.stream_seq}
-      </Badge>
-    </div>
-  );
 }
 
 // ─── 展开行：配对关系 + 完整 JSON ────────────────────────────
@@ -478,6 +483,15 @@ function ExpandedHeader({
         </span>
       )}
       <span className="text-xs text-muted-foreground">{formatSize(event.raw_len)}</span>
+      {event.capture && (
+        <span
+          className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+          title={`连接 ${event.capture.conn_id} · 流 ${event.capture.stream_id} · 来源 ${event.capture.source || ""}`}
+        >
+          {event.capture.captured_by || "Proxy"} · C#{String(event.capture.conn_seq).padStart(3, "0")} · S#
+          {event.capture.stream_seq}
+        </span>
+      )}
       <span className="ml-auto flex items-center gap-1.5">
         <MetaPopover meta={metaRaw} />
         <button
@@ -616,7 +630,6 @@ const EventRow = memo(function EventRow({
   event,
   partners,
   children,
-  showCapture,
   isExpanded,
   isHighlighted,
   onToggle,
@@ -627,7 +640,6 @@ const EventRow = memo(function EventRow({
   event: DecodedEvent;
   partners: DecodedEvent[];
   children: DecodedEvent[];
-  showCapture: boolean;
   isExpanded: boolean;
   isHighlighted: boolean;
   onToggle: (id: string) => void;
@@ -637,7 +649,7 @@ const EventRow = memo(function EventRow({
 }) {
   const meta = useMemo(() => extractMeta(event.data, event.meta), [event.data, event.meta]);
   const summary = useMemo(() => summarizePayload(event.data, meta), [event.data, meta]);
-  const colSpan = showCapture ? 6 : 5;
+  const colSpan = 5;
 
   return (
     <Fragment key={event.id}>
@@ -648,19 +660,19 @@ const EventRow = memo(function EventRow({
         aria-expanded={isExpanded}
       >
         {/* 展开指示：没有它用户看不出行是可点的 */}
-        <TableCell className="w-8 py-1.5 pl-2 pr-0 text-muted-foreground/60">
+        <TableCell className="w-8 py-2 pl-2 pr-0 text-muted-foreground/60">
           <ChevronRight
             className={`h-3.5 w-3.5 transition-transform ${isExpanded ? "rotate-90" : ""}`}
           />
         </TableCell>
 
         {/* 时间 */}
-        <TableCell className="w-28 py-1.5 font-mono text-[11px] whitespace-nowrap tabular-nums">
+        <TableCell className="w-28 py-2 font-mono text-xs whitespace-nowrap tabular-nums">
           {formatTimestamp(event.timestamp)}
         </TableCell>
 
         {/* 消息名：方向文字 + 名称 + 语义标签 + 子事件/配对角标 */}
-        <TableCell className="min-w-[220px] max-w-[340px] py-1.5">
+        <TableCell className="min-w-[220px] max-w-[340px] py-2">
           <div className="flex items-center gap-1.5 min-w-0">
             {event.parent_id && (
               <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60" title={`父事件 ${event.parent_id}`}>
@@ -683,26 +695,13 @@ const EventRow = memo(function EventRow({
           </div>
         </TableCell>
 
-        {/* 捕获上下文（代理抓包特有）：非代理抓包整列不渲染，把宽度让给消息与摘要 */}
-        {showCapture && (
-          <TableCell className="w-40 max-w-[180px] py-1.5">
-            {event.capture ? (
-              <CaptureCell capture={event.capture} />
-            ) : (
-              <span className="text-[11px] text-muted-foreground/50">-</span>
-            )}
-          </TableCell>
-        )}
-
-        {/* Payload 摘要 */}
-        <TableCell className="max-w-[28rem] py-1.5">
-          <span className="block truncate text-[11px] text-foreground/70" title={summary}>
-            {summary}
-          </span>
+        {/* Payload 摘要：业务字段值突出展示，是行的视觉锚点 */}
+        <TableCell className="max-w-[28rem] py-2">
+          <SummaryCell parts={summary} />
         </TableCell>
 
         {/* 原始包大小 */}
-        <TableCell className="w-16 py-1.5 text-right tabular-nums text-[11px] text-muted-foreground whitespace-nowrap">
+        <TableCell className="w-16 py-2 text-right tabular-nums text-xs text-muted-foreground whitespace-nowrap">
           {formatSize(event.raw_len)}
         </TableCell>
       </TableRow>
@@ -775,8 +774,6 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
   const filtering = !!query || !!direction || !!connFilter;
 
   const totalPages = Math.ceil(totalMatched / pageSize);
-  // 整页都没有 capture 上下文（非代理抓包）时隐藏该列，把宽度让给消息与摘要。
-  const showCapture = useMemo(() => filteredEvents.some((e) => !!e.capture), [filteredEvents]);
 
   /**
    * 配对索引：事件 id → 当前页内的配对伙伴。
@@ -951,7 +948,6 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
             <TableHead className="w-8 pl-2 pr-0" aria-label="展开" />
             <TableHead className="w-28">时间</TableHead>
             <TableHead className="min-w-[220px]">消息</TableHead>
-            {showCapture && <TableHead className="w-40">捕获</TableHead>}
             <TableHead>摘要</TableHead>
             <TableHead className="w-16 text-right">大小</TableHead>
           </TableRow>
@@ -963,7 +959,6 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
               event={event}
               partners={partnersMap.get(event.id) ?? []}
               children={childrenMap.get(event.id) ?? []}
-              showCapture={showCapture}
               isExpanded={expandedIds.has(event.id)}
               isHighlighted={highlightId === event.id}
               onToggle={handleToggleExpand}
