@@ -10,7 +10,8 @@ import {
   useProject,
   useAddProjectMember,
   useRemoveProjectMember,
-  useSetProjectPlugins,
+  useAddProjectPlugin,
+  useRemoveProjectPlugin,
   useSetProjectRules,
   useRegisteredPlugins,
 } from "@/hooks/use-mcp";
@@ -70,11 +71,18 @@ export function ProjectPage({
     : (project?.created_by != null && project.created_by === identity?.owner) ||
       identity?.isAdmin === true ||
       (project?.members?.some((m) => m.user === identity?.owner && m.role === "admin") ?? false);
+  // 项目成员即可添加/移除「自己」的插件（后端按 owner 校验归属）；admin 全权。
+  // 匿名/本地模式由 caps 走 admin 分支，此处仅覆盖真实身份的成员场景。
+  const isProjectMember =
+    (project?.owner != null && project.owner === identity?.owner) ||
+    (project?.members?.some((m) => m.user === identity?.owner) ?? false);
+  const canManagePlugins = isProjectAdmin || isProjectMember;
 
   // —— 增删成员 / 插件 / 规则 ——
   const addMember = useAddProjectMember(projectId);
   const removeMember = useRemoveProjectMember(projectId);
-  const setPlugins = useSetProjectPlugins(projectId);
+  const addPlugin = useAddProjectPlugin(projectId);
+  const removePlugin = useRemoveProjectPlugin(projectId);
   const setRules = useSetProjectRules(projectId);
   const members = project?.members ?? [];
   const plugins = project?.plugins ?? [];
@@ -135,9 +143,9 @@ export function ProjectPage({
   function handleAddPlugin() {
     const name = pluginName.trim();
     if (!name) return;
-    // 关联已注册插件：id 直接用插件名（稳定、可对照注册表），不再前端造随机 id。
-    setPlugins.mutate(
-      { plugins: [...plugins, { id: name, name }] },
+    // 增量关联已注册插件（后端按 name 校验：成员仅限自己注册的，admin 任意）。
+    addPlugin.mutate(
+      { name },
       {
         onSuccess: () => {
           setPluginName("");
@@ -149,8 +157,8 @@ export function ProjectPage({
   }
 
   function handleRemovePlugin(id: string) {
-    setPlugins.mutate(
-      { plugins: plugins.filter((pl) => pl.id !== id) },
+    removePlugin.mutate(
+      { id },
       {
         onError: (err) => toast.error("移除失败", err.message),
       },
@@ -372,7 +380,7 @@ export function ProjectPage({
                     className="inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-xs text-foreground"
                   >
                     {pl.name}
-                    {isProjectAdmin && (
+                    {(isProjectAdmin || pl.owner === identity?.owner) && (
                       <button
                         type="button"
                         onClick={() => handleRemovePlugin(pl.id)}
@@ -387,13 +395,15 @@ export function ProjectPage({
               </div>
             )}
 
-            {isProjectAdmin && (
+            {canManagePlugins && (
               <div className="mt-3 border-t border-border pt-3">
                 {candidatePlugins.length === 0 ? (
                   <p className="text-xs text-muted-foreground">
                     {registeredPluginNames.length === 0
                       ? "当前没有已注册的插件。先在「插件」页启动解析器，使其注册到 Pipeline 后再关联。"
-                      : "所有已注册插件均已关联到本项目。"}
+                      : isProjectAdmin
+                        ? "所有已注册插件均已关联到本项目。"
+                        : "你名下所有已注册插件均已关联到本项目。"}
                   </p>
                 ) : (
                   <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
@@ -413,7 +423,7 @@ export function ProjectPage({
                     <button
                       type="button"
                       onClick={handleAddPlugin}
-                      disabled={setPlugins.isPending || !pluginName.trim()}
+                      disabled={addPlugin.isPending || !pluginName.trim()}
                       className="inline-flex h-9 items-center justify-center gap-1 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50"
                     >
                       <Plus className="h-3.5 w-3.5" />
@@ -421,6 +431,11 @@ export function ProjectPage({
                     </button>
                   </div>
                 )}
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {isProjectAdmin
+                    ? "可添加任意已注册插件；添加后项目内所有成员均可使用。"
+                    : "只能添加你自己注册的插件（候选列表已按你的身份过滤）；添加后项目内所有成员均可使用。"}
+                </p>
               </div>
             )}
           </div>

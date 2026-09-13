@@ -2741,6 +2741,18 @@ func main() {
 		mcp.WithString("plugins", mcp.Required(), mcp.Description("JSON string array of plugin entries")),
 	), capture.handleSetProjectPlugins)
 
+	s.AddTool(mcp.NewTool("add_project_plugin",
+		mcp.WithDescription("Add one registered decode plugin to a project (incremental, idempotent). Any project member can add a plugin they registered themselves; project admin can add any registered plugin. After adding, all project members can use it."),
+		mcp.WithString("project_id", mcp.Required(), mcp.Description("Project ID")),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Registered plugin name (manifest.name)")),
+	), capture.handleAddProjectPlugin)
+
+	s.AddTool(mcp.NewTool("remove_project_plugin",
+		mcp.WithDescription("Remove one plugin entry from a project (incremental). Project admin can remove any entry; other members can only remove entries they added themselves."),
+		mcp.WithString("project_id", mcp.Required(), mcp.Description("Project ID")),
+		mcp.WithString("id", mcp.Required(), mcp.Description("Plugin entry id to remove")),
+	), capture.handleRemoveProjectPlugin)
+
 	s.AddTool(mcp.NewTool("set_project_rules",
 		mcp.WithDescription("Replace the project's associated rule list. rules is a JSON string array of [{\"id\",\"name\"}]. Requires project admin."),
 		mcp.WithString("project_id", mcp.Required(), mcp.Description("Project ID")),

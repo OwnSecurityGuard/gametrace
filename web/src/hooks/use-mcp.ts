@@ -583,6 +583,32 @@ export function useSetProjectPlugins(projectId?: string) {
   });
 }
 
+/** add_project_plugin：增量添加一条项目解码插件（成员可添加自己注册的插件；admin 可添加任意）。 */
+export function useAddProjectPlugin(projectId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { name: string }) =>
+      mcpClient.callTool<{ ok?: boolean; added?: boolean }>("add_project_plugin", {
+        project_id: projectId,
+        name: v.name,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project", projectId] }),
+  });
+}
+
+/** remove_project_plugin：增量移除一条项目解码插件（成员仅能移除自己添加的；admin 可移除任意）。 */
+export function useRemoveProjectPlugin(projectId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { id: string }) =>
+      mcpClient.callTool<{ ok?: boolean }>("remove_project_plugin", {
+        project_id: projectId,
+        id: v.id,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project", projectId] }),
+  });
+}
+
 /** set_project_rules：设置项目的解析规则集合。 */
 export function useSetProjectRules(projectId?: string) {
   const qc = useQueryClient();

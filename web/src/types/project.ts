@@ -10,6 +10,8 @@ export interface ProjectMember {
 export interface ProjectPlugin {
   id: string;
   name: string;
+  /** 把该插件加入项目时的设置者身份（插件注册表按 owner 隔离；成员仅能管理自己的条目）。 */
+  owner?: string;
 }
 
 export interface ProjectRule {

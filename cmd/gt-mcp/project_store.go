@@ -470,6 +470,73 @@ func (ps *projectStore) RemoveMember(ctx context.Context, projectID, user string
 	return n > 0, nil
 }
 
+// AddPlugin 追加一条项目插件关联（按 ID 去重，事务内读改写，返回是否新增）。
+// 与全量 Update 不同：并发添加时互不覆盖（各自基于当前快照读改写）。
+func (ps *projectStore) AddPlugin(ctx context.Context, projectID string, entry projectPlugin) (bool, error) {
+	tx, err := ps.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var pluginsJSON string
+	if err := tx.QueryRowContext(ctx, `SELECT plugins FROM projects WHERE id=?`, projectID).Scan(&pluginsJSON); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil // 项目不存在，视为未新增
+		}
+		return false, err
+	}
+	plugins := unmarshalSlice[projectPlugin](pluginsJSON)
+	for _, p := range plugins {
+		if p.ID == entry.ID {
+			return false, nil // 已存在，幂等
+		}
+	}
+	plugins = append(plugins, entry)
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE projects SET plugins=?, updated_at=? WHERE id=?`,
+		jsonOrEmpty(plugins), time.Now().UTC().Format(time.RFC3339), projectID,
+	); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
+// RemovePlugin 移除一条项目插件关联（按 ID 匹配，返回是否命中）。
+func (ps *projectStore) RemovePlugin(ctx context.Context, projectID, id string) (bool, error) {
+	tx, err := ps.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var pluginsJSON string
+	if err := tx.QueryRowContext(ctx, `SELECT plugins FROM projects WHERE id=?`, projectID).Scan(&pluginsJSON); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	plugins := unmarshalSlice[projectPlugin](pluginsJSON)
+	out := plugins[:0]
+	found := false
+	for _, p := range plugins {
+		if p.ID == id {
+			found = true
+			continue
+		}
+		out = append(out, p)
+	}
+	if !found {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE projects SET plugins=?, updated_at=? WHERE id=?`,
+		jsonOrEmpty(out), time.Now().UTC().Format(time.RFC3339), projectID,
+	); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
+}
+
 // TransferOwner 以 CAS 方式转移 Owner：仅当当前 Owner 与 expectOwner 一致时生效，
 // 防并发双转。返回是否成功；False 表示项目不存在或 Owner 已被并发改变。
 func (ps *projectStore) TransferOwner(ctx context.Context, projectID, expectOwner, newOwner string) (bool, error) {

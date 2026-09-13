@@ -16,6 +16,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"gametrace/pkg/authz"
+	pb "gametrace/pkg/internalipc/proto"
 	"gametrace/pkg/store"
 )
 
@@ -287,6 +288,113 @@ func (m *mcpCapture) handleSetProjectPlugins(ctx context.Context, req mcp.CallTo
 	}
 	slog.Info("project plugins set", "project_id", id, "n", len(p.Plugins))
 	return successResult(p), nil
+}
+
+// handleAddProjectPlugin 增量添加一条项目插件关联（工具 add_project_plugin）。
+// 权限模型：
+//   - 项目成员即可操作（ActionProjectRead 门禁）；
+//   - 项目 admin / global admin 可添加任意已注册插件名；
+//   - 普通成员只能添加「自己注册」的插件：经 pipeline 注册表按 owner 作用域
+//     GetPluginManifest 校验，防止把他人插件挂到项目上并造成 owner 归属错乱。
+//
+// 条目 owner 恒记录为调用者身份，保证 pluginOwnersFor 的候选集正确（项目成员
+// 解析解码插件时以此为跨 owner 候选）。
+func (m *mcpCapture) handleAddProjectPlugin(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := strings.TrimSpace(req.GetString("project_id", ""))
+	if id == "" {
+		return errorResult(fmt.Errorf("project_id is required")), nil
+	}
+	name := strings.TrimSpace(req.GetString("name", ""))
+	if name == "" {
+		return errorResult(fmt.Errorf("name is required")), nil
+	}
+	p, err := m.projects.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if p == nil {
+		return errorResult(fmt.Errorf("project not found")), nil
+	}
+	// 成员门禁：项目成员即可进入（归属校验在下一分支）。
+	if err := m.authz.Can(ctx, authz.ActionProjectRead, projectResource(p)); err != nil {
+		return errorResult(fmt.Errorf("project not found")), nil
+	}
+	caller := authzPrincipal(ctx).User
+	// 归属分支：admin 放行任意插件；普通成员必须拥有该插件（pipeline 注册表校验）。
+	if err := m.authz.Can(ctx, authz.ActionProjectManagePlugins, projectResource(p)); err != nil {
+		if m.pipelineClient == nil {
+			return errorResult(fmt.Errorf("plugin registry is not available; ask a project admin to add the plugin")), nil
+		}
+		if _, err := m.pipelineClient.GetPluginManifest(ctx, &pb.GetPluginManifestRequest{Name: name, Owner: caller}); err != nil {
+			return errorResult(fmt.Errorf("you can only add plugins you own: plugin %q not found under your identity", name)), nil
+		}
+	}
+	added, err := m.projects.AddPlugin(ctx, id, projectPlugin{ID: name, Name: name, Owner: caller})
+	if err != nil {
+		return nil, fmt.Errorf("add project plugin: %w", err)
+	}
+	updated, err := m.projects.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("project plugin added", "project_id", id, "name", name, "owner", caller, "added", added)
+	return successResult(map[string]any{"project": updated, "added": added}), nil
+}
+
+// handleRemoveProjectPlugin 增量移除一条项目插件关联（工具 remove_project_plugin）。
+// 权限模型：
+//   - 项目成员即可操作（ActionProjectRead 门禁）；
+//   - 项目 admin / global admin 可移除任意条目；
+//   - 普通成员仅能移除自己添加的条目（owner == 调用者）；老数据条目（无 owner）仅 admin 可删。
+func (m *mcpCapture) handleRemoveProjectPlugin(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := strings.TrimSpace(req.GetString("project_id", ""))
+	if id == "" {
+		return errorResult(fmt.Errorf("project_id is required")), nil
+	}
+	pluginID := strings.TrimSpace(req.GetString("id", ""))
+	if pluginID == "" {
+		return errorResult(fmt.Errorf("id is required")), nil
+	}
+	p, err := m.projects.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if p == nil {
+		return errorResult(fmt.Errorf("project not found")), nil
+	}
+	if err := m.authz.Can(ctx, authz.ActionProjectRead, projectResource(p)); err != nil {
+		return errorResult(fmt.Errorf("project not found")), nil
+	}
+	admin := m.authz.Can(ctx, authz.ActionProjectManagePlugins, projectResource(p)) == nil
+	if !admin {
+		caller := authzPrincipal(ctx).User
+		var target *projectPlugin
+		for i := range p.Plugins {
+			if p.Plugins[i].ID == pluginID {
+				target = &p.Plugins[i]
+				break
+			}
+		}
+		if target == nil {
+			return errorResult(fmt.Errorf("plugin entry %q not found in project", pluginID)), nil
+		}
+		if target.Owner == "" || target.Owner != caller {
+			return errorResult(fmt.Errorf("you can only remove plugins you added to this project")), nil
+		}
+	}
+	found, err := m.projects.RemovePlugin(ctx, id, pluginID)
+	if err != nil {
+		return nil, fmt.Errorf("remove project plugin: %w", err)
+	}
+	if !found {
+		return errorResult(fmt.Errorf("plugin entry %q not found in project", pluginID)), nil
+	}
+	updated, err := m.projects.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("project plugin removed", "project_id", id, "id", pluginID, "actor", authzPrincipal(ctx).User)
+	return successResult(updated), nil
 }
 
 // handleSetProjectRules 整体替换项目的规则关联列表（ActionProjectManageRules）。
