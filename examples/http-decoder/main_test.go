@@ -5,10 +5,10 @@ import (
 	"os"
 	"testing"
 
-	sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
-	sdkcontract "github.com/OwnSecurityGuard/gt-plugin-sdk/contract"
-	sdkevent "github.com/OwnSecurityGuard/gt-plugin-sdk/event"
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
+	sdkcontract "github.com/OwnSecurityGuard/gametrace/sdk/contract"
+	sdkevent "github.com/OwnSecurityGuard/gametrace/sdk/event"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 	"google.golang.org/grpc"
 )
 

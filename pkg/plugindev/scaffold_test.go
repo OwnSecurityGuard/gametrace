@@ -57,7 +57,7 @@ func TestScaffoldSmokeBuild(t *testing.T) {
 		t.Skip("local gt-plugin-sdk not found (tried canonical + sibling); skipping build")
 	}
 	edit := exec.Command("go", "mod", "edit",
-		"-replace", "github.com/OwnSecurityGuard/gt-plugin-sdk="+sdk)
+		"-replace", "github.com/OwnSecurityGuard/gametrace/sdk="+sdk)
 	edit.Dir = dir
 	if out, e := edit.CombinedOutput(); e != nil {
 		t.Fatalf("go mod edit -replace: %v\n%s", e, out)

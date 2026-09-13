@@ -3,7 +3,7 @@ package event
 import (
 	"fmt"
 
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 // Draft 是插件侧的事件产出。它缺少宿主补齐的 Identity/Trace（EventID、

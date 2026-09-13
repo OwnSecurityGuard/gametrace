@@ -8,8 +8,8 @@ GameTrace（Game Traffic Analysis）解码插件的官方 Go SDK。插件是一�
 package main
 
 import (
-    pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
-    sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
+    pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
+    sdk "github.com/OwnSecurityGuard/gametrace/sdk"
 )
 
 func main() {
@@ -25,7 +25,7 @@ func decode(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error {
 ## 快速开始
 
 ```bash
-go get github.com/OwnSecurityGuard/gt-plugin-sdk@latest
+go get github.com/OwnSecurityGuard/gametrace/sdk@latest
 ```
 
 1. 从 [examples/http-stream-decoder](examples/http-stream-decoder/) 复制骨架

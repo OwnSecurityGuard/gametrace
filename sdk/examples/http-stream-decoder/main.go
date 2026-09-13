@@ -18,10 +18,10 @@ package main
 import (
 	"fmt"
 
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 
-	"github.com/OwnSecurityGuard/gt-plugin-sdk"
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/framing"
+	"github.com/OwnSecurityGuard/gametrace/sdk"
+	"github.com/OwnSecurityGuard/gametrace/sdk/framing"
 )
 
 // maxStreamBytes caps per-flow reassembly memory. A flow whose bytes never

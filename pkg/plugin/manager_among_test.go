@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 // regShared 按指定 owner 注册一个共享名插件（非隧道，注册即在线）。

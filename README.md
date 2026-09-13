@@ -239,7 +239,7 @@ Members connect from their own machines with a single `gt-agent` binary that pus
 
 ## Plugin SDK
 
-Plugins depend only on [gt-plugin-sdk](https://github.com/OwnSecurityGuard/gt-plugin-sdk) — a separate repo, zero coupling to gametrace internals. A plugin is **one Go binary + one `plugin.yaml` manifest**:
+Plugins depend only on [gt-plugin-sdk](https://github.com/OwnSecurityGuard/gametrace/sdk) — a separate repo, zero coupling to gametrace internals. A plugin is **one Go binary + one `plugin.yaml` manifest**:
 
 - the manifest declares the contract — capabilities, schemas, and state subjects (`plugins/godot-gateway/plugin.yaml` is a complete example)
 - the host validates that contract at registration *and* per event at decode time
@@ -262,7 +262,7 @@ Human-readable guide: [`docs/gt-plugin-development.md`](docs/gt-plugin-developme
 |---------|---------------|
 | [`examples/http`](examples/http) | client + server generating parseable HTTP traffic (`:8984`) for a first end-to-end session |
 | [`plugins/godot-gateway`](plugins/godot-gateway) | reference decoder for the Godot debug protocol (request/response + state subjects) |
-| [http-stream-decoder](https://github.com/OwnSecurityGuard/gt-plugin-sdk/tree/main/examples/http-stream-decoder) (SDK repo) | blueprint for a real HTTP streaming decoder |
+| [http-stream-decoder](https://github.com/OwnSecurityGuard/gametrace/sdk/tree/main/examples/http-stream-decoder) (SDK repo) | blueprint for a real HTTP streaming decoder |
 
 **Agent self-check** — paste this to your agent for a one-breath full-stack verification:
 

@@ -8,7 +8,7 @@
 package main
 
 import (
-	"github.com/OwnSecurityGuard/gt-plugin-sdk"
+	"github.com/OwnSecurityGuard/gametrace/sdk"
 )
 
 func main() {

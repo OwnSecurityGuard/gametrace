@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
+	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
 )
 
 // Manifest 的解析与字段校验现由 SDK 单一持有，其单元测试也在 SDK

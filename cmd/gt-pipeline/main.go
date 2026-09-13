@@ -17,7 +17,7 @@ import (
 
 	"database/sql"
 
-	pluginpb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pluginpb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 	"gametrace/pkg/auth"
 	"gametrace/pkg/capture/agent"
 	"gametrace/pkg/capture/agent/proto"

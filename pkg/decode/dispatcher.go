@@ -10,7 +10,7 @@ import (
 
 	"gametrace/pkg/capture"
 	"gametrace/pkg/event"
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 // ErrDispatcherClosed 在流已关闭后提交请求时返回。

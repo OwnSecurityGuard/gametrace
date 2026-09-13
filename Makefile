@@ -119,10 +119,10 @@ build: build-mcp build-pipeline build-plugin-dev build-agent
 # ============================================================================
 # SDK 维护与对外发布（SDK 已并入本 monorepo 的 ./sdk）
 #
-# ./sdk 是 SDK 源码的真源（module：github.com/OwnSecurityGuard/gt-plugin-sdk，
+# ./sdk 是 SDK 源码的真源（module：github.com/OwnSecurityGuard/gametrace/sdk，
 # 保留独立 go.mod；根 go.mod 以 replace => ./sdk 消费）。对外发布时把 ./sdk
 # 同步到已退役的只读发布镜像 gt-plugin-sdk 仓库并打 tag，外部插件照旧
-# go get github.com/OwnSecurityGuard/gt-plugin-sdk@v0.x 拉取。
+# go get github.com/OwnSecurityGuard/gametrace/sdk@v0.x 拉取。
 # ============================================================================
 .PHONY: sdk-test sdk-publish
 SDK_VERSION ?= v0.9.0

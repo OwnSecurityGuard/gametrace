@@ -1,4 +1,4 @@
-module github.com/OwnSecurityGuard/gt-plugin-sdk
+module github.com/OwnSecurityGuard/gametrace/sdk
 
 go 1.25.5
 

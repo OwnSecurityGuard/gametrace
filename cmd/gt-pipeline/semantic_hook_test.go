@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"testing"
 
-	sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/rule"
+	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
+	"github.com/OwnSecurityGuard/gametrace/sdk/rule"
 	"gametrace/pkg/event"
 )
 

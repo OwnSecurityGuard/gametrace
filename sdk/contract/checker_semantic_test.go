@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
+	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
+	"github.com/OwnSecurityGuard/gametrace/sdk/event"
 )
 
 // 覆盖方案 §12 的完整例子：四条规则（pair / notification / SyncDbData 提取 / error 标注）。

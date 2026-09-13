@@ -3,9 +3,9 @@ package contract
 import (
 	"fmt"
 
-	sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/rule"
+	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
+	"github.com/OwnSecurityGuard/gametrace/sdk/event"
+	"github.com/OwnSecurityGuard/gametrace/sdk/rule"
 )
 
 // PluginChecker 是 Protocol Semantic Rule 的校验器。

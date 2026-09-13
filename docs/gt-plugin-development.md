@@ -76,9 +76,9 @@ plugins/my-http/
 package main
 
 import (
-	"github.com/OwnSecurityGuard/gt-plugin-sdk"
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/framing"
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	"github.com/OwnSecurityGuard/gametrace/sdk"
+	"github.com/OwnSecurityGuard/gametrace/sdk/framing"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 // ra 在插件进程内只创建一次，跨所有会话/包复用。
@@ -263,7 +263,7 @@ v2 **不再使用** `data`/`_fields` 顶层 JSON。插件通过 `event.Draft` �
 | `CausationInputID` | 因果输入 id（请求→响应配对）→ `Trace.CausationID` | `causation_input_id` |
 
 ```go
-import "github.com/OwnSecurityGuard/gt-plugin-sdk/event"
+import "github.com/OwnSecurityGuard/gametrace/sdk/event"
 
 draft := event.Draft{
 		Type:  "http.request",
@@ -375,10 +375,10 @@ import (
 	"bytes"
 	"net/http"
 
-	"github.com/OwnSecurityGuard/gt-plugin-sdk"
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/framing"
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	"github.com/OwnSecurityGuard/gametrace/sdk"
+	"github.com/OwnSecurityGuard/gametrace/sdk/event"
+	"github.com/OwnSecurityGuard/gametrace/sdk/framing"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 var ra = framing.NewReassembler()
@@ -573,7 +573,7 @@ if !ok || len(seg.Payload) == 0 {
 ### 10.4 事件编码用 event.Draft + MsgPack（三段分离）
 
 ```go
-import "github.com/OwnSecurityGuard/gt-plugin-sdk/event"
+import "github.com/OwnSecurityGuard/gametrace/sdk/event"
 
 draft := event.Draft{
 		Type:  "game.login",
@@ -606,7 +606,7 @@ stream.Send(resp)
 ### 10.5 复用 SDK 提供的工具
 
 ```go
-import "github.com/OwnSecurityGuard/gt-plugin-sdk"
+import "github.com/OwnSecurityGuard/gametrace/sdk"
 
 // 读取 manifest（自动校验）
 manifestBytes, err := sdk.ReadManifest()

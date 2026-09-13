@@ -1,14 +1,16 @@
 // http-decoder plugin dependencies (locked, based on plugins/go.mod.template).
-// Uses the published gt-plugin-sdk v0.9.0 (no replace), so it builds on any
-// machine and in CI.
+// Monorepo 内部示例：经 replace 指向仓库内 SDK 子模块 ./sdk（对外发布时不带 replace，
+// 直接 go get 已发布的 github.com/OwnSecurityGuard/gametrace/sdk）。
 module http-decoder
 
 go 1.25.5
 
 require (
-	github.com/OwnSecurityGuard/gt-plugin-sdk v0.9.0
+	github.com/OwnSecurityGuard/gametrace/sdk v0.9.0
 	google.golang.org/grpc v1.71.0
 )
+
+replace github.com/OwnSecurityGuard/gametrace/sdk => ../../sdk
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect

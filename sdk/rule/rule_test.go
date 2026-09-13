@@ -6,7 +6,7 @@ import (
 	"github.com/tidwall/gjson"
 	"gopkg.in/yaml.v3"
 
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
+	"github.com/OwnSecurityGuard/gametrace/sdk/event"
 )
 
 // doc 必须覆盖用户实际协议的主要形态（§12）：

@@ -1,9 +1,9 @@
 package main
 
 import (
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
+	"github.com/OwnSecurityGuard/gametrace/sdk/event"
 )
 
 // emit turns one parsed HTTP message into a schema-conformant event carrying

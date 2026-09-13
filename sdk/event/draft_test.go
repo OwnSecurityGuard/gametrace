@@ -3,7 +3,7 @@ package event
 import (
 	"testing"
 
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 func TestDraftToResponse(t *testing.T) {

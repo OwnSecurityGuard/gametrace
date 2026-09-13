@@ -836,7 +836,7 @@ const file_proto_plugin_proto_rawDesc = "" +
 	"Deregister\x12\x19.plugin.DeregisterRequest\x1a\x1a.plugin.DeregisterResponse\x127\n" +
 	"\aConnect\x12\x13.plugin.TunnelFrame\x1a\x13.plugin.TunnelFrame(\x010\x012J\n" +
 	"\aDecoder\x12?\n" +
-	"\bDecodeV2\x12\x15.plugin.DecodeRequest\x1a\x18.plugin.DecodeResponseV2(\x010\x01B1Z/github.com/OwnSecurityGuard/gt-plugin-sdk/protob\x06proto3"
+	"\bDecodeV2\x12\x15.plugin.DecodeRequest\x1a\x18.plugin.DecodeResponseV2(\x010\x01B1Z/github.com/OwnSecurityGuard/gametrace/sdk/protob\x06proto3"
 
 var (
 	file_proto_plugin_proto_rawDescOnce sync.Once

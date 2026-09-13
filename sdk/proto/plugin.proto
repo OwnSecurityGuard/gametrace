@@ -9,7 +9,7 @@
 syntax = "proto3";
 
 package plugin;
-option go_package = "github.com/OwnSecurityGuard/gt-plugin-sdk/proto";
+option go_package = "github.com/OwnSecurityGuard/gametrace/sdk/proto";
 
 // PluginRegistry 由主程序实现，插件主动注册。
 service PluginRegistry {

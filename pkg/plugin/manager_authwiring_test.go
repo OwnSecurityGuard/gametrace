@@ -5,7 +5,7 @@ import (
 	"net"
 	"testing"
 
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 	"gametrace/pkg/auth"
 
 	"google.golang.org/grpc"

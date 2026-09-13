@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/rule"
+	"github.com/OwnSecurityGuard/gametrace/sdk/rule"
 	"gopkg.in/yaml.v3"
 )
 
 // Manifest 是 plugin.yaml 的 Go 表示。
 // 插件通过 Register RPC 传 plugin.yaml 原文，主程序 ParseManifest 后 ValidateManifest 校验。
-// 字段语义参考 github.com/OwnSecurityGuard/gt-plugin-sdk 内置 contract 的 manifest_schema。
+// 字段语义参考 github.com/OwnSecurityGuard/gametrace/sdk 内置 contract 的 manifest_schema。
 //
 // 该类型定义与校验逻辑内置于 SDK，使插件模块无需依赖 gametrace 根模块即可完成
 // manifest 解析与校验（SDK 的 ReadManifest 直接复用本文件函数）。

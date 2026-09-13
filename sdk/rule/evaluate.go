@@ -5,7 +5,7 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
+	"github.com/OwnSecurityGuard/gametrace/sdk/event"
 )
 
 // PairHit 是一条 pair 规则在单个事件上的命中。

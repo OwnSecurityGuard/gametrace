@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 // DecodeFuncV2 是 V2 解码回调的签名。

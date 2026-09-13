@@ -3,8 +3,8 @@ package main
 import (
 	"encoding/json"
 
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	"github.com/OwnSecurityGuard/gametrace/sdk/event"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 // 消息定义：与 pkg/protocol protocol.yaml 的 message.definitions 保持一致。

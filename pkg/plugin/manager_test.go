@@ -11,7 +11,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 // fakeDecoderServer 是一个最小化的 Decoder gRPC 服务桩，仅用于让 RegistryServer.Register

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

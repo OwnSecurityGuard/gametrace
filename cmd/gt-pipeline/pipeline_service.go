@@ -17,7 +17,7 @@ import (
 	"gametrace/pkg/logging"
 	"gametrace/pkg/plugin"
 	"gametrace/pkg/probe"
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 	"gametrace/pkg/store"
 )
 

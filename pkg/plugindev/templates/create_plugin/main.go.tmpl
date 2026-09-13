@@ -3,11 +3,11 @@ package main
 import (
 	"os"
 
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
-	"github.com/OwnSecurityGuard/gt-plugin-sdk"
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
+	"github.com/OwnSecurityGuard/gametrace/sdk"
+	"github.com/OwnSecurityGuard/gametrace/sdk/event"
 {{- if .FramingAvailable }}
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/framing"
+	"github.com/OwnSecurityGuard/gametrace/sdk/framing"
 {{- end }}
 )
 

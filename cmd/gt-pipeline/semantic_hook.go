@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
-	sdkevent "github.com/OwnSecurityGuard/gt-plugin-sdk/event"
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/rule"
+	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
+	sdkevent "github.com/OwnSecurityGuard/gametrace/sdk/event"
+	"github.com/OwnSecurityGuard/gametrace/sdk/rule"
 
 	"gametrace/pkg/event"
 	"gametrace/pkg/plugin"

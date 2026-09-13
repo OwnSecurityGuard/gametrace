@@ -10,7 +10,7 @@ description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gt-
 指导用户把任意 TCP/UDP 网络协议接入 GameTrace 平台。解码插件把抓包帧转成结构化业务事件，宿主（gt-pipeline）负责 TCP 重组以外的平台职责：语义规则执行、事件配对、状态分析、前端展示。
 
 - 语言：Go 1.26+（与宿主 gt-pipeline 的 go.mod 对齐，低于此版本可能出现兼容问题）
-- SDK：`github.com/OwnSecurityGuard/gt-plugin-sdk` v0.9.0
+- SDK：`github.com/OwnSecurityGuard/gametrace/sdk` v0.9.0
 - API 版本：`api_version: gt.decoder/v2`
 - 插件形态：独立可执行文件，通过 Register RPC 向 registry 注册
 
@@ -130,7 +130,7 @@ module your.org/plugins/foo-decoder
 
 go 1.26
 
-require github.com/OwnSecurityGuard/gt-plugin-sdk v0.9.0
+require github.com/OwnSecurityGuard/gametrace/sdk v0.9.0
 ```
 
 main.go（入口必须是 `sdk.DecodeFuncV2` 函数，不是实例；每个 input 必须以 `done=true` 收尾，即使一条消息都没解出来）：
@@ -142,9 +142,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/OwnSecurityGuard/gt-plugin-sdk"
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	"github.com/OwnSecurityGuard/gametrace/sdk"
+	"github.com/OwnSecurityGuard/gametrace/sdk/event"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 func main() {
@@ -169,7 +169,7 @@ func (d *decoder) decodePacket(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2
 		return stream.Send(&pb.DecodeResponseV2{InputId: req.GetInputId(), Done: true, Error: err.Error()})
 	}
 	for _, e := range events {
-		// v0.8.0 契约：Payload（纯业务）与 Meta（方向等）分开传输，
+		// v0.9.0 契约：Payload（纯业务）与 Meta（方向等）分开传输，
 		// 前端「元信息」独立展示，不再混入业务 payload。
 		mp, mErr := event.ValueFromMap(e.Payload).MarshalMsgpack()
 		if mErr != nil {
@@ -219,8 +219,8 @@ type Event struct {
 import (
 	"sync"
 
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/framing"
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	"github.com/OwnSecurityGuard/gametrace/sdk/framing"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 type decoder struct {

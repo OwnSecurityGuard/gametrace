@@ -9,7 +9,7 @@ package plugindev
 //
 // 当前值对应 SDK 模块 tag v0.9.0（语义契约 P1–P2：schema/state 已移除，
 // 三段产物 Payload/Meta/Analysis 强制分离）。SDK 源码位于仓库内 ./sdk（本地真源），
-// 对外发布路径仍为 github.com/OwnSecurityGuard/gt-plugin-sdk。
+// 对外发布路径仍为 github.com/OwnSecurityGuard/gametrace/sdk。
 const SDKVersion = "v0.9.0"
 
 // FramingAvailable 标记当前 SDKVersion 是否包含 framing 包。

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/framing"
+	"github.com/OwnSecurityGuard/gametrace/sdk/framing"
 )
 
 func mustHex(s string) []byte {

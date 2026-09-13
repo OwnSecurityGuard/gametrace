@@ -1,10 +1,10 @@
 package plugin
 
 import (
-	sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
+	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
 )
 
-// Manifest 及其附属类型的定义已迁入 SDK（github.com/OwnSecurityGuard/gt-plugin-sdk）。
+// Manifest 及其附属类型的定义已迁入 SDK（github.com/OwnSecurityGuard/gametrace/sdk）。
 //
 // 迁移前 gametrace 与 SDK 各持有一份逐字段相同的定义，两边独立演进必然漂移：
 // 插件按 SDK 的结构产出 plugin.yaml，宿主按自己那份解析，字段一旦不同步就是

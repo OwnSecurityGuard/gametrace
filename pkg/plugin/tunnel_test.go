@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 
 	"net"
 

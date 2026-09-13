@@ -15,7 +15,7 @@ package quality
 import (
 	"math"
 
-	sdkcontract "github.com/OwnSecurityGuard/gt-plugin-sdk/contract"
+	sdkcontract "github.com/OwnSecurityGuard/gametrace/sdk/contract"
 
 	"gametrace/pkg/plugindev"
 )

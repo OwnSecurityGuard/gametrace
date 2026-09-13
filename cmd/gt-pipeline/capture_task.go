@@ -20,7 +20,7 @@ import (
 	"gametrace/pkg/plugin"
 	"gametrace/pkg/state"
 	"gametrace/pkg/store"
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 // captureTask 是一次抓包会话的完整对象，有独立生命周期（Created → Running → Closed）。

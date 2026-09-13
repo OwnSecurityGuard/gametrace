@@ -27,8 +27,8 @@ import (
 	gevent "gametrace/pkg/event"
 	"gametrace/pkg/plugin"
 
-	sdkEvent "github.com/OwnSecurityGuard/gt-plugin-sdk/event"
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	sdkEvent "github.com/OwnSecurityGuard/gametrace/sdk/event"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 	"google.golang.org/grpc"
 )
 

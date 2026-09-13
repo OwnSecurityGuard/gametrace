@@ -9,7 +9,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
+	"github.com/OwnSecurityGuard/gametrace/sdk/event"
 )
 
 // buildL3L4 serializes an IPv4 + TCP (or UDP) packet carrying payload, returning

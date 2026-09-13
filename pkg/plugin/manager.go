@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"gametrace/pkg/auth"
-	sdkcontract "github.com/OwnSecurityGuard/gt-plugin-sdk/contract"
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	sdkcontract "github.com/OwnSecurityGuard/gametrace/sdk/contract"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

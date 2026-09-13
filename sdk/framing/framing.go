@@ -51,7 +51,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 
-	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
+	"github.com/OwnSecurityGuard/gametrace/sdk/event"
 )
 
 // TCPFlags carries the TCP control bits of the segment a payload came from.

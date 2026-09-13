@@ -6,7 +6,7 @@
 
 ## 1. Mission
 
-`github.com/OwnSecurityGuard/gt-plugin-sdk` is the Go SDK for GameTrace decoder plugins.
+`github.com/OwnSecurityGuard/gametrace/sdk` is the Go SDK for GameTrace decoder plugins.
 
 A decoder plugin is an independent process that:
 
@@ -84,8 +84,8 @@ plugin/
 package main
 
 import (
-    sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
-    pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+    sdk "github.com/OwnSecurityGuard/gametrace/sdk"
+    pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 func main() {

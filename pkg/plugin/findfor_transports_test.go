@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 // TestFindFor_MatchesTransports 验证 registry 按插件声明的 transports 匹配协议：
