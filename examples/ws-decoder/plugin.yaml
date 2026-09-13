@@ -1,0 +1,70 @@
+# ws-decoder — WebSocket (RFC 6455) 解码插件清单与语义契约声明
+#
+# 解码 examples/ws 的 client<->server 流量：同一 TCP 流先做 HTTP Upgrade
+# 握手（ws.handshake），随后按 RFC 6455 解析数据帧与控制帧。文本帧携带 JSON
+# 信封 {"type":...,"seq":...,"error_code":...}，覆盖 message id / role /
+# seq correlation / push rule / error 五类格式。
+#
+# 协议语义通过 semantic_rules 声明（插件定义语义、平台执行）：
+#   - ws.pair_echo：echo / echo_reply 按 seq 回显配对
+#   - ws.mark_push：type==push 的消息标注为 notification
+#   - ws.mark_error：error_code!=0 标注为 error
+
+api_version: gt.decoder/v2
+name: ws-decoder
+protocol: websocket
+protocol_version: "13"
+type: decoder
+transports:
+  - tcp
+hints:
+  - websocket
+  - json
+  - tcp
+  - port:8990
+capabilities:
+  decode: true
+contract:
+  name: gt.plugin
+  version: 1
+semantic_rules:
+  # 请求/响应配对：echo_reply 回显 echo 的 seq，两侧键都取自 payload 的 seq。
+  # seq==0 的推送消息由 when 拦截不参与配对。方向角色走 _meta.direction
+  # （平台把 Meta 通道并入规则求值视图的 _meta 键；帧方向取自 MASK 位）。
+  - id: ws.pair_echo
+    when:
+      - { path: seq, op: neq, value: 0 }
+    effect:
+      type: pair
+      sides:
+        - { path: _meta.direction, op: eq, value: client_to_server, key: seq }
+        - { path: _meta.direction, op: eq, value: server_to_client, key: seq }
+  # 推送消息：type==push，标注为 notification。
+  - id: ws.mark_push
+    when:
+      - { path: type, op: eq, value: push }
+    effect:
+      type: annotate
+      semantic: notification
+  # 错误语义：error_code != 0，标注为 error。
+  - id: ws.mark_error
+    when:
+      - { path: error_code, op: neq, value: 0 }
+    effect:
+      type: annotate
+      semantic: error
+meta:
+  author: opencode
+  description: >-
+    WebSocket (RFC 6455) decoder for the examples/ws client<->server traffic.
+    Per flow it first parses the HTTP Upgrade handshake (ws.handshake events),
+    then switches to RFC 6455 frame parsing: ws.text / ws.binary data frames
+    with continuation reassembly, and ws.ping / ws.pong / ws.close control
+    frames. Frame direction is derived from the MASK bit (clients must mask,
+    servers must not). Text payloads carry a JSON envelope (type / seq /
+    error_code) whose semantics are declared as semantic_rules (pair echo by
+    seq, annotate push/error) and executed by the platform. Payload text is
+    captured up to 64KB with a *_truncated flag.
+  game: ws-demo
+  transport: websocket-json
+  decoded_directions: [client_to_server, server_to_client]
