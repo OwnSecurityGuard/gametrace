@@ -20,17 +20,6 @@ import (
 // errAgentSpawn 是 agentSpawner 返回错误时用的哨兵错误（测试专用）。
 var errAgentSpawn = errors.New("agent spawn failed")
 
-// fakeProbePort 在测试期间替换 probeFreePortFn，绕过 GameTrace 专属端口段
-// （12100-12199 / 19500-19599）。开发机常驻的 gt-singbox-agent 可能正
-// 占用这些端口；测试目的是验证 CreateProxyLease 的内部状态机，
-// 不该耦合到生产服务是否在跑。
-func fakeProbePort(t *testing.T) {
-	t.Helper()
-	orig := probeFreePortFn
-	probeFreePortFn = func(int) error { return nil }
-	t.Cleanup(func() { probeFreePortFn = orig })
-}
-
 // TestHelperProcess 是被 proxy_lease 测试 re-exec 出来的子进程：收到
 // GO_WANT_HELPER_PROCESS=1 时长期阻塞，模拟常驻的 gt-singbox-agent，
 // 由父进程通过 agentProcess.stop() 的 Process.Kill() 终止。
@@ -68,7 +57,19 @@ func startFakeControlServer(t *testing.T, ctrlAddr string) {
 	t.Cleanup(func() { _ = gate.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = srv.Serve(ctx) }()
+
+	// Serve 的 bind 是同步的：端口不可用会立即返回错误，必须在这里暴露。
+	// 早期实现是 `go func() { _ = srv.Serve(ctx) }()`，把 listen 失败静默
+	// 吞掉——端口被常驻进程占用时，pipeline 的 ControlClient 会拨到那个
+	// 真实进程上，测试随即以 401 Unauthorized 告终，与真正的原因（端口
+	// 冲突）毫无关系，极难排查。
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ctx) }()
+	select {
+	case err := <-errCh:
+		t.Fatalf("fake control server failed to listen on %s: %v", ctrlAddr, err)
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 // spawnCall 记录一次 agentSpawner 调用，用于断言 listenAddr/ctrlAddr 正确。
@@ -182,14 +183,14 @@ func TestCreateProxyLease_Success(t *testing.T) {
 	if lease.Device != "pixel-7" {
 		t.Errorf("Device = %q, want pixel-7", lease.Device)
 	}
-	if lease.AgentListenPort < 12100 || lease.AgentListenPort > 12199 {
-		t.Errorf("AgentListenPort = %d out of range", lease.AgentListenPort)
+	if lease.AgentListenPort < s.agentPorts.base || lease.AgentListenPort > s.agentPorts.max {
+		t.Errorf("AgentListenPort = %d out of range [%d,%d]", lease.AgentListenPort, s.agentPorts.base, s.agentPorts.max)
 	}
-	if lease.ControlPort < 19500 || lease.ControlPort > 19599 {
-		t.Errorf("ControlPort = %d out of range", lease.ControlPort)
+	if lease.ControlPort < s.ctrlPorts.base || lease.ControlPort > s.ctrlPorts.max {
+		t.Errorf("ControlPort = %d out of range [%d,%d]", lease.ControlPort, s.ctrlPorts.base, s.ctrlPorts.max)
 	}
-	if lease.MobileGRPCPort < 19100 || lease.MobileGRPCPort > 19199 {
-		t.Errorf("MobileGRPCPort = %d out of range", lease.MobileGRPCPort)
+	if lease.MobileGRPCPort < s.grpcPorts.base || lease.MobileGRPCPort > s.grpcPorts.max {
+		t.Errorf("MobileGRPCPort = %d out of range [%d,%d]", lease.MobileGRPCPort, s.grpcPorts.base, s.grpcPorts.max)
 	}
 	if !lease.AgentRunning {
 		t.Error("AgentRunning = false, want true")
@@ -232,7 +233,7 @@ func TestCreateProxyLease_Success(t *testing.T) {
 }
 
 // TestCreateProxyLease_NoAutoStart 验证 NoAutoStart：只建出口不抓包
-//（agent 运行、端口已分配，但没有会话、没有 mobile gRPC 端口占用）。
+// （agent 运行、端口已分配，但没有会话、没有 mobile gRPC 端口占用）。
 func TestCreateProxyLease_NoAutoStart(t *testing.T) {
 	s, _, _ := newTestPipelineService(t)
 	s.agentSpawner = recordingSpawner(t, &[]spawnCall{})

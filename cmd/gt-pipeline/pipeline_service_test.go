@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,13 +30,68 @@ func newTestPipelineService(t *testing.T) (*pipelineService, string, *store.Cont
 	t.Cleanup(func() { _ = controlStore.Close() })
 	mgr := plugin.NewRegistryServer(10)
 	s := newPipelineService(workDir, controlStore, mgr, ":9091", "sqlite", "")
-	// 测试期间屏蔽端口预探测：开发机常驻的 gt-singbox-agent 可能正占用
-	// GameTrace 专属端口段（12100-12199 / 19500-19599），而这些测试只验证
-	// pipelineService 内部状态机，不该耦合到生产服务是否在跑。
-	origProbe := probeFreePortFn
-	probeFreePortFn = func(int) error { return nil }
-	t.Cleanup(func() { probeFreePortFn = origProbe })
+	// 租约端口段改用本机当前空闲的连续端口，而不是生产固定段
+	// （12100/19100/19500）：开发机上 gt-agent 等常驻进程会占住那些段，
+	// 假控制服务便 bind 失败——早期实现又用 `_ = srv.Serve(ctx)` 吞掉该错误，
+	// 请求落到真实进程上，表现为极具误导性的 401 Unauthorized。
+	// 分配真实空闲端口后，probeFreePortFn 的预探测也恢复真实行为：端口若被
+	// 抢占会立刻显式报错，而不是被 no-op 屏蔽。
+	s.agentPorts, s.grpcPorts, s.ctrlPorts = isolatedLeasePortRanges(t)
 	return s, workDir, controlStore
+}
+
+// isolatedLeasePortRanges 探测一段本机空闲的连续端口并切成三等份，分别作为
+// agent / mobile gRPC / agent 控制端口段（每段 8 个）。目的是让租约测试与
+// 开发机上常驻的 GameTrace 服务（如占着 19500 的 gt-agent）解耦。
+func isolatedLeasePortRanges(t *testing.T) (agent, grpc, ctrl *portRange) {
+	t.Helper()
+	const perRange = 8
+	base := freeContiguousPortBase(t, perRange*3)
+	return newPortRange(base, base+perRange-1),
+		newPortRange(base+perRange, base+2*perRange-1),
+		newPortRange(base+2*perRange, base+3*perRange-1)
+}
+
+// freeContiguousPortBase 找出一个 base，使 [base, base+n-1] 全部可 bind。
+// 先用端口 0 让 OS 给个临时起点，再逐个校验连续性；不满足就重试。
+func freeContiguousPortBase(t *testing.T, n int) int {
+	t.Helper()
+	for attempt := 0; attempt < 100; attempt++ {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			continue
+		}
+		base := ln.Addr().(*net.TCPAddr).Port
+		_ = ln.Close()
+		if base+n-1 > 65535 {
+			continue
+		}
+		if portsBindable(base, n) {
+			return base
+		}
+	}
+	t.Fatalf("could not find %d contiguous free ports for lease tests", n)
+	return 0
+}
+
+// portsBindable 报告 [base, base+n-1] 是否全部可绑定（探测后立即释放）。
+// 租约的 agent 端口按 0.0.0.0 监听，但用 127.0.0.1 探测已足够保守：
+// 回环端口被占时 0.0.0.0 也必然绑不上。
+func portsBindable(base, n int) bool {
+	lns := make([]net.Listener, 0, n)
+	defer func() {
+		for _, l := range lns {
+			_ = l.Close()
+		}
+	}()
+	for p := base; p < base+n; p++ {
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+		if err != nil {
+			return false
+		}
+		lns = append(lns, l)
+	}
+	return true
 }
 
 // fileStartSessionRequest 构造一个使用 file source 的 StartSessionRequest。

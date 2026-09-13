@@ -16,8 +16,8 @@ import (
 // module (no baked-in local paths) — the core invariant of the P1 plane
 // split: scaffolding must not couple to the gametrace source tree.
 //
-// The build step is best-effort: it is skipped when the local gt-plugin-sdk
-// checkout is unavailable (e.g. CI without the sibling repo) so the unit
+// The build step is best-effort: it is skipped when the repository SDK
+// submodule (./sdk) is unavailable (e.g. a partial checkout) so the unit
 // suite stays hermetic.
 func TestScaffoldSmokeBuild(t *testing.T) {
 	if testing.Short() {
@@ -54,7 +54,7 @@ func TestScaffoldSmokeBuild(t *testing.T) {
 	// repo or an offline module cache) so the unit suite stays hermetic.
 	sdk := findLocalSDK(t)
 	if sdk == "" {
-		t.Skip("local gt-plugin-sdk not found (tried canonical + sibling); skipping build")
+		t.Skip("repository SDK submodule ./sdk not found; skipping build")
 	}
 	edit := exec.Command("go", "mod", "edit",
 		"-replace", "github.com/OwnSecurityGuard/gametrace/sdk="+sdk)
@@ -85,23 +85,23 @@ func repoRoot(t *testing.T) string {
 	return root
 }
 
-// findLocalSDK locates the gt-plugin-sdk checkout so the smoke build can
-// resolve it without network access. It prefers the canonical
-// E:\ai_workspace\gt-plugin-sdk (per project convention) and falls back to a
-// sibling E:\gt-plugin-sdk of the gametrace repo root. Returns "" if neither exists.
+// findLocalSDK returns the SDK submodule inside this repository (./sdk), which
+// is the single local source of truth now that the SDK has been folded into the
+// monorepo. Returns "" when it is absent (e.g. a partial checkout).
+//
+// The earlier implementation preferred the retired standalone repo
+// E:\ai_workspace\gt-plugin-sdk. That checkout still lingers on developer
+// machines, and replacing onto it rewrites the SDK module to its old
+// identity (module path gt-plugin-sdk, old proto types), so the scaffolded
+// main.go no longer type-checks against sdk.DecodeFuncV2. It also made the
+// suite fail locally while silently skipping in CI — never look outside ./sdk.
 func findLocalSDK(t *testing.T) string {
 	t.Helper()
-	root := repoRoot(t)
-	candidates := []string{
-		filepath.Join(root, "..", "ai_workspace", "gt-plugin-sdk"),
-		filepath.Join(root, "..", "gt-plugin-sdk"),
+	sdk := filepath.Join(repoRoot(t), "sdk")
+	if _, err := os.Stat(sdk); err != nil {
+		return ""
 	}
-	for _, c := range candidates {
-		if _, err := os.Stat(c); err == nil {
-			return c
-		}
-	}
-	return ""
+	return sdk
 }
 
 func readFile(t *testing.T, path string) string {

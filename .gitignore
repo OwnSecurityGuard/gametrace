@@ -110,3 +110,6 @@ go.work.sum
 # Runtime session state / local test artifacts
 current.*.json
 qc
+
+# 临时调试目录（MCP / 解码排查脚本与样本 dump，非项目源码）
+.tmp_mcp/
