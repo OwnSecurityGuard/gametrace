@@ -38,7 +38,6 @@ func (f *fakeDecoderV2) DecodeV2(stream grpc.BidiStreamingServer[pb.DecodeReques
 	_ = stream.Send(&pb.DecodeResponseV2{
 		InputId:        req.InputId,
 		EventType:      "test.event",
-		SchemaId:       "test.v1",
 		PayloadMsgpack: msgpackData,
 	})
 	_ = stream.Send(&pb.DecodeResponseV2{

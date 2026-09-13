@@ -1,0 +1,47 @@
+api_version: gt.decoder/v2
+name: http-stream-decoder
+protocol: http
+protocol_version: "1.1"
+type: decoder
+transports:
+  - tcp
+hints:
+  - http
+  - web
+  - tcp
+  - port:80
+  - port:8080
+contract:
+  name: gt.plugin
+  version: 1
+semantic_rules:
+  # HTTP/1.1 无显式配对键：同 flow 内请求在前、响应在后，按 flow_id 配对。
+  - id: http.pair_request_response
+    when:
+      all:
+        - { path: flow_id, op: exists }
+        - { path: direction, op: in, value: [client_to_server, server_to_client] }
+    effect:
+      type: pair
+      sides:
+        # HTTP/1.1 两侧配对键都在 flow_id：per-side key 指向相同字段也合法。
+        - { path: direction, op: eq, value: client_to_server, key: flow_id }
+        - { path: direction, op: eq, value: server_to_client, key: flow_id }
+  # 4xx/5xx 是响应的语义属性，不是新关系。
+  - id: http.mark_error
+    when:
+      all:
+        - { path: status, op: gte, value: 400 }
+        - { path: status, op: lt, value: 600 }
+    effect:
+      type: annotate
+      semantic: error
+meta:
+  author: gt-plugin-sdk
+  description: >-
+    Reference HTTP decoder plugin demonstrating the full intended pipeline
+    (ExtractL7 -> Reassembler -> HTTP message parse -> event) with a
+    Protocol Semantic Rule declaration. Decodes HTTP requests and responses
+    from reassembled TCP streams; pairing/annotation are declared as
+    semantic_rules and executed by the platform.
+  game: web

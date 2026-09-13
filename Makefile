@@ -43,8 +43,9 @@ RELEASE_CMDS := gt-pipeline gt-mcp gt-agent
 
 
 # 只生成 gametrace 自有的进程间控制面 proto。
-# 插件线上契约（plugin.proto）已迁入 SDK 仓库，在那边 make proto 生成——
-# 两侧各生成一份会在 protobuf 全局注册表里撞同一个文件路径并 panic。
+# 插件线上契约（plugin.proto）已并入仓库内 SDK 子模块 ./sdk，在那边 make proto 生成
+# （sdk/Makefile）。gametrace 与 SDK 各生成一份会在 protobuf 全局注册表里撞同一个
+# 文件路径并 panic，因此契约代码只由 ./sdk 产出一份。
 # 这里覆盖两个 gametrace 自有协议：internalipc（抓包控制面）与 plugindev（开发平面
 # 控制面，P1 平面拆分引入）。
 proto:
@@ -114,6 +115,31 @@ build-agents:
 	ls -la build/agents/
 
 build: build-mcp build-pipeline build-plugin-dev build-agent
+
+# ============================================================================
+# SDK 维护与对外发布（SDK 已并入本 monorepo 的 ./sdk）
+#
+# ./sdk 是 SDK 源码的真源（module：github.com/OwnSecurityGuard/gt-plugin-sdk，
+# 保留独立 go.mod；根 go.mod 以 replace => ./sdk 消费）。对外发布时把 ./sdk
+# 同步到已退役的只读发布镜像 gt-plugin-sdk 仓库并打 tag，外部插件照旧
+# go get github.com/OwnSecurityGuard/gt-plugin-sdk@v0.x 拉取。
+# ============================================================================
+.PHONY: sdk-test sdk-publish
+SDK_VERSION ?= v0.9.0
+SDK_UPSTREAM ?= git@github.com:OwnSecurityGuard/gt-plugin-sdk.git
+
+# 在 SDK 子模块内单独跑它自己的测试/构建。
+sdk-test:
+	cd sdk && go test ./... && go build ./...
+
+# 对外发布 SDK：测试通过后，把 ./sdk 以 git subtree 推送到发布镜像仓库的 main
+# 分支，并打上 SDK_VERSION tag（覆盖 force，便于同步演进）。
+# 用法：make sdk-publish SDK_VERSION=v0.9.0  （首次需先 git remote add 或用环境变量）
+sdk-publish: sdk-test
+	@test -n "$(SDK_UPSTREAM)" || { echo "SDK_UPSTREAM is empty"; exit 1; }
+	git subtree push --prefix sdk $(SDK_UPSTREAM) main --squash || git subtree push --prefix sdk $(SDK_UPSTREAM) main
+	git tag -f $(SDK_VERSION)
+	git push $(SDK_UPSTREAM) $(SDK_VERSION) || true
 
 build-examples:
 	go build -tags $(TAGS) -o bin/http-server.exe ./examples/http/server

@@ -37,7 +37,6 @@ func (m *mockDecoderV2) DecodeV2(stream grpc.BidiStreamingServer[pb.DecodeReques
 		resp := &pb.DecodeResponseV2{
 			InputId:          req.InputId,
 			EventType:        "http.request",
-			SchemaId:         "http.request.v1",
 			PayloadMsgpack:   msgpackData,
 			CausationInputId: "causation-123",
 			CorrelationKey:   "correlation-456",

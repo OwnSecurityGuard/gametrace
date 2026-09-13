@@ -259,8 +259,11 @@ func (e *semanticEngine) applySemantics(ev *event.Event, sems []rule.Semantic) {
 	}
 }
 
-// applyPairs 处理 pair 命中：与本规则下等待中的对侧事件配对，
-// 配对成功时双方写同一个 CorrelationID，后到者写 CausationID 指向先到者。
+// applyPairs 处理 pair 命中：与本规则下等待中的对侧事件配对。
+// 配对成功后双方写同一个 CorrelationID（取请求方事件 ID），响应方写
+// CausationID 指向请求方。角色由 pair 规则 sides 的声明顺序决定：
+// Side 0 = 请求方、Side 1 = 响应方（SDK 新 pair 模型：每侧自带 key，
+// 不再有规则级 key），与到达先后无关。
 func (e *semanticEngine) applyPairs(ev *event.Event, hits []rule.PairHit) {
 	if len(hits) == 0 {
 		return
@@ -274,11 +277,18 @@ func (e *semanticEngine) applyPairs(ev *event.Event, hits []rule.PairHit) {
 			delete(e.pending, mapKey)
 			e.mu.Unlock()
 
-			// 先到者视为请求方：其事件 ID 充当这一组消息的 trace id。
-			corr := string(prev.evt.Identity.ID)
-			prev.evt.Trace.CorrelationID = corr
-			ev.Trace.CorrelationID = corr
-			ev.Trace.CausationID = prev.evt.Identity.ID
+			// MatchPair 保证两侧 side 不同（pair 恰好 2 side，Side ∈ {0,1}）：
+			// Side 0 是请求方、Side 1 是响应方；以请求方事件 ID 作为 trace id。
+			var req, resp *event.Event
+			if h.Side == 0 {
+				req, resp = ev, prev.evt
+			} else {
+				req, resp = prev.evt, ev
+			}
+			corr := string(req.Identity.ID)
+			req.Trace.CorrelationID = corr
+			resp.Trace.CorrelationID = corr
+			resp.Trace.CausationID = req.Identity.ID
 			continue
 		}
 		if len(e.pending) >= maxPendingPairs {

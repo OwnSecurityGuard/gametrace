@@ -10,7 +10,7 @@ description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gt-
 指导用户把任意 TCP/UDP 网络协议接入 GameTrace 平台。解码插件把抓包帧转成结构化业务事件，宿主（gt-pipeline）负责 TCP 重组以外的平台职责：语义规则执行、事件配对、状态分析、前端展示。
 
 - 语言：Go 1.26+（与宿主 gt-pipeline 的 go.mod 对齐，低于此版本可能出现兼容问题）
-- SDK：`github.com/OwnSecurityGuard/gt-plugin-sdk` v0.8.2
+- SDK：`github.com/OwnSecurityGuard/gt-plugin-sdk` v0.9.0
 - API 版本：`api_version: gt.decoder/v2`
 - 插件形态：独立可执行文件，通过 Register RPC 向 registry 注册
 
@@ -113,7 +113,7 @@ func loadDotEnv(path string) {
 
 ```
 plugins/<protocol>-decoder/
-├── go.mod          # 依赖 gt-plugin-sdk v0.8.2
+├── go.mod          # 依赖 gt-plugin-sdk v0.9.0
 ├── main.go         # 入口：RunRegisterLoopWithOptions + loadDotEnv(".env")
 ├── decode.go       # 核心：Decode(req) → []*Event
 ├── <fmt>.go        # 负载解析器（解压/解帧/解文本）
@@ -130,7 +130,7 @@ module your.org/plugins/foo-decoder
 
 go 1.26
 
-require github.com/OwnSecurityGuard/gt-plugin-sdk v0.8.2
+require github.com/OwnSecurityGuard/gt-plugin-sdk v0.9.0
 ```
 
 main.go（入口必须是 `sdk.DecodeFuncV2` 函数，不是实例；每个 input 必须以 `done=true` 收尾，即使一条消息都没解出来）：
@@ -363,7 +363,7 @@ semantic_rules:
 |---|---|---|---|
 | `name` | 从 payload 提取消息名 | `meta.msg_name` | `key` |
 | `annotate` | 打角色标签：request/response/notification/error | `meta.semantic` | `semantic` |
-| `pair` | 请求-响应配对（同一个“来回”） | `correlation_id`（双方相同）+ `causation_id`（后到者→先到者） | `key`，可选 `sides` |
+| `pair` | 请求-响应配对（同一个“来回”） | `correlation_id`（双方相同）+ `causation_id`（响应方→请求方） | `sides`（恰好 2 个，每侧自带 `key`） |
 | `extract` | 父事件拆出子事件（**父子关系**） | 子事件继承父连接等来源，`parent_id` 指父、继承父 `correlation_id` | `source` + `child` |
 
 **① `name` —— 消息名**（替代解码器写死）：
@@ -385,17 +385,16 @@ semantic_rules:
 ```
 
 **③ `pair` —— 请求/响应配对（跨消息横向关联）**：
-`key` 是配对键 GJSON path，其值相等即同一个来回；`sides` 给双方角色（0 或 2 个谓词，各匹配一个不同 side）。配对成功后双方写同一 `correlation_id`，**后到事件的 `causation_id` 指向先到事件**；前端据此把请求/响应左右并排。典型：请求带 `ts`，响应回显同一 `ts`。
+pair 恰好 2 个 `sides`，每侧自带 `key`（该侧配对键 GJSON path，两侧可指向不同字段）与角色判定（`path`/`op`/`value`）；**每侧 `key` 必填，无规则级 `key`**。同一个来回里两侧 `key` 的取值相等即配对；**side 下标 0 = 请求方、1 = 响应方**（声明顺序即角色，决定 `causation_id` 方向）。配对成功后双方写同一 `correlation_id`（取请求方事件 id），**响应方 `causation_id` 指向请求方**；前端据此把请求/响应左右并排。典型：请求带 `ts`，响应回显同一 `ts`。
 
 ```yaml
 - id: foo.pair_ts
   when: [ { path: _meta.msg_name, op: in, value: [ping, pong] } ]
   effect:
     type: pair
-    key: ts                  # 请求/响应共用回显字段
     sides:
-      - { path: _meta.msg_name, op: eq, value: ping }
-      - { path: _meta.msg_name, op: eq, value: pong }
+      - { path: _meta.msg_name, op: eq, value: ping, key: ts }
+      - { path: _meta.msg_name, op: eq, value: pong, key: ts }
 ```
 
 **④ `extract` —— 父子关系（一个网络消息承载多个逻辑子事件）**：

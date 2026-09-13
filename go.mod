@@ -4,7 +4,7 @@ go 1.26.8
 
 require (
 	github.com/Microsoft/go-winio v0.6.2
-	github.com/OwnSecurityGuard/gt-plugin-sdk v0.8.2
+	github.com/OwnSecurityGuard/gt-plugin-sdk v0.9.0
 	github.com/expr-lang/expr v1.17.0
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.6.0
@@ -18,7 +18,13 @@ require (
 	modernc.org/sqlite v1.54.0
 )
 
-// 契约单向流动：SDK 定义，gametrace 消费。
+// 契约单向流动（monorepo）：SDK 源码位于 ./sdk（独立 module，保留对外发布路径
+// github.com/OwnSecurityGuard/gt-plugin-sdk），根模块经 replace 消费；外部插件仍按
+// 已发布的 SDK 版本 go get 拉取。
+
+// replace 指向仓库内 SDK 子模块，使其成为唯一的本地真源（对外发布经 Makefile
+// sdk-publish 从 ./sdk 推送镜像仓库并打 tag）。
+replace github.com/OwnSecurityGuard/gt-plugin-sdk => ./sdk
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

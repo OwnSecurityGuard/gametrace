@@ -64,7 +64,7 @@
 plugins/my-http/
 ├── plugin.yaml          # Manifest 配置文件
 ├── main.go              # 插件入口
-├── go.mod               # 模块定义（仅 require gta-plugin-sdk）
+├── go.mod               # 模块定义（仅 require gt-plugin-sdk）
 └── README.md            # 说明文档
 ```
 

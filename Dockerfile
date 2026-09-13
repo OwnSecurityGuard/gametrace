@@ -90,8 +90,12 @@ RUN apt-get update \
 
 WORKDIR /src
 
-# 先只拷贝 go.mod/go.sum 做 go mod download，充分利用层缓存。
+# 先只拷贝 go.mod/go.sum 与 sdk/go.mod+sdk/go.sum 做 go mod download，充分利用层
+# 缓存。根 go.mod 用 replace github.com/OwnSecurityGuard/gt-plugin-sdk => ./sdk 消费
+# 仓库内 SDK 子模块，因此 sdk/go.mod 必须在模块解析前在场，否则 replace 解析失败
+# （SDK 源码本体由下方 COPY . . 带入，本阶段只需其 go.mod 解析依赖）。
 COPY go.mod go.sum ./
+COPY sdk/go.mod sdk/go.sum sdk/
 RUN go mod download
 
 # ---- macOS 交叉工具链（osxcross，仅 BUILD_DARWIN_AGENT=1）----

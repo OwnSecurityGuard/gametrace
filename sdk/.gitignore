@@ -1,0 +1,17 @@
+# Go
+*.exe
+*.dll
+*.so
+*.dylib
+/bin/
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+
+# local project memory / agent state (not source)
+.workbuddy/

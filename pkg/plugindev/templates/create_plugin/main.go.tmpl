@@ -3,11 +3,11 @@ package main
 import (
 	"os"
 
-	pb "github.com/OwnSecurityGuard/gta-plugin-sdk/proto"
-	"github.com/OwnSecurityGuard/gta-plugin-sdk"
-	"github.com/OwnSecurityGuard/gta-plugin-sdk/event"
+	pb "github.com/OwnSecurityGuard/gt-plugin-sdk/proto"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/event"
 {{- if .FramingAvailable }}
-	"github.com/OwnSecurityGuard/gta-plugin-sdk/framing"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/framing"
 {{- end }}
 )
 
@@ -75,7 +75,6 @@ func emit(payload []byte, stream pb.Decoder_DecodeV2Server, req *pb.DecodeReques
 	return stream.Send(&pb.DecodeResponseV2{
 		InputId:        req.GetInputId(),
 		EventType:      "unknown",
-		SchemaId:       "unknown.v1",
 		PayloadMsgpack: data,
 	})
 }
@@ -89,7 +88,7 @@ func done(stream pb.Decoder_DecodeV2Server, req *pb.DecodeRequest) error {
 
 // decodePacket 是核心解码函数，签名匹配 sdk.DecodeFuncV2。
 //
-// 注意：当前固定引用的 gta-plugin-sdk 版本【不包含】framing 包
+// 注意：当前固定引用的 gt-plugin-sdk 版本【不包含】framing 包
 // （create_plugin 返回 framing_available=false）。因此这里不提供 link_type
 // 剥离与 TCP 重组工具。对 pcap 类源，DecodeRequest.payload 仍是完整链路层帧——
 // 请改用含 framing 的 SDK 版本（framing.ExtractL7 / framing.NewReassembler），
@@ -108,7 +107,6 @@ func decodePacket(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error
 	if err := stream.Send(&pb.DecodeResponseV2{
 		InputId:        req.GetInputId(),
 		EventType:      "unknown",
-		SchemaId:       "unknown.v1",
 		PayloadMsgpack: msgpackData,
 	}); err != nil {
 		return err

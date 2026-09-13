@@ -53,22 +53,19 @@ hints:
   - "port:7000"
 `
 
-// TestRegister_RejectsBadSemanticDeclaration 验证注册期六层语义校验：
-// schema 声明非法（未知类型）必须被 PluginChecker.Check 拦下，
+// TestRegister_RejectsBadSemanticDeclaration 验证注册期语义校验：
+// semantic_rules 声明非法（未知 effect 类型）必须被 PluginChecker.Check 拦下，
 // 且发生在拨号验证之前（无需真实 decoder socket 即可断言）。
 func TestRegister_RejectsBadSemanticDeclaration(t *testing.T) {
 	bad := `api_version: gt.decoder/v2
 name: bad-schema-decoder
 protocol: test_proto
 type: decoder
-capabilities:
-  decode: true
-  schema: true
-schemas:
-  - id: test.player.v1
-    version: 1
-    fields:
-      hp: { type: not_a_real_type }
+semantic_rules:
+  - id: game.bogus
+    when:
+      - { path: type, op: exists }
+    effect: { type: not_a_real_effect }
 `
 	s := NewRegistryServer(10)
 	_, err := s.Register(context.Background(), &pb.RegisterRequest{

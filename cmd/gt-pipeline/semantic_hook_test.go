@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	sdk "github.com/OwnSecurityGuard/gt-plugin-sdk"
+	"github.com/OwnSecurityGuard/gt-plugin-sdk/rule"
 	"gametrace/pkg/event"
 )
 
@@ -58,4 +59,31 @@ semantic_rules:
 		t.Fatalf("msg_name = %v, want 'turn'", got)
 	}
 	t.Logf("OK: msg_name = %q", got)
+}
+
+// TestApplyPairsDirectionBySide 验证 pair 配对的请求/响应方向由 sides 下标
+// （Side 0 = 请求方、Side 1 = 响应方）决定，而非到达顺序——响应先到也能得到
+// 正确的 causation_id（响应方 → 请求方）与 correlation_id。
+func TestApplyPairsDirectionBySide(t *testing.T) {
+	e := newSemanticEngine(slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	mk := func(tag string) *event.Event {
+		return event.NewEvent("sess", event.EventType("wesnoth.message"), "",
+			event.ValueObject(map[string]event.Value{"x": event.ValueString(tag)}), event.EventContext{})
+	}
+	req := mk("req")   // Side 0 = 请求方
+	resp := mk("resp") // Side 1 = 响应方
+
+	// 响应先到、请求后到：方向仍按 Side 判定，与到达顺序无关。
+	e.applyPairs(resp, []rule.PairHit{{RuleID: "wesnoth.pair", Key: "42", Side: 1}})
+	e.applyPairs(req, []rule.PairHit{{RuleID: "wesnoth.pair", Key: "42", Side: 0}})
+
+	if resp.Trace.CausationID != req.Identity.ID {
+		t.Fatalf("resp.CausationID = %q, want %q（响应方应指向请求方）", resp.Trace.CausationID, req.Identity.ID)
+	}
+	if req.Trace.CausationID != "" {
+		t.Fatalf("req.CausationID = %q, want empty（请求方无前驱）", req.Trace.CausationID)
+	}
+	if corr := string(req.Identity.ID); req.Trace.CorrelationID != corr || resp.Trace.CorrelationID != corr {
+		t.Fatalf("correlation 应等于请求方 id：req=%q resp=%q want %q", req.Trace.CorrelationID, resp.Trace.CorrelationID, corr)
+	}
 }

@@ -1,0 +1,105 @@
+// 插件与宿主之间的 gRPC 线上契约（SSOT - Single Source of Truth）。
+//
+// 该文件自 gametrace/pkg/plugin/proto/ 迁入 SDK。迁移前 gametrace 与 SDK 各自持有一份
+// 逐字节相同的生成代码，但它们在 protobuf 全局注册表中登记的是同一个文件路径，
+// 一旦被链接进同一个二进制就会 panic（file already registered），
+// 使宿主根本无法复用 SDK 的任何 proto 相关代码。现在只此一份。
+//
+// 重新生成：make proto（输出 paths=source_relative 到 proto/）。
+syntax = "proto3";
+
+package plugin;
+option go_package = "github.com/OwnSecurityGuard/gt-plugin-sdk/proto";
+
+// PluginRegistry 由主程序实现，插件主动注册。
+service PluginRegistry {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc Deregister(DeregisterRequest) returns (DeregisterResponse);
+  // Connect 仅在 Register(tunnel=true) 后由插件拨出：
+  // 主程序经此双向流把 DecodeRequest 以帧形式转发给插件，
+  // 插件用 TunnelFrame 应答，替代对 socket_path 的直接回拨。
+  rpc Connect(stream TunnelFrame) returns (stream TunnelFrame);
+}
+
+// Decoder 由插件实现，主程序按需拨号调用 DecodeV2。
+service Decoder {
+  // DecodeV2 是新版解码接口，返回结构化的 EventV2 数据
+  rpc DecodeV2(stream DecodeRequest) returns (stream DecodeResponseV2);
+}
+
+message RegisterRequest {
+  string socket_path = 1;   // 插件 DecodeV2 RPC 监听的 socket 路径（tunnel=true 时可留空）
+  bytes  manifest    = 2;   // plugin.yaml 原文（主程序 parse）
+  bool   tunnel      = 3;   // true = 走反向隧道（Connect 流），主程序跳过对 socket_path 的回拨
+}
+
+message RegisterResponse {
+  string instance_id = 1;              // 主程序分配的实例 ID
+  int32  heartbeat_interval_sec = 2;   // 主程序要求的心跳间隔
+}
+
+message HeartbeatRequest {
+  string instance_id = 1;
+}
+
+message HeartbeatResponse {}
+
+message DeregisterRequest {
+  string instance_id = 1;
+}
+
+message DeregisterResponse {}
+
+message DecodeRequest {
+  string session_id = 1;
+  string protocol_hint = 2;
+  bytes payload = 3;
+  int32 link_type = 4;
+  string input_id = 5;       // 本次解码输入的唯一标识，复用 packet_id
+  string packet_id = 6;      // 原始抓包 ID
+  string flow_id = 7;        // 五元组流 ID，核心生成
+  string src = 8;            // "ip:port"
+  string dst = 9;            // "ip:port"
+  // direction is inferred by the core from the 5-tuple; the plugin may
+  // override it via _meta.direction in the payload.
+  string direction = 10;
+  int64 timestamp_ns = 11;   // 包时间戳（Unix ns）
+}
+
+// DecodeResponseV2 represents a single decoded result for one input_id.
+// The plugin sends zero or more result messages, followed by one message
+// with done=true to mark the end of results for that input_id.
+// If error is set, this result represents a decode failure.
+message DecodeResponseV2 {
+  string input_id = 1;          // 对应 DecodeRequest.input_id
+  bool done = 2;                // true 表示该 input_id 的结果已全部发完
+  string event_type = 3;        // 当 done=true 时为空
+  bytes payload_msgpack = 5;    // MsgPack 编码的 Value
+  string error = 6;             // 错误信息
+  string correlation_key = 7;   // 业务关联键
+  string causation_input_id = 8; // 指向导致本结果的 input_id
+  bytes meta_msgpack = 9;       // 可选：MsgPack 编码的 Meta Value（direction/msg_name/role 等元信息）
+  bytes analysis_msgpack = 10;  // 可选：MsgPack 编码的 Analysis Value（_state_changes/entity 等分析）
+}
+
+// TunnelFrame 是 Connect 双向流上的帧。
+// 流的开启是隐式的：某 stream_id 的第一个 request 帧即开流。
+message TunnelFrame {
+  uint32 stream_id = 1;
+  oneof payload {
+    bytes request    = 2;  // server→plugin: marshaled DecodeRequest
+    bool  half_close = 3;  // server→plugin: 该逻辑流的请求侧关闭（对应 CloseSend）
+    bytes response   = 4;  // plugin→server: marshaled DecodeResponseV2
+    StreamEnd end    = 5;  // plugin→server: 流结束（error 空 = 正常 EOF）
+    StreamReset reset = 6; // server→plugin: 取消该逻辑流
+  }
+}
+
+message StreamEnd {
+  string error = 1;  // 非空表示该逻辑流以错误结束
+}
+
+message StreamReset {
+  string reason = 1;
+}

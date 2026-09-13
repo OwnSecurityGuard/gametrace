@@ -63,7 +63,6 @@ func (m *gatedDecoderV2) respond(stream grpc.BidiStreamingServer[pb.DecodeReques
 	resp := &pb.DecodeResponseV2{
 		InputId:        req.InputId,
 		EventType:      "test.event",
-		SchemaId:       "unknown.v1",
 		PayloadMsgpack: payload,
 	}
 	if err := stream.Send(resp); err != nil {

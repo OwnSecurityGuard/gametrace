@@ -1,6 +1,8 @@
-# 构建上下文瘦身 + 防止本地 go.work 进镜像：go.work 里 use 了仓库外的
-# ../ai_workspace/gta-plugin-sdk，容器内不存在该路径会让 go 命令直接报错。
-# 镜像构建不使用 workspace 模式：go.mod 依赖的是已发布的 SDK 版本、无 replace。
+# 构建上下文瘦身 + 排除本地 workspace 文件：镜像构建不使用 workspace 模式。
+# SDK 是仓库内子模块（sdk/，本地真源），根 go.mod 用
+#   replace github.com/OwnSecurityGuard/gt-plugin-sdk => ./sdk
+# 消费；go.work/go.work.sum 不在构建上下文，故不会干扰。sdk/ 需保留进上下文
+# 以满足 builder 阶段的 replace 解析与编译。
 .git
 go.work
 go.work.sum
