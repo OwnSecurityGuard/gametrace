@@ -11,9 +11,9 @@ capture frame → framing.ExtractL7 → framing.Reassembler → HTTP 消息解�
 | 文件 | 职责 |
 |---|---|
 | `main.go` | 入口：`sdk.RunRegisterLoop` + 跨 Decode 调用持久化的 Reassembler / 流计数器 |
-| `http.go` | 从重组后的流字节解析单条 HTTP 消息（请求/响应），精确计算消费字节数 |
-| `emit.go` | 把消息组装成 schema 契约事件（含 `_state_changes`）并发送 |
-| `plugin.yaml` | schema + state 语义契约声明 |
+| `http.go` | 用标准库 `net/http` 从重组后的流字节解析单条 HTTP 消息（请求/响应），精确计算消费字节数 |
+| `emit.go` | 把消息组装成事件（含 `_state_changes` 与 Meta 通道的 direction）并发送 |
+| `plugin.yaml` | semantic_rules 语义契约声明（pair / annotate） |
 
 ## 解码行为
 
@@ -44,15 +44,13 @@ GT_REGISTRY_ADDR=127.0.0.1:9091 ./http-stream-decoder
 把本目录连同 `plugin.yaml` 复制为独立模块（参考主项目 `plugins/go.mod.template`），
 然后走 `build_plugin` → `activate_plugin` → `verify_plugin` 闭环。
 
-## 契约要点
+## 契约要点（v0.9.0）
 
-- 事件类型 `http.request` / `http.response`，schema 分别为 `http.request.v1` / `http.response.v1`（strict）。
-- 状态层：subject `flow`，路径 `requests` / `responses`，由插件内存计数器驱动 `_state_changes`。
-- 证据层：`http.observation.request` / `http.observation.response`（observation + decode）。
-- 规则层：`http.flow.request-seen` / `http.flow.response-seen`。
-
-## request-seen / response-seen
-
-`plugin.yaml` 中两条规则的 doc_ref 锚点即此处：
-**request-seen** 对应 "一条请求行解码为 http.request 事件"；
-**response-seen** 对应 "一条状态行解码为 http.response 事件"。
+- 事件类型 `http.request` / `http.response`。
+- 协议语义全部声明为 `semantic_rules`，由平台执行：
+  - `http.pair_request_response`：同 flow 内按 `flow_id` 配对请求与响应，
+    方向角色经 `_meta.direction` 判别（插件把 direction 写入 Meta 通道，
+    平台将 Meta 并入规则求值视图的 `_meta` 键）。
+  - `http.mark_error`：状态码 4xx/5xx 标注为 `error`。
+- 每流消息计数（`requests` / `responses`）随事件上报，并通过 `_state_changes`
+  描述状态变更，供平台实体基线投影。

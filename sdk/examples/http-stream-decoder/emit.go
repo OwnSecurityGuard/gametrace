@@ -6,8 +6,10 @@ import (
 	"github.com/OwnSecurityGuard/gametrace/sdk/event"
 )
 
-// emit turns one parsed HTTP message into a schema-conformant event carrying
-// the declared state-change entry, then sends it.
+// emit turns one parsed HTTP message into an event carrying the declared
+// per-flow counters and state changes, then sends it. Direction goes to the
+// Meta channel so the pair semantic rule can discriminate roles via
+// _meta.direction (the platform merges Meta into the rule evaluation view).
 func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string, m *httpMessage) error {
 	c := d.counts[flowID]
 	var draft event.Draft
@@ -34,6 +36,7 @@ func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string,
 					},
 				},
 			}),
+			Meta:           event.ValueFromMap(map[string]any{"direction": "client_to_server"}),
 			CorrelationKey: flowID,
 		}
 	} else {
@@ -57,6 +60,7 @@ func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string,
 					},
 				},
 			}),
+			Meta:           event.ValueFromMap(map[string]any{"direction": "server_to_client"}),
 			CorrelationKey: flowID,
 		}
 	}

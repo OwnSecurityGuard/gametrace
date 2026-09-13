@@ -7,11 +7,11 @@ import (
 	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
-// 消息定义：与 pkg/protocol protocol.yaml 的 message.definitions 保持一致。
+// 消息定义：与 examples/http 的 client/server 信封约定保持一致。
 const (
 	cmdLoginRequest  = 1001 // 请求消息（role=request）
 	cmdLoginResponse = 1002 // 正常响应（role=response）
-	cmdPlayerNotify  = 2001 // 推送消息（role=push）
+	cmdPlayerNotify  = 2001 // 推送消息（role=push，命中 push rule）
 )
 
 // msgName maps a cmd message id to its symbolic name (unknown when not declared).
@@ -28,8 +28,8 @@ func msgName(cmd int64) string {
 	}
 }
 
-// envelopeSemantics holds the decoded header/body envelope fields of one HTTP
-// message, covering message id / role / seq correlation / push rule / error.
+// envelopeSemantics holds the decoded envelope fields of one HTTP message,
+// covering message id / role / seq correlation / push rule / error.
 type envelopeSemantics struct {
 	Cmd       int64
 	MsgName   string
@@ -64,93 +64,86 @@ func parseEnvelope(body []byte) envelopeSemantics {
 	return s
 }
 
-// role returns the communication role and push flag for one direction.
-func (s envelopeSemantics) role(isRequest bool) (string, bool) {
+// role returns the communication role for one direction.
+// 推送判定仍由解码器给出（供前端即时展示），规则侧的语义标注由平台
+// 依据 semantic_rules 的 annotate 效果独立产出。
+func (s envelopeSemantics) role(isRequest bool) string {
 	if s.IsPush {
-		return "push", true
+		return "push"
 	}
 	if isRequest {
-		return "request", false
+		return "request"
 	}
-	return "response", false
+	return "response"
 }
 
-// emit turns one parsed HTTP message into a schema-conformant event carrying
-// the envelope semantics and the declared state-change entry, then sends it.
+// emit turns one parsed HTTP message into an event with the Payload / Meta /
+// Analysis channels separated, then sends it:
+//
+//	Payload:  业务字段（信封语义 + HTTP 行信息 + body 原文）
+//	Meta:     网络/元事实（direction / flow_id / msg_name / role / is_push）
+//	Analysis: 状态变更（_state_changes，供平台实体基线投影）
 func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string, m *httpMessage) error {
 	c := d.counts[flowID]
 	sem := parseEnvelope(m.body)
-	role, isPush := sem.role(m.isRequest)
 
 	meta := map[string]any{
-		"direction": "client_to_server",
+		"flow_id":   flowID,
 		"msg_name":  sem.MsgName,
-		"role":      role,
-		"is_push":   isPush,
+		"role":      sem.role(m.isRequest),
+		"is_push":   sem.IsPush,
+		"direction": "client_to_server",
 	}
 	if !m.isRequest {
 		meta["direction"] = "server_to_client"
 	}
 
+	// 业务 payload：请求带 method/path，响应带 status；error_code/is_error
+	// 双方向都上报，保证 error 语义规则（error_code != 0）对请求同样生效。
 	payload := map[string]any{
-		"flow_id":        flowID,
 		"cmd":            sem.Cmd,
 		"seq":            sem.Seq,
+		"error_code":     sem.ErrorCode,
+		"is_error":       sem.IsError,
 		"body_text":      string(m.body),
 		"body_truncated": m.bodyTruncated,
 	}
 
+	// 状态变更：请求/响应各按自己的计数路径（requests / responses）投影，
+	// version 为流内消息总数（请求+响应）。
 	var draft event.Draft
+	change := map[string]any{
+		"subject_type": "http_request",
+		"subject_id":   flowID,
+		"op":           "set",
+		"path":         "requests",
+		"before":       c.requests,
+		"after":        c.requests + 1,
+		"version":      c.requests + c.responses + 1,
+	}
 	if m.isRequest {
 		c.requests++
 		payload["method"] = m.method
 		payload["path"] = m.path
 		payload["requests"] = c.requests
-		draft = event.Draft{
-			Type:      "http.request",
-			Value:     event.ValueFromMap(payload),
-			Meta:      event.ValueFromMap(meta),
-			Analysis: event.ValueFromMap(map[string]any{
-				"_state_changes": []any{
-					map[string]any{
-						"subject_type": "http_request",
-						"subject_id":   flowID,
-						"op":           "set",
-						"path":         "requests",
-						"before":       c.requests - 1,
-						"after":        c.requests,
-						"version":      c.requests + c.responses,
-					},
-				},
-			}),
-			CorrelationKey: flowID,
-		}
+		draft.Type = "http.request"
 	} else {
 		c.responses++
+		change["subject_type"] = "http_response"
+		change["path"] = "responses"
+		change["before"] = c.responses - 1
+		change["after"] = c.responses
+		change["version"] = c.requests + c.responses
 		payload["status"] = m.status
 		payload["responses"] = c.responses
-		payload["error_code"] = sem.ErrorCode
-		payload["is_error"] = sem.IsError
-		draft = event.Draft{
-			Type:      "http.response",
-			Value:     event.ValueFromMap(payload),
-			Meta:      event.ValueFromMap(meta),
-			Analysis: event.ValueFromMap(map[string]any{
-				"_state_changes": []any{
-					map[string]any{
-						"subject_type": "http_response",
-						"subject_id":   flowID,
-						"op":           "set",
-						"path":         "responses",
-						"before":       c.responses - 1,
-						"after":        c.responses,
-						"version":      c.requests + c.responses,
-					},
-				},
-			}),
-			CorrelationKey: flowID,
-		}
+		draft.Type = "http.response"
 	}
+	draft.Value = event.ValueFromMap(payload)
+	draft.Meta = event.ValueFromMap(meta)
+	draft.Analysis = event.ValueFromMap(map[string]any{
+		"_state_changes": []any{change},
+	})
+	draft.CorrelationKey = flowID
 	d.counts[flowID] = c
 
 	resp, err := draft.ToResponse(inputID)

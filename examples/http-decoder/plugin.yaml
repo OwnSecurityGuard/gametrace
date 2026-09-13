@@ -2,14 +2,22 @@
 #
 # 解码 examples/http 的 client<->server 流量：HTTP 请求/响应 + JSON 信封
 #   {"header":{"cmd":<message id>},"body":{"seq":<correlation>,"error_code":<error>}}
-# 语义字段与 pkg/protocol 的 protocol.yaml（message.definitions / push / error）
-# 保持一致，供前端验证 message id / role / seq correlation / push / error 五类格式。
+# 语义字段与 examples/http 的 client/main.go、server/main.go 保持一致，
+# 覆盖 message id / request-response role / seq correlation / push rule / error 五类格式。
+#
+# 协议语义通过 semantic_rules 声明（插件定义语义、平台执行）：
+#   - http.pair_request_response：请求/响应按 body.seq 回显配对
+#   - http.mark_push：cmd==2001 或 seq==0 的推送消息标注为 notification
+#   - http.mark_error：error_code!=0 标注为 error
+# schema / states 声明层在 v0.9.0 已移除，不再声明。
 
 api_version: gt.decoder/v2
 name: http-decoder
 protocol: http
 protocol_version: "1.1"
 type: decoder
+transports:
+  - tcp
 hints:
   - http
   - json
@@ -17,100 +25,37 @@ hints:
   - port:8984
 capabilities:
   decode: true
-  schema: true
-  state: true
 contract:
-  name: gta.plugin
+  name: gt.plugin
   version: 1
-schemas:
-  - id: http.request
-    version: 1
-    name: HTTP request (envelope)
-    description: One parsed HTTP request with the header/body envelope semantics (cmd/msg_name/role/seq/push/error).
-    strict: true
-    fields:
-      flow_id:
-        type: string
-        semantic: entity_id
-        entity:
-          type: flow
-        description: Direction-independent TCP flow identifier (FlowKey.Canonical).
-      method:
-        type: string
-        description: HTTP request method (GET, POST, ...).
-      path:
-        type: string
-        description: URL path of the request.
-      requests:
-        type: int64
-        description: Number of requests decoded on this flow so far (state carrier).
-      cmd:
-        type: int64
-        queryable: true
-        description: Message id extracted from header.cmd (1001 LoginRequest, 2001 PlayerNotify).
-      seq:
-        type: int64
-        queryable: true
-        description: Seq correlation key extracted from body.seq (0 for push).
-      body_text:
-        type: string
-        description: Complete request body text (truncated at 64KB, see body_truncated).
-      body_truncated:
-        type: bool
-        description: True when the captured body exceeded 64KB and was truncated.
-  - id: http.response
-    version: 1
-    name: HTTP response (envelope)
-    description: One parsed HTTP response with the header/body envelope semantics (cmd/msg_name/role/seq/error).
-    strict: true
-    fields:
-      flow_id:
-        type: string
-        semantic: entity_id
-        entity:
-          type: flow
-        description: Direction-independent TCP flow identifier (FlowKey.Canonical).
-      status:
-        type: int64
-        queryable: true
-        description: HTTP status code.
-      responses:
-        type: int64
-        description: Number of responses decoded on this flow so far (state carrier).
-      cmd:
-        type: int64
-        queryable: true
-        description: Message id extracted from header.cmd (1002 LoginResponse, 2001 PlayerNotify).
-      seq:
-        type: int64
-        queryable: true
-        description: Seq correlation key extracted from body.seq (echoed from the request when present).
-      error_code:
-        type: int64
-        queryable: true
-        description: Error semantic extracted from body.error_code (0 = success, non-zero = failure).
-      is_error:
-        type: bool
-        description: True when error_code != 0.
-      body_text:
-        type: string
-        description: Complete response body text (truncated at 64KB, see body_truncated).
-      body_truncated:
-        type: bool
-        description: True when the captured body exceeded 64KB and was truncated.
-states:
-  - subject: http_request
-    schema: http.request
-    version: 1
-    id_field: flow_id
-    paths:
-      - requests
-  - subject: http_response
-    schema: http.response
-    version: 1
-    id_field: flow_id
-    paths:
-      - responses
+semantic_rules:
+  # 请求/响应配对：服务端回显请求的 seq，两侧键都取自 payload 的 seq。
+  # seq==0 是推送消息，由 when 拦截不参与配对。方向角色走 _meta.direction
+  # （平台把 Meta 通道并入规则求值视图的 _meta 键）。
+  - id: http.pair_request_response
+    when:
+      - { path: seq, op: neq, value: 0 }
+    effect:
+      type: pair
+      sides:
+        - { path: _meta.direction, op: eq, value: client_to_server, key: seq }
+        - { path: _meta.direction, op: eq, value: server_to_client, key: seq }
+  # 推送消息：命中 push rule（cmd==2001 或 body.seq==0），标注为 notification。
+  - id: http.mark_push
+    when:
+      any:
+        - { path: seq, op: eq, value: 0 }
+        - { path: cmd, op: eq, value: 2001 }
+    effect:
+      type: annotate
+      semantic: notification
+  # 错误语义：error_code != 0，标注为 error。
+  - id: http.mark_error
+    when:
+      - { path: error_code, op: neq, value: 0 }
+    effect:
+      type: annotate
+      semantic: error
 meta:
   author: opencode
   description: >-
@@ -119,7 +64,9 @@ meta:
     requests and responses, and extracts the JSON envelope semantics
     (header.cmd / body.seq / body.error_code) to cover the five semantic
     formats: message id, request/response role, seq correlation, push rule and
-    error. Body text is captured up to 64KB with a body_truncated flag.
+    error. Protocol semantics are declared as semantic_rules (pair by seq,
+    annotate push/error) and executed by the platform. Body text is captured
+    up to 64KB with a body_truncated flag.
   game: http-demo
   transport: http-json
   decoded_directions: [client_to_server, server_to_client]

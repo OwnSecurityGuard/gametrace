@@ -1,9 +1,33 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
+
+	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
+	sdkcontract "github.com/OwnSecurityGuard/gametrace/sdk/contract"
 )
+
+// TestManifestContractCheck runs the declaration-phase contract check on
+// plugin.yaml: the semantic_rules declaration must be violation-free.
+func TestManifestContractCheck(t *testing.T) {
+	raw, err := os.ReadFile("plugin.yaml")
+	if err != nil {
+		t.Fatalf("read plugin.yaml: %v", err)
+	}
+	m, err := sdk.ParseManifest(raw)
+	if err != nil {
+		t.Fatalf("parse manifest: %v", err)
+	}
+	if err := sdk.ValidateManifest(m); err != nil {
+		t.Fatalf("validate manifest: %v", err)
+	}
+	rep := sdkcontract.NewPluginChecker().Check(m)
+	for _, v := range rep.Violations {
+		t.Errorf("contract %s: %s", v.RuleID, v.Message)
+	}
+}
 
 func TestParseMessageRequest(t *testing.T) {
 	raw := "GET /api/player HTTP/1.1\r\nHost: example.com\r\nContent-Length: 3\r\n\r\nabc"
