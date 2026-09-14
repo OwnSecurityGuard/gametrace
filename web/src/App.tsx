@@ -15,6 +15,7 @@ import { MembersAdminDialog } from "@/components/members-admin-dialog";
 import { ProbeAdminDialog } from "@/components/probe-admin-dialog";
 import { MyCapturePage } from "@/components/my-capture-page";
 import { ProjectPage } from "@/components/project-page";
+import { AuthorizePage } from "@/components/authorize-page";
 import { SessionOverviewPage } from "@/components/session-overview-page";
 import { DecodedView } from "@/components/decoded-view";
 import { Button } from "@/components/ui/button";
@@ -60,6 +61,12 @@ function BrandMark({ className }: { className?: string }) {
 }
 
 export default function App() {
+  // OAuth 授权深链接（agent 拉起的浏览器页，后端 /oauth/authorize 返回的 SPA）：
+  // 不渲染主应用，只渲染授权页。无路由库，沿用单文件路径判断。
+  if (window.location.pathname === "/oauth/authorize") {
+    return <AuthorizePage />;
+  }
+
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   // 与当前抓包会话联动的行为窗口（start_capture 成功后自动 begin，便于在「行为」Tab 直接查看）。
   const [linkedRunId, setLinkedRunId] = useState<string | null>(null);

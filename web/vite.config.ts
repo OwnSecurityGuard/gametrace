@@ -52,6 +52,17 @@ export default defineConfig({
         target: "http://localhost:8781",
         changeOrigin: true,
       },
+      // MCP OAuth 浏览器授权（/oauth/authorize 页面的 XHR）：同上，须代理否则被
+      // SPA 兜底返回 index.html，授权页拿到 HTML 当 JSON 解析直接报错。
+      "/oauth": {
+        target: "http://localhost:8781",
+        changeOrigin: true,
+      },
+      // OAuth 发现端点（RFC 9728/8414）：开发期调试 MCP 客户端发现流程时需要。
+      "/.well-known": {
+        target: "http://localhost:8781",
+        changeOrigin: true,
+      },
     },
   },
 });

@@ -61,7 +61,46 @@ func authMiddleware(resolver auth.Resolver, next http.Handler) http.Handler {
 }
 
 // buildHTTPHandler 组装 MCP HTTP 服务的中间件链：CORS（外层，先处理预检）
-// → 鉴权（内层）→ 路由 mux。
+// → OAuth 挑战头注入 → 鉴权 → 路由 mux。
 func buildHTTPHandler(allowedOrigins []string, resolver auth.Resolver, mux http.Handler) http.Handler {
-	return corsMiddleware(allowedOrigins, authMiddleware(resolver, mux))
+	return corsMiddleware(allowedOrigins, oauthChallenge(authMiddleware(resolver, mux)))
+}
+
+// oauthChallenge 给鉴权链的 401 响应追加 RFC 9728 resource_metadata 挑战参数，
+// 把支持 MCP Authorization 规范的客户端（Trae/Claude/Cursor 等）引导到本站
+// OAuth 发现入口，进而自动拉起浏览器授权（见 oauth.go）。
+//
+// 实现为 ResponseWriter 包装器而非改 pkg/auth：auth 包保持纯"身份解析"职责，
+// OAuth 协议知识留在本包；绝对 URL 从请求回推（externalBaseURL）。
+// 匿名模式不产生 401，包装空转，行为零变化。
+func oauthChallenge(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		meta := externalBaseURL(r) + "/.well-known/oauth-protected-resource"
+		next.ServeHTTP(&challengeWriter{ResponseWriter: w, meta: meta}, r)
+	})
+}
+
+// challengeWriter 拦截首个 401，向已有 WWW-Authenticate 头追加 resource_metadata。
+type challengeWriter struct {
+	http.ResponseWriter
+	meta string
+	done bool
+}
+
+func (w *challengeWriter) WriteHeader(code int) {
+	if code == http.StatusUnauthorized && !w.done {
+		w.done = true
+		if v := w.Header().Get("WWW-Authenticate"); v != "" {
+			w.Header().Set("WWW-Authenticate", v+`, resource_metadata="`+w.meta+`"`)
+		}
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// Flush 透传：mcp-go 的 SSE/StreamableHTTP 处理器会对 http.Flusher 做类型断言，
+// 包装后必须继续满足该接口，否则流式响应退化为缓冲输出。
+func (w *challengeWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }

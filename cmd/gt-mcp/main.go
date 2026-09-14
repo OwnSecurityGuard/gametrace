@@ -114,6 +114,9 @@ type mcpCapture struct {
 	// 启动码（GT-XXXX）存取；ownerSecret 用的 token 表在装配处解析填充。
 	accessCodes   *accessCodeStore
 	tokensByOwner map[string]string
+	// OAuth 浏览器授权（oauth.go）：DCR 客户端注册与一次性授权码存取。
+	oauthClients *oauthClientStore
+	oauthCodes   *oauthCodeStore
 
 	// gRPC client 连接 gt-pipeline
 	pipelineClient pb.CaptureControlClient
@@ -460,6 +463,18 @@ func newMCPCapture(iface, pluginsDir, workDir, pipelineAddr, httpAddr string, mc
 		return nil, fmt.Errorf("init access code store: %w", err)
 	}
 
+	// OAuth 表（oauth_clients / oauth_codes）同库（MCP 浏览器授权，见 oauth.go）。
+	oauthClients := newOAuthClientStore(auxDB)
+	if err := oauthClients.Init(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("init oauth client store: %w", err)
+	}
+	oauthCodes := newOAuthCodeStore(auxDB)
+	if err := oauthCodes.Init(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("init oauth code store: %w", err)
+	}
+
 	m := &mcpCapture{
 		iface:          iface,
 		pluginsDir:     pluginsDir,
@@ -472,6 +487,8 @@ func newMCPCapture(iface, pluginsDir, workDir, pipelineAddr, httpAddr string, mc
 		authz:          newProjectAuthorizer(projects),
 		accessCodes:    accessCodes,
 		tokensByOwner:  loadTokensByOwner(),
+		oauthClients:   oauthClients,
+		oauthCodes:     oauthCodes,
 		pipelineClient: client,
 		grpcConn:       conn,
 		pdClient:       pdClient,
@@ -2833,6 +2850,22 @@ func main() {
 	root.HandleFunc("/setup.sh", capture.handleSetupScript)
 	// Windows 一键脚本（与 /setup.sh 对称）：PowerShell  irm ... | iex 一键接入。
 	root.HandleFunc("/setup.ps1", capture.handleSetupScriptPS1)
+	// MCP OAuth 浏览器授权（oauth.go）：well-known 发现 + DCR + 授权码流程，
+	// 整组鉴权豁免——401 挑战头（http_server.go oauthChallenge）把客户端引到这里，
+	// /access/* 豁免同理：发起授权的人本来就是"还没有 token 的 agent"。
+	// /oauth/ 前缀整体收口在子 mux 上，serveWebOrAPI 永远看不到这些路径，
+	// /oauth/authorize 校验通过后自行返回 SPA 授权页。
+	oauthSrv := newOAuthService(resolver, capture.users, capture.tokensByOwner,
+		capture.oauthClients, capture.oauthCodes, mustWebUIFS())
+	root.HandleFunc("/.well-known/oauth-protected-resource", oauthSrv.handleProtectedResource)
+	root.HandleFunc("/.well-known/oauth-authorization-server", oauthSrv.handleAuthServerMetadata)
+	oauthMux := http.NewServeMux()
+	oauthMux.HandleFunc("/register", oauthSrv.handleClientRegister)
+	oauthMux.HandleFunc("/authorize", oauthSrv.handleAuthorize)
+	oauthMux.HandleFunc("/authorize-info", oauthSrv.handleAuthorizeInfo)
+	oauthMux.HandleFunc("/approve", oauthSrv.handleApprove)
+	oauthMux.HandleFunc("/token", oauthSrv.handleToken)
+	root.Handle("/oauth/", http.StripPrefix("/oauth", oauthMux))
 	// Web UI 静态资源（免鉴权）兜在 "/" 上：命中嵌入文件才返回静态，其余请求
 	// （含 /mcp 等 API 与未知路径）原样进入鉴权链，语义与集成前一致。
 	root.Handle("/", serveWebOrAPI(mustWebUIFS(), authed))

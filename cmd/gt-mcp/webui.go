@@ -60,6 +60,19 @@ func mustWebUIFS() fs.FS {
 	return sub
 }
 
+// serveIndexHTML 返回 SPA 入口页（no-cache，发版即生效）；未构建前端时返回
+// 内置提示页。serveWebOrAPI 的两处回退与 OAuth 授权页（oauth.go handleAuthorize）
+// 共用本入口——index.html 是 SPA 所有深链接（含 /oauth/authorize）的唯一载体。
+func serveIndexHTML(w http.ResponseWriter, fsys fs.FS) {
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if data, err := fs.ReadFile(fsys, "index.html"); err == nil {
+		_, _ = w.Write(data)
+	} else {
+		_, _ = w.Write([]byte(webUIPlaceholderHTML))
+	}
+}
+
 // serveWebOrAPI 把 Web UI 静态资源（免鉴权）与已有鉴权链组合到同一个 "/":
 // 命中嵌入文件（或未构建兜底）才返回静态；路径像静态文件（含扩展名）但 FS
 // 未命中直接 404，避免把缺失的静态资源推进鉴权链出 401（如 index.html 引用
@@ -76,13 +89,7 @@ func serveWebOrAPI(fsys fs.FS, authed http.Handler) http.Handler {
 		// 无产物则回内置提示页。index.html 直接读文件返回——http.FileServerFS
 		// 会把显式 /index.html 301 到 "./"（其规范化规则），SPA 深链接会因此断掉。
 		if name == "" || name == "index.html" {
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			if data, err := fs.ReadFile(fsys, "index.html"); err == nil {
-				_, _ = w.Write(data)
-			} else {
-				_, _ = w.Write([]byte(webUIPlaceholderHTML))
-			}
+			serveIndexHTML(w, fsys)
 			return
 		}
 
@@ -116,12 +123,6 @@ func serveWebOrAPI(fsys fs.FS, authed http.Handler) http.Handler {
 		}
 
 		// SPA 深链接回退到 index.html。
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if data, err := fs.ReadFile(fsys, "index.html"); err == nil {
-			_, _ = w.Write(data)
-		} else {
-			_, _ = w.Write([]byte(webUIPlaceholderHTML))
-		}
+		serveIndexHTML(w, fsys)
 	})
 }
