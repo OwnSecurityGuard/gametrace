@@ -1233,9 +1233,12 @@ func decodedEventMap(ev *event.Event, captureIdx map[string]captureContextJSON, 
 		"raw_len":        rawLen,
 		"correlation_id": ev.Trace.CorrelationID,
 		"causation_id":   string(ev.Trace.CausationID),
-		"data":           dataContent,
-		"meta":           metaContent,
-		"analysis":       analysisContent,
+		// extract 子事件的父链接（semantic_rules effect=extract 产出）：
+		// 协议血缘分析（父子层级）依赖本字段，与 trace 两字段同为本源数据。
+		"parent_id":  string(ev.Identity.ParentID),
+		"data":       dataContent,
+		"meta":       metaContent,
+		"analysis":   analysisContent,
 	}
 	if cc, ok := captureIdx[string(ev.Identity.ID)]; ok {
 		eventMap["capture"] = cc
@@ -1759,6 +1762,7 @@ func queryEnv() map[string]any {
 		"raw_len":        0,
 		"correlation_id": "",
 		"causation_id":   "",
+		"parent_id":      "",
 		"data":           map[string]any{},
 		"meta":           map[string]any{},
 		"analysis":       map[string]any{},
@@ -2556,7 +2560,7 @@ func main() {
 		mcp.WithNumber("offset", mcp.DefaultNumber(0), mcp.Description("Offset")),
 		mcp.WithString("session_id", mcp.Description("Optional session ID to query; defaults to current session")),
 		mcp.WithString("conn_id", mcp.Description("Optional connection ID to filter by; when set, only events of that capture connection (event_index.conn_id) are returned")),
-		mcp.WithString("filter", mcp.Description("Optional expr expression to filter events, e.g. data.entity == \"buff\" && data.hp > 5. Available fields: id, timestamp, session_id, protocol, raw_len, data.*")),
+		mcp.WithString("filter", mcp.Description("Optional expr expression to filter events, e.g. data.entity == \"buff\" && data.hp > 5. Available fields: id, timestamp, session_id, protocol, raw_len, correlation_id, causation_id, parent_id, data.*, meta.* (msg_name/direction/semantic), analysis.*. Trace fields enable lineage queries: correlation_id == X (one request-response group), causation_id == X (the request that caused this response), parent_id == X (extract children of X).")),
 	), capture.handleListDecodedData)
 
 	// 代理抓包专有：连接/流/帧查询（Connections 页面数据源）。
