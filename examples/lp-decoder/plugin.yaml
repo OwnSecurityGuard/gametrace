@@ -1,0 +1,87 @@
+# lp-decoder —— 长度前缀定界（LPF）模板解码插件清单与语义契约声明
+#
+# 解码 examples/lp 的 client<->server 流量：帧头(magic/version/param/reserved) +
+# 变长长度字段(1/2/4 字节，大/小端逐帧可选) + JSON 载荷。payload 信封
+#   {"cmd":<message id>,"seq":<correlation>,"error_code":<error>}
+# 语义字段与 examples/lp 的 client/server 信封约定保持一致，
+# 覆盖 message id / request-response role / seq correlation / push rule / error 五类格式。
+#
+# ⚠️ 模板定位：本样例演示"长度前缀定界"这一种流切包技术，帧头格式是发明的，
+# 不是任何真实游戏协议。真实项目的长度字段宽度、端序、魔数、校验都不同——
+# 照抄前必须先用 sample_bytes_plugin 确认真实字节流，再定义自己的帧格式。
+# 与配套示例的差异点（便于对照"哪些是模板共有的、哪些是各项目独有的"）：
+#   - http-decoder：解析 HTTP 方法行/状态行切包，长度由 Content-Length/帧结构给出
+#   - ws-decoder：  解析 RFC 6455 帧（定长头 + 扩展长度），方向取自 MASK 位
+#   - lp-decoder：  长度字段宽度/端序逐帧变化，方向由 cmd 身份推导（见下方说明）
+#
+# 协议语义通过 semantic_rules 声明（插件定义语义、平台执行）：
+#   - lp.pair_request_response：请求/响应按 seq 回显配对
+#   - lp.mark_push：cmd==2001 或 seq==0 的推送消息标注为 notification
+#   - lp.mark_error：error_code!=0 标注为 error
+
+api_version: gt.decoder/v2
+name: lp-decoder
+protocol: length-prefixed
+protocol_version: "1"
+type: decoder
+transports:
+  - tcp
+hints:
+  - length-prefixed
+  - json
+  - tcp
+  - port:8998
+capabilities:
+  decode: true
+contract:
+  name: gt.plugin
+  version: 1
+semantic_rules:
+  # 请求/响应配对：服务端回显请求的 seq，两侧键都取自 payload 的 seq。
+  # seq==0 是推送消息，由 when 拦截不参与配对。方向角色走 _meta.direction：
+  # 模板协议的方向由 cmd 身份推导（1001 请求 / 1002、2001 响应侧），
+  # 解码器把推导结果写入 Meta 通道，规则只读。
+  - id: lp.pair_request_response
+    when:
+      - { path: seq, op: neq, value: 0 }
+    effect:
+      type: pair
+      sides:
+        - { path: _meta.direction, op: eq, value: client_to_server, key: seq }
+        - { path: _meta.direction, op: eq, value: server_to_client, key: seq }
+  # 推送消息：命中 push rule（cmd==2001 或 seq==0），标注为 notification。
+  - id: lp.mark_push
+    when:
+      any:
+        - { path: seq, op: eq, value: 0 }
+        - { path: cmd, op: eq, value: 2001 }
+    effect:
+      type: annotate
+      semantic: notification
+  # 错误语义：error_code != 0，标注为 error。
+  - id: lp.mark_error
+    when:
+      - { path: error_code, op: neq, value: 0 }
+    effect:
+      type: annotate
+      semantic: error
+meta:
+  author: opencode
+  description: >-
+    Length-prefixed framing (LPF) template decoder for the examples/lp
+    client<->server traffic. Reassembles the per-flow TCP stream
+    (framing.ExtractL7 + Reassembler) and parses frames whose length field is
+    1/2 or 4 bytes wide and big or little endian, chosen per frame: the header
+    (magic/version/param/reserved) declares both, so the parser must never
+    assume a fixed width or byte order. The JSON envelope (cmd / seq /
+    error_code) covers the five semantic formats: message id,
+    request/response role, seq correlation, push rule and error. Direction is
+    derived from the message identity (cmd 1001 = request, 1002/2001 =
+    response-side) because the template protocol has distinct request/response
+    command ids — a template-specific decision, NOT a general rule. Frame
+    facts (version / len_width / endian / length) go to the Meta channel while
+    business fields (cmd / seq / error_code / body_text) stay in the payload,
+    and flow counters project through _state_changes in the Analysis channel.
+  game: lp-demo
+  transport: length-prefixed-json
+  decoded_directions: [client_to_server, server_to_client]

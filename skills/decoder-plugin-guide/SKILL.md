@@ -19,7 +19,7 @@ description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gt-
 - 用户要编写新的解码插件接入平台
 - 用户要解析某个游戏/应用的网络协议为结构化事件
 - 用户询问如何让自定义协议在平台中解码、显示、配对
-- 参考插件：`plugins/godot-ecs`、`plugins/godot-gateway`、`plugins/wesnoth-decoder`（均可直接对照）
+- 参考插件：`examples/http-decoder`、`examples/ws-decoder`、`examples/lp-decoder`（本仓库 TCP 模板，plugin.yaml 每条语义规则均先陈述协议事实）；wesnoth 解码器的规则注释是"证据注解"范式（§5.2 有摘录）
 
 ## 平台契约（先读，避免返工）
 
@@ -104,8 +104,9 @@ func loadDotEnv(path string) {
 2. 连接握手：首个包是否有固定字节（如 4 字节握手）？哪个方向？
 3. 负载是否压缩/加密：gzip / bzip2 / TLS / 自研算法？
 4. 方向判定依据：固定服务器端口 / 标志位 / 无法判定（由宿主补齐）？
+5. 语义证据：候选 semantic_rules 的出处（哪个消息、哪个字段、哪一侧；双向都发的标签单独标记）。
 
-协议笔记写进插件注释与 plugin.yaml 的 `hints`。
+协议笔记写进插件注释与 plugin.yaml 的 `hints`；另产出一份**语义规则证据表**（每条候选规则标注依据来源；证据不足的标「待确认」），它是 §5.2 写规则的输入——写 plugin.yaml 前与用户对齐，不猜。
 
 ### 2. 插件骨架
 
@@ -357,7 +358,9 @@ semantic_rules:
 
 #### 5.1 语义规则接入（semantic_rules）——复用平台的配对/父子能力
 
-规则 = Predicate(`when`) + Effect，**决定事件怎么被解释/关联，权重高于解码器硬编码**。effect 是一个闭集，插件只需声明，执行由平台完成：
+规则 = Predicate(`when`) + Effect，**决定事件怎么被解释/关联，权重高于解码器硬编码**。effect 是一个闭集，插件只需声明，执行由平台完成。
+
+> **补充原则：能上规则不硬编码，语义规则尽量补全；但每条规则必须先有证据，不虚构、不猜**（出处规范与"拿不准就与用户确认"的流程见 §5.2）。
 
 | effect | 作用 | 产出(host) | 必填字段 |
 |---|---|---|---|
@@ -405,7 +408,7 @@ pair 恰好 2 个 `sides`，每侧自带 `key`（该侧配对键 GJSON path，�
   when: [ { path: msg_type, op: eq, value: snapshot } ]
   effect:
     type: extract
-    source: ents                                        # 数组路径，如 godot_ecs.state 的 ents
+    source: ents                                        # 数组/对象路径：真实报文中存在的快照子结构
     child:
       event_type: entity_snapshot
 ```
@@ -419,6 +422,55 @@ pair 恰好 2 个 `sides`，每侧自带 `key`（该侧配对键 GJSON path，�
 
 **验证**：注册后 `get_session_status`/宿主日志看规则加载；`list_decoded_data` 抽查 `meta.msg_name`、`meta.semantic`、`trace.correlation_id/causation_id`，以及 `extract` 子事件的 `parent_id` 是否指向父事件。
 
+#### 5.2 补充原则：证据驱动（每条规则都要有出处，不虚构）
+
+**目标是"能用规则表达的语义尽量用规则，且每条规则都能溯源"**，不是"写得越多越好"。语义规则权重高于解码器硬编码，一旦写错会直接误导前端的方向/角色/配对展示；**宁可少一条，也不写无证据的规则**。
+
+**规则证据表**（§1 协议分析的产出物之一，写 plugin.yaml 前逐条过）。每条候选规则回答"依据是什么"，并把答案写进规则注释（参考 wesnoth 解码器的"证据注解"范式：每条规则注明哪个消息、哪个字段、哪一侧、为什么）：
+
+| 规则 | 必须能回答的证据问题 | 没有证据时的处理 |
+|---|---|---|
+| `pair` | 两侧 `key` 的取值在真实"一问一答"里相等吗（回显字段）？`when` 是否拦截了推送/广播，避免它们被配对？ | 未验证的配对键不写，或与用户确认 |
+| `annotate` | 该 `msg_type` 在本协议里天然单向吗？方向依据是什么（固定服务器端口 / 字段 / 消息身份）？**双向都发的标签呢？** | 双向标签**留空不标注**；标错方向比不标更糟 |
+| `name` | 提取字段在所有目标消息里都存在且能区分消息吗？会不会抽到业务无意义的字段？ | 只在一个子集存在的字段不要当全局 `name` |
+| `extract` | `source` 指向的数组/对象真的存在于真实报文吗？父-子是"一拆多"，还是两种平级消息？ | 平级消息误用 extract 会搅乱前端父子层级 |
+
+规则注释写明证据来源（**官方案例**）：
+
+```yaml
+# 依 据：客户端发 [request_choice] 带 request_id；服务端在 [random_seed] /
+#         [change_controller_wml] 里回显同一 request_id（见服务端源码）。
+- id: wesnoth.pair_choice
+  when: [ { path: request_id, op: exists } ]
+  effect:
+    type: pair
+    sides:
+      - { path: msg_type, op: eq, value: request_choice, key: request_id }
+      - { path: msg_type, op: in, value: [random_seed, change_controller_wml], key: request_id }
+```
+
+**依据来源按可信度**：官方客户端/服务端源码 > 真实抓包报文 > 协议文档（与 §1 一致）。
+
+**注册期只校验结构与路径，不校验语义事实**：规则 id 格式、effect 在闭集、pair 两侧各带 `key`、`when.path` 能对上 payload——这些检查通过**不代表规则在真实报文上成立**。`when.value` 是否真实出现、配对键是否真的相等、方向标签是否属实，注册校验抓不到；**虚构规则能通过注册，然后在运行期误导展示**。
+
+**拿不准时列"待确认"清单问用户，不要猜**。协议分析时把证据不足的候选规则写进问题清单，逐条问用户，确认后再写入 plugin.yaml。例："[request_choice] 的服务端回应是 [random_seed] 和 [change_controller_wml] 都算，还是只有一个是响应？""聊天/加房这类双向标签到底该标什么？"
+
+**虚构/无依据规则的常见说辞（都要拒绝）**：
+
+| 说辞 | 事实 |
+|---|---|
+| "先加上，反正 annotate 无害" | 规则权重高于硬编码，标错角色/方向直接误导前端展示 |
+| "别的项目都这么标，照搬" | 每个协议语义不同，必须以本协议证据为准 |
+| "我按包结构猜的，八成对" | 猜的规则要么在真实报文上不命中（死规则），要么错配请求/响应；注册校验发现不了 |
+| "skill 说要优先规则，凑几条" | 优先规则 ≠ 凑规则；没有证据就保持最低限度或留空 |
+
+**红旗（出现即停，先找证据或问用户）**：
+
+- "我觉得这个应该是请求/响应"
+- "这个字段看起来像配对键"
+- "先写上去，后面再验证"
+- 规则注释里写不出依据来源
+
 ### 6. 测试（质量门槛）
 
 必须覆盖以下场景，缺一不可（标注 TCP 的条目仅对 TCP 协议适用，UDP 插件替换为分包独立/无握手用例）：
@@ -430,7 +482,7 @@ pair 恰好 2 个 `sides`，每侧自带 `key`（该侧配对键 GJSON path，�
 5. 畸形输入：非法长度、截断、压缩损坏 → 不 panic、不无限循环。
 6. **多连接**：两条独立连接互不干扰，correlation_key 不同。
 7. **5-tuple 复用（重连，TCP）**：SYN 后新连接握手被再次正确消费（回归坑 1/坑 2）。
-8. manifest 一致性：`semantic_rules` 引用的 payload 路径（`when.path`/`effect.key`/`effect.source`）能实际解析，无死规则。
+8. manifest 一致性：`semantic_rules` 引用的 payload 路径（`when.path`/`effect.key`/`effect.source`）能实际解析，无死规则；**并用真实抓包固件核对规则取值**——`when.value`/配对 `key` 引用的值确实出现在真实报文（注册校验不查语义事实，见 §5.2）；不出现即证据不足，回退 §5.2 与用户确认。
 9. **Payload 纯度**：断言 payload 中不含协议外字段（对照 4.2 硬约束）。
 
 固件构造用 `gopacket` 拼以太网 + IPv4 + TCP 帧，使 `framing.ExtractL7` 能读出端口（用于方向判定）；测试内对压缩负载直接预压缩后写入。
@@ -462,6 +514,9 @@ go test -count=1 ./...   # 必须 -count=1：go test 缓存会掩盖问题
 - [ ] 嵌套/编码字段是否拆分已与用户确认
 - [ ] 原始文本默认进 Meta；进 payload 需用户确认并声明 optional + 截断
 - [ ] 事件设了 CorrelationKey
-- [ ] 测试覆盖：跨段重组、多连接、5-tuple 复用、manifest 一致性（UDP 插件加：分包独立、无握手）
+- [ ] 每条 semantic_rules 都写了证据注释（哪个消息/字段/哪一侧、依据来源）；无证据的规则不写或已进「待确认」清单问用户（§5.2）
+- [ ] 双向都发的消息 `annotate` 已留空（不标错方向/角色）；标错比不标更糟
+- [ ] `pair` 两侧 `key` 取值已在真实报文核对相等；推送/广播已被 `when` 拦截
+- [ ] 测试覆盖：跨段重组、多连接、5-tuple 复用、manifest 一致性（UDP 插件加：分包独立、无握手）+ 真实抓包固件核对规则取值
 - [ ] `go vet` + `go build` + `go test -count=1` 全过
 - [ ] 宿主日志无 semantic rules error；前端消息名正确显示

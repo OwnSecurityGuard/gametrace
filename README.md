@@ -264,6 +264,14 @@ Human-readable guide: [`docs/gt-plugin-development.md`](docs/gt-plugin-developme
 | [`plugins/godot-gateway`](plugins/godot-gateway) | reference decoder for the Godot debug protocol (request/response + state subjects) |
 | [http-stream-decoder](https://github.com/OwnSecurityGuard/gametrace/sdk/tree/main/examples/http-stream-decoder) (SDK repo) | blueprint for a real HTTP streaming decoder |
 
+TCP decoder 参考模板（每个模板演示一种「流→消息」的切包技术 + 配套流量生成器；各项目 TCP 定界方式不同，模板定位是参考，不是照抄——接真实协议前先用 `sample_bytes_plugin` 核对字节流）：
+
+| 模板 | 演示的 TCP 切包方式 | 配套流量生成器 |
+|------|--------------------|----------------|
+| [`examples/http-decoder`](examples/http-decoder) | HTTP/1.1（方法行/状态行解析 + JSON 信封语义） | [`examples/http`](examples/http)（`:8984`） |
+| [`examples/ws-decoder`](examples/ws-decoder) | WebSocket over TCP（HTTP Upgrade 握手 + RFC 6455 帧，方向取自 MASK 位） | [`examples/ws`](examples/ws)（`:8990`） |
+| [`examples/lp-decoder`](examples/lp-decoder) | 长度前缀定界（长度字段 1/2/4 字节、大/小端逐帧可变；方向由消息身份推导） | [`examples/lp`](examples/lp)（`:8998`） |
+
 **Agent self-check** — paste this to your agent for a one-breath full-stack verification:
 
 ```
