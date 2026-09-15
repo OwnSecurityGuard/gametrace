@@ -34,38 +34,34 @@ description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gt-
 
 ### 0. 确认平台连接信息（第一步必做，别猜）
 
-插件通过环境变量连接平台。**先与用户确认要连哪个平台、怎么连**，再写代码。4 个变量中**只有 `GT_AUTH_TOKEN` 需要手填**，其余地址由平台现有接口自动获取，无需手填。
+插件通过环境变量连接平台。**先与用户确认要连哪个平台、怎么连**，再写代码。4 个变量**全部自动获取**：调一次平台工具 `get_plugin_env`，把返回的 `env_file` 原样写入 `.env` 即可，无需任何手填。
 
-| 变量 | 含义 | 获取方式（自动 or 手填） |
+| 变量 | 含义 | 获取方式 |
 |---|---|---|
-| `GT_REGISTRY_ADDR` | registry 端点（插件注册） | **自动**：调平台工具 `get_registry_addr`，取返回的 `registry_addr` |
-| `GT_AUTH_TOKEN` | 注册鉴权 Bearer token | **唯一手填项**：来自平台配置 `GT_AUTH_TOKENS`（格式 `owner=token`）；agent 托管（`GT_TUNNEL=1`）下平台自动注入，可留空 |
-| `GT_DECODER_ADDR` | 解码器本地监听地址 | 插件**自己**决定：仅本机回拨用 `127.0.0.1:<port>`；宿主在别处/容器要回拨用 `0.0.0.0:<port>` |
-| `GT_DECODER_PUBLIC_ADDR` | 注册时上报、宿主回拨的地址 | **host 自动**：取 `get_registry_addr` 返回 `registry_addr` 的 host 段（外部可达主机，与平台 `GT_PUBLIC_HOST` 一致）；端口默认 `61887` |
+| `GT_REGISTRY_ADDR` | registry 端点（插件注册） | **自动**：`get_plugin_env` 的 `registry_addr` |
+| `GT_AUTH_TOKEN` | 注册鉴权 Bearer token | **自动**：`get_plugin_env` 返回调用者自己的 token；agent 托管（`GT_TUNNEL=1`）下平台自动注入，可留空 |
+| `GT_DECODER_ADDR` | 解码器本地监听地址 | **自动**：`get_plugin_env` 的 `decoder_addr`（默认 `0.0.0.0:61887`） |
+| `GT_DECODER_PUBLIC_ADDR` | 注册时上报、宿主回拨的地址 | **自动**：`get_plugin_env` 的 `decoder_public_addr`（外部可达 host + 端口） |
 
-确认步骤（自动优先）：
+确认步骤：
 
 1. 问用户平台部署形态：**本机单机** / **Docker 局域网** / **远端公网**。
-2. 调 `get_registry_addr`（参数 `host` 传前端 `window.location.hostname`；公网/Docker 部署平台已配 `GT_PUBLIC_HOST`，可省略）→ 返回 `registry_addr` 直接填 `GT_REGISTRY_ADDR`，其 host 段就是 `GT_DECODER_PUBLIC_ADDR` 的 host。拿不到再让用户填。
-3. `GT_AUTH_TOKEN`：**`.env` 留占位**，提醒用户从平台 `GT_AUTH_TOKENS` 取当前用户 token 填入；agent 托管可留空。
-4. `GT_DECODER_ADDR` / 端口：问插件进程**运行在哪**、宿主能否回连；拿不准时默认 `0.0.0.0:61887` / `<外部可达host>:61887`。
-
-> 平台侧已暴露 `get_registry_addr`（经 CaptureControl 走 `GT_PUBLIC_HOST`/`GT_PUBLIC_REGISTRY_PORT` 通告），地址无需手填。若后续平台把「插件启动所需 env 全集」一次下发，则 token 也免手填；在此之前，仅保留 token 一项由用户填写。
+2. 调 `get_plugin_env`（跨机部署、插件与调用方不在同一台机器时，参数 `host` 传插件所在机器视角的可达主机；平台已配 `GT_PUBLIC_HOST` 的公网/Docker 部署可省略）→ 把返回的 `env_file` 原样写入插件目录 `.env`。匿名模式（平台未配 token）下 `auth_token` 为空属正常。
+3. 写错了也不怕：注册失败时平台会记录诊断（含注册连接来源 IP 建议值），`status_plugin` 返回的 `register_failure` 字段可查，按其提示修正 `.env` 后重新 `activate_plugin`。
 
 #### 0.1 用 `.env` 集中管理连接配置（推荐）
 
 不要在代码里写死地址；插件目录放 `.env`（提交模板 `.env.example`），main.go 启动时加载。
 
-**自动回填地址、只留 token 手填**：让用户（或引导 agent）调 `get_registry_addr`，把返回的 `registry_addr` 与其 host 段分别填到下面 `GT_REGISTRY_ADDR` 与 `GT_DECODER_PUBLIC_ADDR`；`GT_AUTH_TOKEN` 是**唯一需手填项**，取平台 `GT_AUTH_TOKENS` 里当前用户的值（agent 托管可留空）：
+**零手填**：让用户（或引导 agent）调 `get_plugin_env`，把返回的 `env_file` 原样写入 `.env`：
 
 ```
-# .env.example —— 复制为 .env。地址按「步骤 0」调 get_registry_addr 自动回填；
-#               GT_AUTH_TOKEN 是唯一手填项（agent 托管 GT_TUNNEL 下可留空）。
+# .env.example —— 复制为 .env。内容按「步骤 0」调 get_plugin_env 生成；
 #               同名环境变量优先于本文件。
-GT_REGISTRY_ADDR=<get_registry_addr 返回的 registry_addr，如 127.0.0.1:19091>
-GT_AUTH_TOKEN=<token>   # ← 唯一需手填：平台配置 GT_AUTH_TOKENS 里当前用户的值；agent 托管可留空
+GT_REGISTRY_ADDR=<get_plugin_env 的 registry_addr>
+GT_AUTH_TOKEN=<get_plugin_env 的 auth_token；agent 托管 GT_TUNNEL 下可留空>
 GT_DECODER_ADDR=0.0.0.0:61887
-GT_DECODER_PUBLIC_ADDR=<registry_addr 的 host 段>:61887   # 即外部可达主机，与平台 GT_PUBLIC_HOST 一致
+GT_DECODER_PUBLIC_ADDR=<registry_addr 的 host 段>:61887
 ```
 
 > 提醒：不要提交 `.env` 到 git——token 是该用户凭证，提交模板只放 `.env.example`（token 为占位空值）。
@@ -119,7 +115,7 @@ plugins/<protocol>-decoder/
 ├── decode.go       # 核心：Decode(req) → []*Event
 ├── <fmt>.go        # 负载解析器（解压/解帧/解文本）
 ├── plugin.yaml     # manifest：semantic_rules
-├── .env.example    # 连接配置模板：复制为 .env 后调 get_registry_addr 自动回填地址，仅 token 手填（见步骤 0）
+├── .env.example    # 连接配置模板：复制为 .env 后按「步骤 0」调 get_plugin_env 自动生成，零手填
 ├── <fmt>_test.go   # 解析器单测
 └── decode_test.go  # 全链路解码测试 + manifest 一致性
 ```
