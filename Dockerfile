@@ -1,7 +1,7 @@
 # Dockerfile（T15）——服务端镜像：gt-pipeline + gt-mcp。
 #
 # 多阶段构建：
-#   webui   : node:22-bookworm-slim 构建 web/ 前端（Vite 产物 dist）；
+#   webui   : node:20-bookworm-slim 构建 web/ 前端（Vite 产物 dist）；
 #   builder : golang:1.26-bookworm + libpcap-dev，以 cgo（pcap）编译两个服务端二进制；
 #             前端产物先 COPY 进 cmd/gt-mcp/webui/，由 //go:embed 嵌入 gt-mcp；
 #   runtime : debian:bookworm-slim + libpcap0.8（gopacket/pcap 运行时需要的共享库）。
@@ -29,18 +29,30 @@
 #   docker build --build-arg VERSION=v0.5.0 --build-arg GIT_COMMIT=abc1234 -t gt-server .
 # 境内 apt 默认走腾讯云镜像源（APT_MIRROR）；境外构建覆盖：
 #   docker build --build-arg APT_MIRROR=deb.debian.org .
+#
+# 构建提速（2026-09-15）：除 BuildKit 层缓存（docker-compose.yml 默认启用，
+# COPY . . 内容寻址——源码一变后续编译必重跑）外，本文件内再用缓存挂载兜底
+# 层缓存失效的场景（deps/构建参数变化、no_cache 强制重建）：
+#   - npm 下载缓存 /root/.npm（webui 阶段）
+#   - Go 编译缓存 /root/.cache/go-build（builder 阶段，增量编译）
+#   - osxcross SDK tarball /osxcross-tarballs（免重复下载约 600MB）
+# 缓存挂载由 BuildKit 按构建机持久保存，与层缓存生命周期无关。
 
 # ============================================================================
 # 阶段 0：webui（前端构建）
 # ============================================================================
-# node:22 构建 web/（React 19 + Vite），产物经 builder 阶段 COPY 进
+# node:20 构建 web/（React 19 + Vite），产物经 builder 阶段 COPY 进
 # cmd/gt-mcp/webui/ 后由 //go:embed 嵌入 gt-mcp——runtime 阶段零新增文件。
+#
+# 基础镜像固定 node:20（而非 22）：2026-09 新用户实测反馈 node:22 镜像下前端
+# 构建易失败、node:20 正常（package-lock 为 npm 10 / node 20 工具链生成，
+# lockfileVersion 3）；Vite 6 官方支持 Node 20，钉 20 消除环境差异。
 #
 # npm registry 默认走 npmmirror（与 GOPROXY 默认 goproxy.cn 的境内网络取向
 # 一致）；境外构建可覆盖：
 #   docker build --build-arg NPM_REGISTRY=https://registry.npmjs.org .
 # VITE_ENABLE_RAW_DEBUG=1 可开启前端「原始包」调试页（构建期静态替换，默认关闭）。
-FROM node:22-bookworm-slim AS webui
+FROM node:20-bookworm-slim AS webui
 
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG VITE_ENABLE_RAW_DEBUG=0
@@ -50,8 +62,11 @@ WORKDIR /src
 
 # 先只拷 package.json/package-lock.json 做 npm ci，充分利用层缓存。
 # npm 重试参数：npmmirror 偶发 ECONNRESET，拉大重试次数与超时避免构建被打断。
+# npm 下载缓存挂载：层缓存失效（deps 变化 / no_cache 构建）时 npm ci 也不必
+# 重新从 registry 拉全部包。缓存挂载独立于层缓存生命周期，no_cache 同样受益。
 COPY web/package.json web/package-lock.json ./
-RUN npm config set registry ${NPM_REGISTRY} \
+RUN --mount=type=cache,target=/root/.npm \
+    npm config set registry ${NPM_REGISTRY} \
  && npm config set fetch-retries 5 \
  && npm config set fetch-retry-mintimeout 20000 \
  && npm config set fetch-retry-maxtimeout 120000 \
@@ -75,8 +90,12 @@ ARG BUILD_TIME=""
 # GOSUMDB 用 goproxy.cn 提供的校验和数据库镜像，避免 sum.golang.org 同样不可达。
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
+# GOCACHE 显式钉住默认路径：下方 go build 层的 --mount=type=cache 挂到这里。
+# 不显式声明时若基础镜像默认变化，挂载点与实际缓存目录错位——不报错、只静默
+# 失效（构建照常、缓存白挂），显式 ENV 消除该隐患。
 ENV GOPROXY=${GOPROXY} \
-    GOSUMDB=${GOSUMDB}
+    GOSUMDB=${GOSUMDB} \
+    GOCACHE=/root/.cache/go-build
 
 # apt 换源：bookworm 用 deb822 格式，源在 /etc/apt/sources.list.d/debian.sources。
 # 默认腾讯云镜像（境内网络 deb.debian.org 直连极慢，实测 8MB 的包列表要 4 分钟+）。
@@ -106,16 +125,23 @@ RUN go mod download
 #     产出，经 GT_AGENT_BIN_DIR 补充，下载页自动标 darwin 不可用）；
 #   - MACOS_SDK_URL / MACOS_SDK_FILE 可覆盖为内网缓存 / 境内镜像源。
 # 安装失败只 WARN 不中断构建：镜像退化为 linux+windows，darwin 下载页如实标不可用。
+# SDK tarball（约 600MB）下载走 BuildKit 缓存挂载（/osxcross-tarballs，与 git
+# clone 目录分开以免 clone 目标非空失败）：本机第二次起即使层缓存失效
+# （no_cache / apt 输入变化）也不必重新下载，直接复用缓存副本。
 ARG BUILD_DARWIN_AGENT=1
 ARG MACOS_SDK_URL=https://github.com/joseluisq/macosx-sdks/releases/download/11.3/MacOSX11.3.sdk.tar.xz
 ARG MACOS_SDK_FILE=MacOSX11.3.sdk.tar.xz
-RUN if [ "${BUILD_DARWIN_AGENT}" = "1" ]; then \
+RUN --mount=type=cache,target=/osxcross-tarballs \
+    if [ "${BUILD_DARWIN_AGENT}" = "1" ]; then \
         apt-get update \
         && apt-get install -y --no-install-recommends \
             clang llvm libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev \
             libzip-dev liblzma-dev libzstd-dev patch cpio make \
         && git clone --depth 1 https://github.com/tpoechtrager/osxcross.git /osxcross \
-        && curl -fsSL -o "/osxcross/tarballs/${MACOS_SDK_FILE}" "${MACOS_SDK_URL}" \
+        && mkdir -p /osxcross/tarballs \
+        && { [ -f "/osxcross-tarballs/${MACOS_SDK_FILE}" ] \
+            || curl -fsSL -o "/osxcross-tarballs/${MACOS_SDK_FILE}" "${MACOS_SDK_URL}"; } \
+        && cp "/osxcross-tarballs/${MACOS_SDK_FILE}" "/osxcross/tarballs/${MACOS_SDK_FILE}" \
         && cd /osxcross && UNATTENDED=1 ./build.sh \
         && rm -rf /osxcross/.git /osxcross/tarballs \
         && echo "==> osxcross ready: $(ls /osxcross/target/bin | tr '\n' ' ')" \
@@ -131,7 +157,12 @@ COPY . .
 # 来源——镜像内前端永远与本次构建的源码同步，不残留陈旧 hash 产物。
 COPY --from=webui /src/dist ./cmd/gt-mcp/webui/
 
-RUN CGO_ENABLED=1 \
+# Go 构建缓存挂载：层缓存失效（源码 / VERSION 等构建参数变化、no_cache）时
+# 仍走增量编译，只重编受影响的包。注意 GOMODCACHE(/go/pkg/mod) 故意不用缓存
+# 挂载——runtime 阶段要 COPY --from=builder 引用它给插件现场编译，模块缓存
+# 必须留在镜像层里（GOCACHE 则不需要进镜像）。
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 \
 	go build -tags pcap -trimpath \
 	-ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
 	-o /out/gt-pipeline ./cmd/gt-pipeline \
@@ -152,7 +183,8 @@ RUN CGO_ENABLED=1 \
 #   - gt-agent-darwin-{amd64,arm64}：osxcross 交叉编译（BUILD_DARWIN_AGENT=1 时），
 #     运行时用 macOS 系统自带 libpcap。
 # darwin 编译失败只 WARN 不中断（镜像退化为 linux+windows，下载页如实标不可用）。
-RUN set -e; \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    set -e; \
     CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
         go build -tags pcap -trimpath \
         -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \

@@ -100,20 +100,25 @@ openssl rand -hex 24   # 输出前加 gt_tok_ 前缀
 ## 3. 启动与验证
 
 ```bash
-# 默认完全重建：每次都从源码重新构建镜像（不复用旧镜像、不走层缓存）
+# 默认走 BuildKit 层缓存：源码变化才重编，未变化的重步骤（npm ci / go mod
+# download / osxcross 工具链）直接复用缓存——首次构建最慢，之后明显变快
 docker compose up -d
 # 连容器一起强制重建（镜像 ID 恰好没变时也要重来）
 docker compose up -d --force-recreate
-# 本机反复迭代嫌慢：临时走 BuildKit 层缓存
-GT_BUILD_NO_CACHE=false docker compose up -d
+# 怀疑缓存异常/要完全干净重建：禁用层缓存
+GT_BUILD_NO_CACHE=true docker compose up -d
 
 docker compose ps          # pipeline、mcp 两个服务应为 running
 docker compose logs pipeline | tail
 ```
 
-> 构建策略说明：`docker-compose.yml` 给两个服务都加了 `pull_policy: build`，构建段加了
-> `no_cache: true` / `pull: true`，所以 `up` 本身就会重建——不再需要记 `--build`，
-> 也不会出现"改了源码却还在跑旧镜像"。要退回缓存构建见上（或 `.env.example` 的 `GT_BUILD_*`）。
+> 构建策略说明：`docker-compose.yml` 给 pipeline 服务加了 `pull_policy: build`，
+> `up` 本身就会走构建——不需要记 `--build`。层缓存按内容寻址：`COPY . .` 在任何
+> 源码文件变化后失效、后续编译必然重跑，不会"改了源码却还在跑旧镜像"；而
+> npm ci / go mod download / osxcross 等重步骤只在各自输入（package-lock /
+> go.sum / apt 包）变化时才重跑。要完全重建见上（或 `.env.example` 的 `GT_BUILD_*`）。
+> 从旧版本升级的已有 `.env`：请把其中的 `GT_BUILD_NO_CACHE` / `GT_BUILD_PULL`
+> 改为 false（或删除这两行走默认值），否则仍会每次全量重建。
 
 验证（假设宿主机 IP 为 `10.0.0.5`）：
 
@@ -218,7 +223,7 @@ gt-agent --token gt_tok_bbb --server 10.0.0.5:19091 --session <session_id> --ifa
 
 ## 6. 验收清单（新机器演练）
 
-- [ ] 全新 Linux 机器 `docker compose up -d` 一次成功（默认完全重建，需 GitHub 可达，见临时依赖）；
+- [ ] 全新 Linux 机器 `docker compose up -d` 一次成功（首次为全量构建，需 GitHub 可达，见临时依赖；之后 up 走层缓存明显变快）；
 - [ ] 正确 token 的 MCP 请求 200；伪造 token 被拒绝（401/403）；
 - [ ] bob 的 MCP 客户端看不到 alice 的会话与插件（owner 隔离）；admin 可以；
 - [ ] 成员 `gt-agent` 推流后，owner 侧 `get_session_status` 的 `packets_in` 增长；

@@ -156,8 +156,9 @@ run-plugin-dev:
 
 # deploy：Docker 部署与"确认跑的是刚构建的新版本"一键流程。
 #
-# compose 文件头"镜像策略"已保证每次 up 都从源码重建（pull_policy: build +
-# no_cache）。本 target 补两块之前缺失的能力：
+# compose 文件头"镜像策略"已保证每次 up 都走源码构建（pull_policy: build，
+# BuildKit 层缓存按内容寻址——源码变化必然重编，详见 compose 文件头说明）。
+# 本 target 补两块之前缺失的能力：
 #   1) 把宿主 git 的 VERSION / GIT_COMMIT / BUILD_TIME 注入镜像（-version 才
 #      有意义，不再是恒定的 dev (unknown)）；
 #   2) 部署完自动 exec 各服务打印 -version，给出"确实跑到新代码"的直接证据。

@@ -8,21 +8,28 @@
 #     有意不进 PG，见 cmd/gt-mcp/main.go）；
 #   - SQLite 模式（原默认）回滚方式：删掉 GT_DB_DRIVER/GT_DB_DSN 两个环境
 #     变量与 postgres 服务即可，两套模式的配置入口是同一对 env（pkg/config）。
-# 镜像策略：image + build 双声明，**默认完全重建**（2026-09-08 起）：
+# 镜像策略：image + build 双声明，默认走 BuildKit 层缓存构建（2026-09-15 起）：
 #   - pipeline 带 `pull_policy: build`：不管本地有没有 gt-server:$GT_VERSION 镜像，
-#     一律从源码构建，绝不复用/拉取已有镜像——避免"改了代码还在跑旧镜像"。
-#   - 构建段带 `no_cache: true`：不用 BuildKit 层缓存，每次都是干净构建
-#     （代价是每次 up 都要重编 Go，约几分钟；本机迭代可用
-#     `GT_BUILD_NO_CACHE=false docker compose up -d` 临时走缓存加速）。
-#   - 构建段带 `pull: true`：顺带检查基础镜像更新，避免底层镜像长期不刷新。
+#     一律走 build 段构建，绝不复用/拉取已有镜像。BuildKit 层缓存按内容寻址：
+#     `COPY . .` 在任何源码文件变化后失效，后续编译层必然重跑——不存在
+#     "改了代码还在跑旧镜像"；而 npm ci / go mod download / osxcross 工具链等
+#     重步骤只在各自输入（package-lock / go.sum / apt 包）变化时才重跑。
+#     首次构建最慢（含 darwin 交叉工具链），之后日常 up 大幅加速。
+#   - 构建段 `no_cache` 默认 false（原 true，新用户反馈构建太慢改为默认缓存）。
+#     怀疑缓存异常 / 要完全干净重建：
+#     `GT_BUILD_NO_CACHE=true docker compose up -d`（Dockerfile 内的 BuildKit
+#     缓存挂载不受 no_cache 影响，npm/Go 增量缓存依然生效）。
+#   - 构建段 `pull` 默认 false（原 true）：不再每次构建都访问 Docker Hub 检查
+#     基础镜像——境内网络下慢且易失败；需要刷新基础镜像：
+#     `GT_BUILD_PULL=true docker compose up -d`。
 #   - **只由 pipeline 承担构建**：mcp 复用同一镜像（同 tag + `pull_policy: never`，
 #     不声明 build）。若两个服务各自声明 build 且指向同一镜像名，buildx 第二次
 #     导出同名 tag 会报 `image "gt-server:dev": already exists`（docker/buildx#3576），
 #     `docker compose up -d` 必然失败——这正是之前"每次首次构建必现"的报错。
 #     因此单独构建请用 `docker compose build pipeline`；单独 `up mcp` 且本地无镜像
 #     时需先 `up pipeline` 或手动 `docker build -t gt-server:dev .`。
-# 因此 `docker compose up -d` 等价于从零重建服务；要连带强制重建容器
-# （镜像 ID 恰好没变时）补一个 --force-recreate：
+# 因此 `docker compose up -d` 等价于按需增量构建并部署（源码变了必重编，没变则
+# 秒级复用缓存）；要连带强制重建容器（镜像 ID 恰好没变时）补一个 --force-recreate：
 #   docker compose up -d --force-recreate
 # 避免"以为改了代码却还在跑老版本"的完整用法（构建+部署+核验运行版本）：
 #   make deploy        # 推荐：一键做上面全流程，结尾打印各服务 -version 供核对
@@ -44,9 +51,13 @@
 x-build: &server-build
   context: .
   dockerfile: Dockerfile
-  # 完全重建（可用 GT_BUILD_NO_CACHE=false 临时退回缓存构建）。
-  no_cache: ${GT_BUILD_NO_CACHE:-true}
-  pull: ${GT_BUILD_PULL:-true}
+  # 层缓存构建（默认 false=启用缓存）：源码变化必然重编（COPY . . 内容寻址），
+  # 未变化的重步骤（npm ci / go mod download / osxcross）直接复用缓存。
+  # 完全干净重建：GT_BUILD_NO_CACHE=true docker compose up -d
+  no_cache: ${GT_BUILD_NO_CACHE:-false}
+  # 不主动检查基础镜像更新（默认 false）：省去每次构建访问 Docker Hub。
+  # 要刷新基础镜像：GT_BUILD_PULL=true docker compose up -d
+  pull: ${GT_BUILD_PULL:-false}
   # 探针 4 平台编译开关：默认 1（osxcross 交叉编译 darwin/amd64 + darwin/arm64，
   # 见 Dockerfile；SDK 下载/编译失败会自动退化为 linux+windows 并 WARN）。
   # 网络受限环境可设 0 跳过，darwin 探针由 macOS 宿主 make build-agents 补充。
