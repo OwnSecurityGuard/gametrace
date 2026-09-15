@@ -51,20 +51,20 @@ description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gt-
 
 #### 0.1 用 `.env` 集中管理连接配置（推荐）
 
-不要在代码里写死地址；插件目录放 `.env`（提交模板 `.env.example`），main.go 启动时加载。
+不要在代码里写死地址；插件目录放 `.env`（**直接生成，不再用 `.env.example` 占位模板**），main.go 启动时加载。
 
-**零手填**：让用户（或引导 agent）调 `get_plugin_env`，把返回的 `env_file` 原样写入 `.env`：
+**零手填、零复制**：让用户（或引导 agent）调 `get_plugin_env`，把返回的 `env_file` **直接写入插件目录 `.env`**——内容已含正确值与注释，无需任何改动：
 
 ```
-# .env.example —— 复制为 .env。内容按「步骤 0」调 get_plugin_env 生成；
-#               同名环境变量优先于本文件。
+# .env —— 内容由 get_plugin_env 的 env_file 原样写入；
+#        同名环境变量优先于本文件。
 GT_REGISTRY_ADDR=<get_plugin_env 的 registry_addr>
 GT_AUTH_TOKEN=<get_plugin_env 的 auth_token；agent 托管 GT_TUNNEL 下可留空>
 GT_DECODER_ADDR=0.0.0.0:61887
 GT_DECODER_PUBLIC_ADDR=<registry_addr 的 host 段>:61887
 ```
 
-> 提醒：不要提交 `.env` 到 git——token 是该用户凭证，提交模板只放 `.env.example`（token 为占位空值）。
+> 提醒：`.env` 含用户 token，**不提交 git**——插件骨架自带 `.gitignore`（内容一行 `.env`），生成时一并创建，不要省略。
 
 main.go 顶部加轻量加载器（不覆盖已存在的环境变量，无文件时静默跳过，不引第三方依赖）：
 
@@ -115,7 +115,8 @@ plugins/<protocol>-decoder/
 ├── decode.go       # 核心：Decode(req) → []*Event
 ├── <fmt>.go        # 负载解析器（解压/解帧/解文本）
 ├── plugin.yaml     # manifest：semantic_rules
-├── .env.example    # 连接配置模板：复制为 .env 后按「步骤 0」调 get_plugin_env 自动生成，零手填
+├── .env            # 连接配置：内容按「步骤 0」调 get_plugin_env 的 env_file 原样写入，零手填
+├── .gitignore      # 一行 .env——token 是用户凭证，不入库
 ├── <fmt>_test.go   # 解析器单测
 └── decode_test.go  # 全链路解码测试 + manifest 一致性
 ```
