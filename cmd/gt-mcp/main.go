@@ -2515,6 +2515,12 @@ func main() {
 		mcp.WithString("host", mcp.Description("Optional: host/IP the caller used to reach this server (used to infer the registry address when GT_PUBLIC_HOST is unset)")),
 	), capture.handleGetRegistryAddr)
 
+	s.AddTool(mcp.NewTool("get_plugin_env",
+		mcp.WithDescription("Return the complete .env for a decoder plugin: GT_REGISTRY_ADDR/GT_AUTH_TOKEN/GT_DECODER_ADDR/GT_DECODER_PUBLIC_ADDR plus a ready-to-write env_file block. The token is the caller's own registration token (anonymous mode returns empty). Scaffold a plugin, call this once, write env_file to .env — zero manual fill."),
+		mcp.WithString("host", mcp.Description("Explicit externally reachable host, same semantics as get_registry_addr (used when the plugin runs on a different machine than this caller)")),
+		mcp.WithNumber("decoder_port", mcp.Description("Decoder listen port, default 61887")),
+	), capture.handleGetPluginEnv)
+
 	s.AddTool(mcp.NewTool("get_agent_download_options",
 		mcp.WithDescription("Return the info the '接入设备' page needs: the back-connect address a remote probe should use (registry/ingest, with externally reachable ports) and the downloadable platform matrix. Port and decoder plugin are NOT chosen here — the probe connects first and capture is started later via probe_start_capture. If the server has no GT_PUBLIC_HOST configured, pass host (e.g. window.location.hostname) so the address can be inferred from how the caller reached the server."),
 		mcp.WithString("host", mcp.Description("Optional: host/IP the caller used to reach this server (used to infer the back-connect address when GT_PUBLIC_HOST is unset)")),

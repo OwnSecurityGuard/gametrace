@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+
+	"gametrace/pkg/auth"
 	pb "gametrace/pkg/internalipc/proto"
 	plugindevpb "gametrace/pkg/plugindev/proto"
 )
@@ -224,6 +228,83 @@ func (m *mcpCapture) handleGetRegistryAddr(ctx context.Context, req mcp.CallTool
 	out["message"] = "set GT_REGISTRY_ADDR=" + registry + " when launching plugins" +
 		" (listen_addr is the in-container bind address; it is usually unreachable from outside under docker/NAT)"
 	return successResult(out), nil
+}
+
+// handleGetPluginEnv 返回解码插件 .env 的全部 4 项配置与可直接写入的 env_file。
+// AI scaffold 插件后调一次即可生成完整 .env：地址走 advertisedAddrs（与
+// get_registry_addr 同源），token 反查调用者自己的（与 OAuth 兑换同一信任级别）。
+func (m *mcpCapture) handleGetPluginEnv(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if m.pipelineClient == nil {
+		return errorResult(fmt.Errorf("pipeline client not available")), nil
+	}
+	resp, err := m.pipelineClient.GetRegistryAddr(ctx, &pb.GetRegistryAddrRequest{})
+	if err != nil {
+		return errorResult(fmt.Errorf("get registry addr: %w", err)), nil
+	}
+	if resp.GetRegistryAddr() == "" {
+		return errorResult(fmt.Errorf("pipeline registry not configured (empty registry addr)")), nil
+	}
+	registry, _, _ := m.advertisedAddrs(ctx, req.GetString("host", ""))
+
+	port := 61887
+	if p := req.GetInt("decoder_port", 0); p > 0 && p < 65536 {
+		port = p
+	}
+	regHost, _, err := net.SplitHostPort(registry)
+	if err != nil {
+		return errorResult(fmt.Errorf("parse registry addr %q: %w", registry, err)), nil
+	}
+	decoderAddr := net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
+	publicAddr := net.JoinHostPort(regHost, strconv.Itoa(port))
+
+	token, src := m.callerToken(ctx)
+
+	return successResult(map[string]any{
+		"registry_addr":       registry,
+		"auth_token":          token,
+		"token_source":        src,
+		"decoder_addr":        decoderAddr,
+		"decoder_public_addr": publicAddr,
+		"env_file":            buildPluginEnvFile(registry, token, decoderAddr, publicAddr),
+		"notes": []string{
+			"GT_REGISTRY_ADDR: 插件注册端点，原样使用",
+			"GT_AUTH_TOKEN: 调用者自己的注册 token（agent 托管 GT_TUNNEL=1 时平台自动注入，可留空）",
+			"GT_DECODER_ADDR: 插件本地监听地址，0.0.0.0 保证平台可回拨",
+			"GT_DECODER_PUBLIC_ADDR: 平台回拨地址；填错时平台连不上解码器，注册失败",
+			"把 env_file 原样写入插件目录 .env；不要把 .env 提交到 git",
+		},
+	}), nil
+}
+
+// callerToken 反查调用者自己的注册 token：env（tokensByOwner）优先、users 表兜底；
+// 匿名模式（无 Principal / probe 身份）返回空——注册无需鉴权。
+// 与 OAuth 兑换的 ownerToken 同源（同一信任级别：调用方已认证为该 owner）。
+func (m *mcpCapture) callerToken(ctx context.Context) (string, string) {
+	p, ok := auth.PrincipalFrom(ctx)
+	if !ok || p == nil || p.ProbeID != "" {
+		return "", "anonymous"
+	}
+	if t, ok := m.tokensByOwner[p.Owner]; ok && t != "" {
+		return t, "env"
+	}
+	if m.users != nil {
+		if t, err := m.users.TokenByOwner(ctx, p.Owner); err == nil && t != "" {
+			return t, "users"
+		}
+	}
+	return "", "anonymous"
+}
+
+// buildPluginEnvFile 生成可直接写入 .env 的文本（含注释）。
+func buildPluginEnvFile(registryAddr, token, decoderAddr, publicAddr string) string {
+	var b strings.Builder
+	b.WriteString("# 由 gametrace get_plugin_env 生成 —— 复制为 .env，无需手填\n")
+	b.WriteString("# 同名环境变量优先于本文件；不要把 .env 提交到 git\n")
+	fmt.Fprintf(&b, "GT_REGISTRY_ADDR=%s\n", registryAddr)
+	fmt.Fprintf(&b, "GT_AUTH_TOKEN=%s\n", token)
+	fmt.Fprintf(&b, "GT_DECODER_ADDR=%s\n", decoderAddr)
+	fmt.Fprintf(&b, "GT_DECODER_PUBLIC_ADDR=%s\n", publicAddr)
+	return b.String()
 }
 
 // handleStatusPlugin returns the dual-state view (design §2): the artifact

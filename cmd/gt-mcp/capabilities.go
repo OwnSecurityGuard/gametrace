@@ -69,6 +69,7 @@ func buildCapabilityCatalog() capabilityDoc {
 				Tools: []string{
 					"list_plugins", "list_registered_plugins",
 					"get_plugin_manifest", "deregister_plugin", "get_registry_addr",
+					"get_plugin_env",
 				},
 			},
 			{
