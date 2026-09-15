@@ -2286,10 +2286,12 @@ func (x *PluginSummary) GetOwner() string {
 }
 
 type ListPluginsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Plugins       []*PluginSummary       `protobuf:"bytes,1,rep,name=plugins,proto3" json:"plugins,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Plugins []*PluginSummary       `protobuf:"bytes,1,rep,name=plugins,proto3" json:"plugins,omitempty"`
+	// 最近注册失败记录（内存 ring buffer，15min TTL，owner 作用域同 plugins）。
+	RecentFailures []*PluginFailure `protobuf:"bytes,2,rep,name=recent_failures,json=recentFailures,proto3" json:"recent_failures,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ListPluginsResponse) Reset() {
@@ -2329,6 +2331,90 @@ func (x *ListPluginsResponse) GetPlugins() []*PluginSummary {
 	return nil
 }
 
+func (x *ListPluginsResponse) GetRecentFailures() []*PluginFailure {
+	if x != nil {
+		return x.RecentFailures
+	}
+	return nil
+}
+
+// PluginFailure 最近的解码器注册失败记录（dial 插件地址不通等）。
+type PluginFailure struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	SocketPath    string                 `protobuf:"bytes,2,opt,name=socket_path,json=socketPath,proto3" json:"socket_path,omitempty"` // 注册时上报的地址
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`                             // 拨号错误与诊断建议
+	Owner         string                 `protobuf:"bytes,4,opt,name=owner,proto3" json:"owner,omitempty"`                             // 注册方属主（空串 = 匿名/系统）
+	TimestampUnix int64                  `protobuf:"varint,5,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PluginFailure) Reset() {
+	*x = PluginFailure{}
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginFailure) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginFailure) ProtoMessage() {}
+
+func (x *PluginFailure) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginFailure.ProtoReflect.Descriptor instead.
+func (*PluginFailure) Descriptor() ([]byte, []int) {
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *PluginFailure) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *PluginFailure) GetSocketPath() string {
+	if x != nil {
+		return x.SocketPath
+	}
+	return ""
+}
+
+func (x *PluginFailure) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *PluginFailure) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
+func (x *PluginFailure) GetTimestampUnix() int64 {
+	if x != nil {
+		return x.TimestampUnix
+	}
+	return 0
+}
+
 type GetPluginManifestRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`                             // 插件名，留空返回所有
@@ -2340,7 +2426,7 @@ type GetPluginManifestRequest struct {
 
 func (x *GetPluginManifestRequest) Reset() {
 	*x = GetPluginManifestRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[30]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2352,7 +2438,7 @@ func (x *GetPluginManifestRequest) String() string {
 func (*GetPluginManifestRequest) ProtoMessage() {}
 
 func (x *GetPluginManifestRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[30]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2365,7 +2451,7 @@ func (x *GetPluginManifestRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPluginManifestRequest.ProtoReflect.Descriptor instead.
 func (*GetPluginManifestRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{30}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *GetPluginManifestRequest) GetName() string {
@@ -2399,7 +2485,7 @@ type GetPluginManifestResponse struct {
 
 func (x *GetPluginManifestResponse) Reset() {
 	*x = GetPluginManifestResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[31]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2411,7 +2497,7 @@ func (x *GetPluginManifestResponse) String() string {
 func (*GetPluginManifestResponse) ProtoMessage() {}
 
 func (x *GetPluginManifestResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[31]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2424,7 +2510,7 @@ func (x *GetPluginManifestResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPluginManifestResponse.ProtoReflect.Descriptor instead.
 func (*GetPluginManifestResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{31}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *GetPluginManifestResponse) GetManifest() []byte {
@@ -2451,7 +2537,7 @@ type DeregisterPluginRequest struct {
 
 func (x *DeregisterPluginRequest) Reset() {
 	*x = DeregisterPluginRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[32]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2463,7 +2549,7 @@ func (x *DeregisterPluginRequest) String() string {
 func (*DeregisterPluginRequest) ProtoMessage() {}
 
 func (x *DeregisterPluginRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[32]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2476,7 +2562,7 @@ func (x *DeregisterPluginRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeregisterPluginRequest.ProtoReflect.Descriptor instead.
 func (*DeregisterPluginRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{32}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *DeregisterPluginRequest) GetInstanceId() string {
@@ -2504,7 +2590,7 @@ type DeregisterPluginResponse struct {
 
 func (x *DeregisterPluginResponse) Reset() {
 	*x = DeregisterPluginResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[33]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2516,7 +2602,7 @@ func (x *DeregisterPluginResponse) String() string {
 func (*DeregisterPluginResponse) ProtoMessage() {}
 
 func (x *DeregisterPluginResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[33]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2529,7 +2615,7 @@ func (x *DeregisterPluginResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeregisterPluginResponse.ProtoReflect.Descriptor instead.
 func (*DeregisterPluginResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{33}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *DeregisterPluginResponse) GetOk() bool {
@@ -2567,7 +2653,7 @@ type SetSessionPluginRequest struct {
 
 func (x *SetSessionPluginRequest) Reset() {
 	*x = SetSessionPluginRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[34]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2579,7 +2665,7 @@ func (x *SetSessionPluginRequest) String() string {
 func (*SetSessionPluginRequest) ProtoMessage() {}
 
 func (x *SetSessionPluginRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[34]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2592,7 +2678,7 @@ func (x *SetSessionPluginRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetSessionPluginRequest.ProtoReflect.Descriptor instead.
 func (*SetSessionPluginRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{34}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *SetSessionPluginRequest) GetSessionId() string {
@@ -2629,7 +2715,7 @@ type SetSessionPluginResponse struct {
 
 func (x *SetSessionPluginResponse) Reset() {
 	*x = SetSessionPluginResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[35]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2641,7 +2727,7 @@ func (x *SetSessionPluginResponse) String() string {
 func (*SetSessionPluginResponse) ProtoMessage() {}
 
 func (x *SetSessionPluginResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[35]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2654,7 +2740,7 @@ func (x *SetSessionPluginResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetSessionPluginResponse.ProtoReflect.Descriptor instead.
 func (*SetSessionPluginResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{35}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *SetSessionPluginResponse) GetOk() bool {
@@ -2694,7 +2780,7 @@ type WatchPluginsRequest struct {
 
 func (x *WatchPluginsRequest) Reset() {
 	*x = WatchPluginsRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[36]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2706,7 +2792,7 @@ func (x *WatchPluginsRequest) String() string {
 func (*WatchPluginsRequest) ProtoMessage() {}
 
 func (x *WatchPluginsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[36]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2719,25 +2805,28 @@ func (x *WatchPluginsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchPluginsRequest.ProtoReflect.Descriptor instead.
 func (*WatchPluginsRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{36}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{37}
 }
 
 // PluginEvent 插件注册表状态变化通知。
-// type 取值：register（新注册）| deregister（主动注销）| online（离线→在线）| offline（在线→离线）。
+// type 取值：register | deregister | online | offline | register_failed。
 type PluginEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`                                         // register | deregister | online | offline
+	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`                                         // register | deregister | online | offline | register_failed
 	InstanceId    string                 `protobuf:"bytes,2,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`           // 插件实例 ID
 	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`                                         // 插件名（manifest.name）
 	Online        bool                   `protobuf:"varint,4,opt,name=online,proto3" json:"online,omitempty"`                                    // 事件后是否在线
 	TimestampUnix int64                  `protobuf:"varint,5,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"` // 事件发生时间（Unix 秒）
+	SocketPath    string                 `protobuf:"bytes,6,opt,name=socket_path,json=socketPath,proto3" json:"socket_path,omitempty"`           // register_failed：注册时上报、拨号失败的插件地址
+	Error         string                 `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`                                       // register_failed：拨号错误与诊断建议
+	Owner         string                 `protobuf:"bytes,8,opt,name=owner,proto3" json:"owner,omitempty"`                                       // 事件归属（register_failed 订阅侧按 owner 过滤）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PluginEvent) Reset() {
 	*x = PluginEvent{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[37]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2749,7 +2838,7 @@ func (x *PluginEvent) String() string {
 func (*PluginEvent) ProtoMessage() {}
 
 func (x *PluginEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[37]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2762,7 +2851,7 @@ func (x *PluginEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginEvent.ProtoReflect.Descriptor instead.
 func (*PluginEvent) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{37}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *PluginEvent) GetType() string {
@@ -2800,6 +2889,27 @@ func (x *PluginEvent) GetTimestampUnix() int64 {
 	return 0
 }
 
+func (x *PluginEvent) GetSocketPath() string {
+	if x != nil {
+		return x.SocketPath
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
 // GetRegistryAddrRequest 无参数。
 type GetRegistryAddrRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2809,7 +2919,7 @@ type GetRegistryAddrRequest struct {
 
 func (x *GetRegistryAddrRequest) Reset() {
 	*x = GetRegistryAddrRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[38]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2821,7 +2931,7 @@ func (x *GetRegistryAddrRequest) String() string {
 func (*GetRegistryAddrRequest) ProtoMessage() {}
 
 func (x *GetRegistryAddrRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[38]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2834,7 +2944,7 @@ func (x *GetRegistryAddrRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegistryAddrRequest.ProtoReflect.Descriptor instead.
 func (*GetRegistryAddrRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{38}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{39}
 }
 
 // GetRegistryAddrResponse 返回插件应连接的注册中心地址。
@@ -2849,7 +2959,7 @@ type GetRegistryAddrResponse struct {
 
 func (x *GetRegistryAddrResponse) Reset() {
 	*x = GetRegistryAddrResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[39]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2861,7 +2971,7 @@ func (x *GetRegistryAddrResponse) String() string {
 func (*GetRegistryAddrResponse) ProtoMessage() {}
 
 func (x *GetRegistryAddrResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[39]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2874,7 +2984,7 @@ func (x *GetRegistryAddrResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRegistryAddrResponse.ProtoReflect.Descriptor instead.
 func (*GetRegistryAddrResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{39}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *GetRegistryAddrResponse) GetRegistryAddr() string {
@@ -2914,7 +3024,7 @@ type CreateProxyLeaseRequest struct {
 
 func (x *CreateProxyLeaseRequest) Reset() {
 	*x = CreateProxyLeaseRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[40]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2926,7 +3036,7 @@ func (x *CreateProxyLeaseRequest) String() string {
 func (*CreateProxyLeaseRequest) ProtoMessage() {}
 
 func (x *CreateProxyLeaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[40]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2939,7 +3049,7 @@ func (x *CreateProxyLeaseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateProxyLeaseRequest.ProtoReflect.Descriptor instead.
 func (*CreateProxyLeaseRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{40}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *CreateProxyLeaseRequest) GetPlugin() string {
@@ -3047,7 +3157,7 @@ type ProxyLeaseState struct {
 
 func (x *ProxyLeaseState) Reset() {
 	*x = ProxyLeaseState{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[41]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3059,7 +3169,7 @@ func (x *ProxyLeaseState) String() string {
 func (*ProxyLeaseState) ProtoMessage() {}
 
 func (x *ProxyLeaseState) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[41]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3072,7 +3182,7 @@ func (x *ProxyLeaseState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProxyLeaseState.ProtoReflect.Descriptor instead.
 func (*ProxyLeaseState) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{41}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *ProxyLeaseState) GetLeaseId() string {
@@ -3252,7 +3362,7 @@ type CreateProxyLeaseResponse struct {
 
 func (x *CreateProxyLeaseResponse) Reset() {
 	*x = CreateProxyLeaseResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[42]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3264,7 +3374,7 @@ func (x *CreateProxyLeaseResponse) String() string {
 func (*CreateProxyLeaseResponse) ProtoMessage() {}
 
 func (x *CreateProxyLeaseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[42]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3277,7 +3387,7 @@ func (x *CreateProxyLeaseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateProxyLeaseResponse.ProtoReflect.Descriptor instead.
 func (*CreateProxyLeaseResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{42}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *CreateProxyLeaseResponse) GetLease() *ProxyLeaseState {
@@ -3297,7 +3407,7 @@ type ListProxyLeasesRequest struct {
 
 func (x *ListProxyLeasesRequest) Reset() {
 	*x = ListProxyLeasesRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[43]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3309,7 +3419,7 @@ func (x *ListProxyLeasesRequest) String() string {
 func (*ListProxyLeasesRequest) ProtoMessage() {}
 
 func (x *ListProxyLeasesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[43]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3322,7 +3432,7 @@ func (x *ListProxyLeasesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProxyLeasesRequest.ProtoReflect.Descriptor instead.
 func (*ListProxyLeasesRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{43}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ListProxyLeasesRequest) GetOwner() string {
@@ -3348,7 +3458,7 @@ type ListProxyLeasesResponse struct {
 
 func (x *ListProxyLeasesResponse) Reset() {
 	*x = ListProxyLeasesResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[44]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3360,7 +3470,7 @@ func (x *ListProxyLeasesResponse) String() string {
 func (*ListProxyLeasesResponse) ProtoMessage() {}
 
 func (x *ListProxyLeasesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[44]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3373,7 +3483,7 @@ func (x *ListProxyLeasesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProxyLeasesResponse.ProtoReflect.Descriptor instead.
 func (*ListProxyLeasesResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{44}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *ListProxyLeasesResponse) GetLeases() []*ProxyLeaseState {
@@ -3394,7 +3504,7 @@ type GetProxyLeaseRequest struct {
 
 func (x *GetProxyLeaseRequest) Reset() {
 	*x = GetProxyLeaseRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[45]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3406,7 +3516,7 @@ func (x *GetProxyLeaseRequest) String() string {
 func (*GetProxyLeaseRequest) ProtoMessage() {}
 
 func (x *GetProxyLeaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[45]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3419,7 +3529,7 @@ func (x *GetProxyLeaseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProxyLeaseRequest.ProtoReflect.Descriptor instead.
 func (*GetProxyLeaseRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{45}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *GetProxyLeaseRequest) GetLeaseId() string {
@@ -3452,7 +3562,7 @@ type GetProxyLeaseResponse struct {
 
 func (x *GetProxyLeaseResponse) Reset() {
 	*x = GetProxyLeaseResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[46]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3464,7 +3574,7 @@ func (x *GetProxyLeaseResponse) String() string {
 func (*GetProxyLeaseResponse) ProtoMessage() {}
 
 func (x *GetProxyLeaseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[46]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3477,7 +3587,7 @@ func (x *GetProxyLeaseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProxyLeaseResponse.ProtoReflect.Descriptor instead.
 func (*GetProxyLeaseResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{46}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *GetProxyLeaseResponse) GetLease() *ProxyLeaseState {
@@ -3498,7 +3608,7 @@ type ReleaseProxyLeaseRequest struct {
 
 func (x *ReleaseProxyLeaseRequest) Reset() {
 	*x = ReleaseProxyLeaseRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[47]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3510,7 +3620,7 @@ func (x *ReleaseProxyLeaseRequest) String() string {
 func (*ReleaseProxyLeaseRequest) ProtoMessage() {}
 
 func (x *ReleaseProxyLeaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[47]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3523,7 +3633,7 @@ func (x *ReleaseProxyLeaseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseProxyLeaseRequest.ProtoReflect.Descriptor instead.
 func (*ReleaseProxyLeaseRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{47}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ReleaseProxyLeaseRequest) GetLeaseId() string {
@@ -3558,7 +3668,7 @@ type ReleaseProxyLeaseResponse struct {
 
 func (x *ReleaseProxyLeaseResponse) Reset() {
 	*x = ReleaseProxyLeaseResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[48]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3570,7 +3680,7 @@ func (x *ReleaseProxyLeaseResponse) String() string {
 func (*ReleaseProxyLeaseResponse) ProtoMessage() {}
 
 func (x *ReleaseProxyLeaseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[48]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3583,7 +3693,7 @@ func (x *ReleaseProxyLeaseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseProxyLeaseResponse.ProtoReflect.Descriptor instead.
 func (*ReleaseProxyLeaseResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{48}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *ReleaseProxyLeaseResponse) GetOk() bool {
@@ -3625,7 +3735,7 @@ type StartLeaseCaptureRequest struct {
 
 func (x *StartLeaseCaptureRequest) Reset() {
 	*x = StartLeaseCaptureRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[49]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3637,7 +3747,7 @@ func (x *StartLeaseCaptureRequest) String() string {
 func (*StartLeaseCaptureRequest) ProtoMessage() {}
 
 func (x *StartLeaseCaptureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[49]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3650,7 +3760,7 @@ func (x *StartLeaseCaptureRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartLeaseCaptureRequest.ProtoReflect.Descriptor instead.
 func (*StartLeaseCaptureRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{49}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *StartLeaseCaptureRequest) GetLeaseId() string {
@@ -3714,7 +3824,7 @@ type StartLeaseCaptureResponse struct {
 
 func (x *StartLeaseCaptureResponse) Reset() {
 	*x = StartLeaseCaptureResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[50]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3726,7 +3836,7 @@ func (x *StartLeaseCaptureResponse) String() string {
 func (*StartLeaseCaptureResponse) ProtoMessage() {}
 
 func (x *StartLeaseCaptureResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[50]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3739,7 +3849,7 @@ func (x *StartLeaseCaptureResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartLeaseCaptureResponse.ProtoReflect.Descriptor instead.
 func (*StartLeaseCaptureResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{50}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *StartLeaseCaptureResponse) GetOk() bool {
@@ -3782,7 +3892,7 @@ type StopLeaseCaptureRequest struct {
 
 func (x *StopLeaseCaptureRequest) Reset() {
 	*x = StopLeaseCaptureRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[51]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3794,7 +3904,7 @@ func (x *StopLeaseCaptureRequest) String() string {
 func (*StopLeaseCaptureRequest) ProtoMessage() {}
 
 func (x *StopLeaseCaptureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[51]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3807,7 +3917,7 @@ func (x *StopLeaseCaptureRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopLeaseCaptureRequest.ProtoReflect.Descriptor instead.
 func (*StopLeaseCaptureRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{51}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *StopLeaseCaptureRequest) GetLeaseId() string {
@@ -3845,7 +3955,7 @@ type StopLeaseCaptureResponse struct {
 
 func (x *StopLeaseCaptureResponse) Reset() {
 	*x = StopLeaseCaptureResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[52]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3857,7 +3967,7 @@ func (x *StopLeaseCaptureResponse) String() string {
 func (*StopLeaseCaptureResponse) ProtoMessage() {}
 
 func (x *StopLeaseCaptureResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[52]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3870,7 +3980,7 @@ func (x *StopLeaseCaptureResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopLeaseCaptureResponse.ProtoReflect.Descriptor instead.
 func (*StopLeaseCaptureResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{52}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *StopLeaseCaptureResponse) GetOk() bool {
@@ -3958,7 +4068,7 @@ type ProbeInfo struct {
 
 func (x *ProbeInfo) Reset() {
 	*x = ProbeInfo{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[53]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3970,7 +4080,7 @@ func (x *ProbeInfo) String() string {
 func (*ProbeInfo) ProtoMessage() {}
 
 func (x *ProbeInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[53]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3983,7 +4093,7 @@ func (x *ProbeInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeInfo.ProtoReflect.Descriptor instead.
 func (*ProbeInfo) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{53}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *ProbeInfo) GetProbeId() string {
@@ -4196,7 +4306,7 @@ type ProbeNicInfo struct {
 
 func (x *ProbeNicInfo) Reset() {
 	*x = ProbeNicInfo{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[54]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4208,7 +4318,7 @@ func (x *ProbeNicInfo) String() string {
 func (*ProbeNicInfo) ProtoMessage() {}
 
 func (x *ProbeNicInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[54]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4221,7 +4331,7 @@ func (x *ProbeNicInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeNicInfo.ProtoReflect.Descriptor instead.
 func (*ProbeNicInfo) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{54}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *ProbeNicInfo) GetName() string {
@@ -4262,7 +4372,7 @@ type ListProbesRequest struct {
 
 func (x *ListProbesRequest) Reset() {
 	*x = ListProbesRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[55]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4274,7 +4384,7 @@ func (x *ListProbesRequest) String() string {
 func (*ListProbesRequest) ProtoMessage() {}
 
 func (x *ListProbesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[55]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4287,7 +4397,7 @@ func (x *ListProbesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProbesRequest.ProtoReflect.Descriptor instead.
 func (*ListProbesRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{55}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *ListProbesRequest) GetOwner() string {
@@ -4313,7 +4423,7 @@ type ListProbesResponse struct {
 
 func (x *ListProbesResponse) Reset() {
 	*x = ListProbesResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[56]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4325,7 +4435,7 @@ func (x *ListProbesResponse) String() string {
 func (*ListProbesResponse) ProtoMessage() {}
 
 func (x *ListProbesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[56]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4338,7 +4448,7 @@ func (x *ListProbesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListProbesResponse.ProtoReflect.Descriptor instead.
 func (*ListProbesResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{56}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *ListProbesResponse) GetProbes() []*ProbeInfo {
@@ -4359,7 +4469,7 @@ type GetProbeRequest struct {
 
 func (x *GetProbeRequest) Reset() {
 	*x = GetProbeRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[57]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4371,7 +4481,7 @@ func (x *GetProbeRequest) String() string {
 func (*GetProbeRequest) ProtoMessage() {}
 
 func (x *GetProbeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[57]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4384,7 +4494,7 @@ func (x *GetProbeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProbeRequest.ProtoReflect.Descriptor instead.
 func (*GetProbeRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{57}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *GetProbeRequest) GetProbeId() string {
@@ -4417,7 +4527,7 @@ type GetProbeResponse struct {
 
 func (x *GetProbeResponse) Reset() {
 	*x = GetProbeResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[58]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4429,7 +4539,7 @@ func (x *GetProbeResponse) String() string {
 func (*GetProbeResponse) ProtoMessage() {}
 
 func (x *GetProbeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[58]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4442,7 +4552,7 @@ func (x *GetProbeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetProbeResponse.ProtoReflect.Descriptor instead.
 func (*GetProbeResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{58}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *GetProbeResponse) GetProbe() *ProbeInfo {
@@ -4471,7 +4581,7 @@ type ProbeStartCaptureRequest struct {
 
 func (x *ProbeStartCaptureRequest) Reset() {
 	*x = ProbeStartCaptureRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[59]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4483,7 +4593,7 @@ func (x *ProbeStartCaptureRequest) String() string {
 func (*ProbeStartCaptureRequest) ProtoMessage() {}
 
 func (x *ProbeStartCaptureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[59]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4496,7 +4606,7 @@ func (x *ProbeStartCaptureRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeStartCaptureRequest.ProtoReflect.Descriptor instead.
 func (*ProbeStartCaptureRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{59}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ProbeStartCaptureRequest) GetProbeId() string {
@@ -4587,7 +4697,7 @@ type ProbeStartCaptureResponse struct {
 
 func (x *ProbeStartCaptureResponse) Reset() {
 	*x = ProbeStartCaptureResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[60]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4599,7 +4709,7 @@ func (x *ProbeStartCaptureResponse) String() string {
 func (*ProbeStartCaptureResponse) ProtoMessage() {}
 
 func (x *ProbeStartCaptureResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[60]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4612,7 +4722,7 @@ func (x *ProbeStartCaptureResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeStartCaptureResponse.ProtoReflect.Descriptor instead.
 func (*ProbeStartCaptureResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{60}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ProbeStartCaptureResponse) GetSessionId() string {
@@ -4640,7 +4750,7 @@ type ProbeStopCaptureRequest struct {
 
 func (x *ProbeStopCaptureRequest) Reset() {
 	*x = ProbeStopCaptureRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[61]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4652,7 +4762,7 @@ func (x *ProbeStopCaptureRequest) String() string {
 func (*ProbeStopCaptureRequest) ProtoMessage() {}
 
 func (x *ProbeStopCaptureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[61]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4665,7 +4775,7 @@ func (x *ProbeStopCaptureRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeStopCaptureRequest.ProtoReflect.Descriptor instead.
 func (*ProbeStopCaptureRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{61}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ProbeStopCaptureRequest) GetProbeId() string {
@@ -4698,7 +4808,7 @@ type ProbeStopCaptureResponse struct {
 
 func (x *ProbeStopCaptureResponse) Reset() {
 	*x = ProbeStopCaptureResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[62]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4710,7 +4820,7 @@ func (x *ProbeStopCaptureResponse) String() string {
 func (*ProbeStopCaptureResponse) ProtoMessage() {}
 
 func (x *ProbeStopCaptureResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[62]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4723,7 +4833,7 @@ func (x *ProbeStopCaptureResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeStopCaptureResponse.ProtoReflect.Descriptor instead.
 func (*ProbeStopCaptureResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{62}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *ProbeStopCaptureResponse) GetSessionId() string {
@@ -4747,7 +4857,7 @@ type ProbeUpdateFilterRequest struct {
 
 func (x *ProbeUpdateFilterRequest) Reset() {
 	*x = ProbeUpdateFilterRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[63]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4759,7 +4869,7 @@ func (x *ProbeUpdateFilterRequest) String() string {
 func (*ProbeUpdateFilterRequest) ProtoMessage() {}
 
 func (x *ProbeUpdateFilterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[63]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4772,7 +4882,7 @@ func (x *ProbeUpdateFilterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeUpdateFilterRequest.ProtoReflect.Descriptor instead.
 func (*ProbeUpdateFilterRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{63}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *ProbeUpdateFilterRequest) GetProbeId() string {
@@ -4826,7 +4936,7 @@ type ProbeUpdateFilterResponse struct {
 
 func (x *ProbeUpdateFilterResponse) Reset() {
 	*x = ProbeUpdateFilterResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[64]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4838,7 +4948,7 @@ func (x *ProbeUpdateFilterResponse) String() string {
 func (*ProbeUpdateFilterResponse) ProtoMessage() {}
 
 func (x *ProbeUpdateFilterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[64]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4851,7 +4961,7 @@ func (x *ProbeUpdateFilterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeUpdateFilterResponse.ProtoReflect.Descriptor instead.
 func (*ProbeUpdateFilterResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{64}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *ProbeUpdateFilterResponse) GetOk() bool {
@@ -4872,7 +4982,7 @@ type ProbeRetryCaptureRequest struct {
 
 func (x *ProbeRetryCaptureRequest) Reset() {
 	*x = ProbeRetryCaptureRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[65]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4884,7 +4994,7 @@ func (x *ProbeRetryCaptureRequest) String() string {
 func (*ProbeRetryCaptureRequest) ProtoMessage() {}
 
 func (x *ProbeRetryCaptureRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[65]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4897,7 +5007,7 @@ func (x *ProbeRetryCaptureRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeRetryCaptureRequest.ProtoReflect.Descriptor instead.
 func (*ProbeRetryCaptureRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{65}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *ProbeRetryCaptureRequest) GetProbeId() string {
@@ -4930,7 +5040,7 @@ type ProbeRetryCaptureResponse struct {
 
 func (x *ProbeRetryCaptureResponse) Reset() {
 	*x = ProbeRetryCaptureResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[66]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4942,7 +5052,7 @@ func (x *ProbeRetryCaptureResponse) String() string {
 func (*ProbeRetryCaptureResponse) ProtoMessage() {}
 
 func (x *ProbeRetryCaptureResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[66]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4955,7 +5065,7 @@ func (x *ProbeRetryCaptureResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeRetryCaptureResponse.ProtoReflect.Descriptor instead.
 func (*ProbeRetryCaptureResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{66}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *ProbeRetryCaptureResponse) GetOk() bool {
@@ -4977,7 +5087,7 @@ type ProbeRenameRequest struct {
 
 func (x *ProbeRenameRequest) Reset() {
 	*x = ProbeRenameRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[67]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4989,7 +5099,7 @@ func (x *ProbeRenameRequest) String() string {
 func (*ProbeRenameRequest) ProtoMessage() {}
 
 func (x *ProbeRenameRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[67]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5002,7 +5112,7 @@ func (x *ProbeRenameRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeRenameRequest.ProtoReflect.Descriptor instead.
 func (*ProbeRenameRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{67}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *ProbeRenameRequest) GetProbeId() string {
@@ -5042,7 +5152,7 @@ type ProbeRenameResponse struct {
 
 func (x *ProbeRenameResponse) Reset() {
 	*x = ProbeRenameResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[68]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5054,7 +5164,7 @@ func (x *ProbeRenameResponse) String() string {
 func (*ProbeRenameResponse) ProtoMessage() {}
 
 func (x *ProbeRenameResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[68]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5067,7 +5177,7 @@ func (x *ProbeRenameResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeRenameResponse.ProtoReflect.Descriptor instead.
 func (*ProbeRenameResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{68}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *ProbeRenameResponse) GetOk() bool {
@@ -5088,7 +5198,7 @@ type ProbeRevokeRequest struct {
 
 func (x *ProbeRevokeRequest) Reset() {
 	*x = ProbeRevokeRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[69]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5100,7 +5210,7 @@ func (x *ProbeRevokeRequest) String() string {
 func (*ProbeRevokeRequest) ProtoMessage() {}
 
 func (x *ProbeRevokeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[69]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5113,7 +5223,7 @@ func (x *ProbeRevokeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeRevokeRequest.ProtoReflect.Descriptor instead.
 func (*ProbeRevokeRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{69}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *ProbeRevokeRequest) GetProbeId() string {
@@ -5146,7 +5256,7 @@ type ProbeRevokeResponse struct {
 
 func (x *ProbeRevokeResponse) Reset() {
 	*x = ProbeRevokeResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[70]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5158,7 +5268,7 @@ func (x *ProbeRevokeResponse) String() string {
 func (*ProbeRevokeResponse) ProtoMessage() {}
 
 func (x *ProbeRevokeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[70]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5171,7 +5281,7 @@ func (x *ProbeRevokeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeRevokeResponse.ProtoReflect.Descriptor instead.
 func (*ProbeRevokeResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{70}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *ProbeRevokeResponse) GetOk() bool {
@@ -5196,7 +5306,7 @@ type ProbeArchiveSegmentMeta struct {
 
 func (x *ProbeArchiveSegmentMeta) Reset() {
 	*x = ProbeArchiveSegmentMeta{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[71]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5208,7 +5318,7 @@ func (x *ProbeArchiveSegmentMeta) String() string {
 func (*ProbeArchiveSegmentMeta) ProtoMessage() {}
 
 func (x *ProbeArchiveSegmentMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[71]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5221,7 +5331,7 @@ func (x *ProbeArchiveSegmentMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeArchiveSegmentMeta.ProtoReflect.Descriptor instead.
 func (*ProbeArchiveSegmentMeta) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{71}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *ProbeArchiveSegmentMeta) GetSegId() string {
@@ -5280,7 +5390,7 @@ type ProbeListArchiveRequest struct {
 
 func (x *ProbeListArchiveRequest) Reset() {
 	*x = ProbeListArchiveRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[72]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5292,7 +5402,7 @@ func (x *ProbeListArchiveRequest) String() string {
 func (*ProbeListArchiveRequest) ProtoMessage() {}
 
 func (x *ProbeListArchiveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[72]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5305,7 +5415,7 @@ func (x *ProbeListArchiveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeListArchiveRequest.ProtoReflect.Descriptor instead.
 func (*ProbeListArchiveRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{72}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *ProbeListArchiveRequest) GetProbeId() string {
@@ -5360,7 +5470,7 @@ type ProbeListArchiveResponse struct {
 
 func (x *ProbeListArchiveResponse) Reset() {
 	*x = ProbeListArchiveResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[73]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5372,7 +5482,7 @@ func (x *ProbeListArchiveResponse) String() string {
 func (*ProbeListArchiveResponse) ProtoMessage() {}
 
 func (x *ProbeListArchiveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[73]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5385,7 +5495,7 @@ func (x *ProbeListArchiveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeListArchiveResponse.ProtoReflect.Descriptor instead.
 func (*ProbeListArchiveResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{73}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *ProbeListArchiveResponse) GetSegments() []*ProbeArchiveSegmentMeta {
@@ -5416,7 +5526,7 @@ type ProbeImportArchiveRequest struct {
 
 func (x *ProbeImportArchiveRequest) Reset() {
 	*x = ProbeImportArchiveRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[74]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5428,7 +5538,7 @@ func (x *ProbeImportArchiveRequest) String() string {
 func (*ProbeImportArchiveRequest) ProtoMessage() {}
 
 func (x *ProbeImportArchiveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[74]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5441,7 +5551,7 @@ func (x *ProbeImportArchiveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeImportArchiveRequest.ProtoReflect.Descriptor instead.
 func (*ProbeImportArchiveRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{74}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *ProbeImportArchiveRequest) GetProbeId() string {
@@ -5497,7 +5607,7 @@ type ProbeImportArchiveResponse struct {
 
 func (x *ProbeImportArchiveResponse) Reset() {
 	*x = ProbeImportArchiveResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[75]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5509,7 +5619,7 @@ func (x *ProbeImportArchiveResponse) String() string {
 func (*ProbeImportArchiveResponse) ProtoMessage() {}
 
 func (x *ProbeImportArchiveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[75]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5522,7 +5632,7 @@ func (x *ProbeImportArchiveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeImportArchiveResponse.ProtoReflect.Descriptor instead.
 func (*ProbeImportArchiveResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{75}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *ProbeImportArchiveResponse) GetSessionId() string {
@@ -5755,9 +5865,17 @@ const file_pkg_internalipc_proto_internal_proto_rawDesc = "" +
 	"socketPath\x12\x16\n" +
 	"\x06online\x18\a \x01(\bR\x06online\x12.\n" +
 	"\x13last_heartbeat_unix\x18\b \x01(\x03R\x11lastHeartbeatUnix\x12\x14\n" +
-	"\x05owner\x18\t \x01(\tR\x05owner\"U\n" +
+	"\x05owner\x18\t \x01(\tR\x05owner\"\xa4\x01\n" +
 	"\x13ListPluginsResponse\x12>\n" +
-	"\aplugins\x18\x01 \x03(\v2$.gametrace.internalipc.PluginSummaryR\aplugins\"c\n" +
+	"\aplugins\x18\x01 \x03(\v2$.gametrace.internalipc.PluginSummaryR\aplugins\x12M\n" +
+	"\x0frecent_failures\x18\x02 \x03(\v2$.gametrace.internalipc.PluginFailureR\x0erecentFailures\"\x97\x01\n" +
+	"\rPluginFailure\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
+	"\vsocket_path\x18\x02 \x01(\tR\n" +
+	"socketPath\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\x12\x14\n" +
+	"\x05owner\x18\x04 \x01(\tR\x05owner\x12%\n" +
+	"\x0etimestamp_unix\x18\x05 \x01(\x03R\rtimestampUnix\"c\n" +
 	"\x18GetPluginManifestRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05owner\x18\x02 \x01(\tR\x05owner\x12\x1d\n" +
@@ -5786,14 +5904,18 @@ const file_pkg_internalipc_proto_internal_proto_rawDesc = "" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x16\n" +
 	"\x06plugin\x18\x03 \x01(\tR\x06plugin\x12\x18\n" +
 	"\amessage\x18\x04 \x01(\tR\amessage\"\x15\n" +
-	"\x13WatchPluginsRequest\"\x95\x01\n" +
+	"\x13WatchPluginsRequest\"\xe2\x01\n" +
 	"\vPluginEvent\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x1f\n" +
 	"\vinstance_id\x18\x02 \x01(\tR\n" +
 	"instanceId\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x16\n" +
 	"\x06online\x18\x04 \x01(\bR\x06online\x12%\n" +
-	"\x0etimestamp_unix\x18\x05 \x01(\x03R\rtimestampUnix\"\x18\n" +
+	"\x0etimestamp_unix\x18\x05 \x01(\x03R\rtimestampUnix\x12\x1f\n" +
+	"\vsocket_path\x18\x06 \x01(\tR\n" +
+	"socketPath\x12\x14\n" +
+	"\x05error\x18\a \x01(\tR\x05error\x12\x14\n" +
+	"\x05owner\x18\b \x01(\tR\x05owner\"\x18\n" +
 	"\x16GetRegistryAddrRequest\">\n" +
 	"\x17GetRegistryAddrResponse\x12#\n" +
 	"\rregistry_addr\x18\x01 \x01(\tR\fregistryAddr\"\xcd\x02\n" +
@@ -6089,7 +6211,7 @@ func file_pkg_internalipc_proto_internal_proto_rawDescGZIP() []byte {
 	return file_pkg_internalipc_proto_internal_proto_rawDescData
 }
 
-var file_pkg_internalipc_proto_internal_proto_msgTypes = make([]protoimpl.MessageInfo, 79)
+var file_pkg_internalipc_proto_internal_proto_msgTypes = make([]protoimpl.MessageInfo, 80)
 var file_pkg_internalipc_proto_internal_proto_goTypes = []any{
 	(*DecodeRawPacketsRequest)(nil),     // 0: gametrace.internalipc.DecodeRawPacketsRequest
 	(*DecodeRawPacketsResponse)(nil),    // 1: gametrace.internalipc.DecodeRawPacketsResponse
@@ -6121,145 +6243,147 @@ var file_pkg_internalipc_proto_internal_proto_goTypes = []any{
 	(*ListPluginsRequest)(nil),          // 27: gametrace.internalipc.ListPluginsRequest
 	(*PluginSummary)(nil),               // 28: gametrace.internalipc.PluginSummary
 	(*ListPluginsResponse)(nil),         // 29: gametrace.internalipc.ListPluginsResponse
-	(*GetPluginManifestRequest)(nil),    // 30: gametrace.internalipc.GetPluginManifestRequest
-	(*GetPluginManifestResponse)(nil),   // 31: gametrace.internalipc.GetPluginManifestResponse
-	(*DeregisterPluginRequest)(nil),     // 32: gametrace.internalipc.DeregisterPluginRequest
-	(*DeregisterPluginResponse)(nil),    // 33: gametrace.internalipc.DeregisterPluginResponse
-	(*SetSessionPluginRequest)(nil),     // 34: gametrace.internalipc.SetSessionPluginRequest
-	(*SetSessionPluginResponse)(nil),    // 35: gametrace.internalipc.SetSessionPluginResponse
-	(*WatchPluginsRequest)(nil),         // 36: gametrace.internalipc.WatchPluginsRequest
-	(*PluginEvent)(nil),                 // 37: gametrace.internalipc.PluginEvent
-	(*GetRegistryAddrRequest)(nil),      // 38: gametrace.internalipc.GetRegistryAddrRequest
-	(*GetRegistryAddrResponse)(nil),     // 39: gametrace.internalipc.GetRegistryAddrResponse
-	(*CreateProxyLeaseRequest)(nil),     // 40: gametrace.internalipc.CreateProxyLeaseRequest
-	(*ProxyLeaseState)(nil),             // 41: gametrace.internalipc.ProxyLeaseState
-	(*CreateProxyLeaseResponse)(nil),    // 42: gametrace.internalipc.CreateProxyLeaseResponse
-	(*ListProxyLeasesRequest)(nil),      // 43: gametrace.internalipc.ListProxyLeasesRequest
-	(*ListProxyLeasesResponse)(nil),     // 44: gametrace.internalipc.ListProxyLeasesResponse
-	(*GetProxyLeaseRequest)(nil),        // 45: gametrace.internalipc.GetProxyLeaseRequest
-	(*GetProxyLeaseResponse)(nil),       // 46: gametrace.internalipc.GetProxyLeaseResponse
-	(*ReleaseProxyLeaseRequest)(nil),    // 47: gametrace.internalipc.ReleaseProxyLeaseRequest
-	(*ReleaseProxyLeaseResponse)(nil),   // 48: gametrace.internalipc.ReleaseProxyLeaseResponse
-	(*StartLeaseCaptureRequest)(nil),    // 49: gametrace.internalipc.StartLeaseCaptureRequest
-	(*StartLeaseCaptureResponse)(nil),   // 50: gametrace.internalipc.StartLeaseCaptureResponse
-	(*StopLeaseCaptureRequest)(nil),     // 51: gametrace.internalipc.StopLeaseCaptureRequest
-	(*StopLeaseCaptureResponse)(nil),    // 52: gametrace.internalipc.StopLeaseCaptureResponse
-	(*ProbeInfo)(nil),                   // 53: gametrace.internalipc.ProbeInfo
-	(*ProbeNicInfo)(nil),                // 54: gametrace.internalipc.ProbeNicInfo
-	(*ListProbesRequest)(nil),           // 55: gametrace.internalipc.ListProbesRequest
-	(*ListProbesResponse)(nil),          // 56: gametrace.internalipc.ListProbesResponse
-	(*GetProbeRequest)(nil),             // 57: gametrace.internalipc.GetProbeRequest
-	(*GetProbeResponse)(nil),            // 58: gametrace.internalipc.GetProbeResponse
-	(*ProbeStartCaptureRequest)(nil),    // 59: gametrace.internalipc.ProbeStartCaptureRequest
-	(*ProbeStartCaptureResponse)(nil),   // 60: gametrace.internalipc.ProbeStartCaptureResponse
-	(*ProbeStopCaptureRequest)(nil),     // 61: gametrace.internalipc.ProbeStopCaptureRequest
-	(*ProbeStopCaptureResponse)(nil),    // 62: gametrace.internalipc.ProbeStopCaptureResponse
-	(*ProbeUpdateFilterRequest)(nil),    // 63: gametrace.internalipc.ProbeUpdateFilterRequest
-	(*ProbeUpdateFilterResponse)(nil),   // 64: gametrace.internalipc.ProbeUpdateFilterResponse
-	(*ProbeRetryCaptureRequest)(nil),    // 65: gametrace.internalipc.ProbeRetryCaptureRequest
-	(*ProbeRetryCaptureResponse)(nil),   // 66: gametrace.internalipc.ProbeRetryCaptureResponse
-	(*ProbeRenameRequest)(nil),          // 67: gametrace.internalipc.ProbeRenameRequest
-	(*ProbeRenameResponse)(nil),         // 68: gametrace.internalipc.ProbeRenameResponse
-	(*ProbeRevokeRequest)(nil),          // 69: gametrace.internalipc.ProbeRevokeRequest
-	(*ProbeRevokeResponse)(nil),         // 70: gametrace.internalipc.ProbeRevokeResponse
-	(*ProbeArchiveSegmentMeta)(nil),     // 71: gametrace.internalipc.ProbeArchiveSegmentMeta
-	(*ProbeListArchiveRequest)(nil),     // 72: gametrace.internalipc.ProbeListArchiveRequest
-	(*ProbeListArchiveResponse)(nil),    // 73: gametrace.internalipc.ProbeListArchiveResponse
-	(*ProbeImportArchiveRequest)(nil),   // 74: gametrace.internalipc.ProbeImportArchiveRequest
-	(*ProbeImportArchiveResponse)(nil),  // 75: gametrace.internalipc.ProbeImportArchiveResponse
-	nil,                                 // 76: gametrace.internalipc.TestPluginResponse.TypeHistogramEntry
-	nil,                                 // 77: gametrace.internalipc.SampleBytesResponse.LengthHistogramEntry
-	nil,                                 // 78: gametrace.internalipc.SampleBytesResponse.FirstByteDistributionEntry
+	(*PluginFailure)(nil),               // 30: gametrace.internalipc.PluginFailure
+	(*GetPluginManifestRequest)(nil),    // 31: gametrace.internalipc.GetPluginManifestRequest
+	(*GetPluginManifestResponse)(nil),   // 32: gametrace.internalipc.GetPluginManifestResponse
+	(*DeregisterPluginRequest)(nil),     // 33: gametrace.internalipc.DeregisterPluginRequest
+	(*DeregisterPluginResponse)(nil),    // 34: gametrace.internalipc.DeregisterPluginResponse
+	(*SetSessionPluginRequest)(nil),     // 35: gametrace.internalipc.SetSessionPluginRequest
+	(*SetSessionPluginResponse)(nil),    // 36: gametrace.internalipc.SetSessionPluginResponse
+	(*WatchPluginsRequest)(nil),         // 37: gametrace.internalipc.WatchPluginsRequest
+	(*PluginEvent)(nil),                 // 38: gametrace.internalipc.PluginEvent
+	(*GetRegistryAddrRequest)(nil),      // 39: gametrace.internalipc.GetRegistryAddrRequest
+	(*GetRegistryAddrResponse)(nil),     // 40: gametrace.internalipc.GetRegistryAddrResponse
+	(*CreateProxyLeaseRequest)(nil),     // 41: gametrace.internalipc.CreateProxyLeaseRequest
+	(*ProxyLeaseState)(nil),             // 42: gametrace.internalipc.ProxyLeaseState
+	(*CreateProxyLeaseResponse)(nil),    // 43: gametrace.internalipc.CreateProxyLeaseResponse
+	(*ListProxyLeasesRequest)(nil),      // 44: gametrace.internalipc.ListProxyLeasesRequest
+	(*ListProxyLeasesResponse)(nil),     // 45: gametrace.internalipc.ListProxyLeasesResponse
+	(*GetProxyLeaseRequest)(nil),        // 46: gametrace.internalipc.GetProxyLeaseRequest
+	(*GetProxyLeaseResponse)(nil),       // 47: gametrace.internalipc.GetProxyLeaseResponse
+	(*ReleaseProxyLeaseRequest)(nil),    // 48: gametrace.internalipc.ReleaseProxyLeaseRequest
+	(*ReleaseProxyLeaseResponse)(nil),   // 49: gametrace.internalipc.ReleaseProxyLeaseResponse
+	(*StartLeaseCaptureRequest)(nil),    // 50: gametrace.internalipc.StartLeaseCaptureRequest
+	(*StartLeaseCaptureResponse)(nil),   // 51: gametrace.internalipc.StartLeaseCaptureResponse
+	(*StopLeaseCaptureRequest)(nil),     // 52: gametrace.internalipc.StopLeaseCaptureRequest
+	(*StopLeaseCaptureResponse)(nil),    // 53: gametrace.internalipc.StopLeaseCaptureResponse
+	(*ProbeInfo)(nil),                   // 54: gametrace.internalipc.ProbeInfo
+	(*ProbeNicInfo)(nil),                // 55: gametrace.internalipc.ProbeNicInfo
+	(*ListProbesRequest)(nil),           // 56: gametrace.internalipc.ListProbesRequest
+	(*ListProbesResponse)(nil),          // 57: gametrace.internalipc.ListProbesResponse
+	(*GetProbeRequest)(nil),             // 58: gametrace.internalipc.GetProbeRequest
+	(*GetProbeResponse)(nil),            // 59: gametrace.internalipc.GetProbeResponse
+	(*ProbeStartCaptureRequest)(nil),    // 60: gametrace.internalipc.ProbeStartCaptureRequest
+	(*ProbeStartCaptureResponse)(nil),   // 61: gametrace.internalipc.ProbeStartCaptureResponse
+	(*ProbeStopCaptureRequest)(nil),     // 62: gametrace.internalipc.ProbeStopCaptureRequest
+	(*ProbeStopCaptureResponse)(nil),    // 63: gametrace.internalipc.ProbeStopCaptureResponse
+	(*ProbeUpdateFilterRequest)(nil),    // 64: gametrace.internalipc.ProbeUpdateFilterRequest
+	(*ProbeUpdateFilterResponse)(nil),   // 65: gametrace.internalipc.ProbeUpdateFilterResponse
+	(*ProbeRetryCaptureRequest)(nil),    // 66: gametrace.internalipc.ProbeRetryCaptureRequest
+	(*ProbeRetryCaptureResponse)(nil),   // 67: gametrace.internalipc.ProbeRetryCaptureResponse
+	(*ProbeRenameRequest)(nil),          // 68: gametrace.internalipc.ProbeRenameRequest
+	(*ProbeRenameResponse)(nil),         // 69: gametrace.internalipc.ProbeRenameResponse
+	(*ProbeRevokeRequest)(nil),          // 70: gametrace.internalipc.ProbeRevokeRequest
+	(*ProbeRevokeResponse)(nil),         // 71: gametrace.internalipc.ProbeRevokeResponse
+	(*ProbeArchiveSegmentMeta)(nil),     // 72: gametrace.internalipc.ProbeArchiveSegmentMeta
+	(*ProbeListArchiveRequest)(nil),     // 73: gametrace.internalipc.ProbeListArchiveRequest
+	(*ProbeListArchiveResponse)(nil),    // 74: gametrace.internalipc.ProbeListArchiveResponse
+	(*ProbeImportArchiveRequest)(nil),   // 75: gametrace.internalipc.ProbeImportArchiveRequest
+	(*ProbeImportArchiveResponse)(nil),  // 76: gametrace.internalipc.ProbeImportArchiveResponse
+	nil,                                 // 77: gametrace.internalipc.TestPluginResponse.TypeHistogramEntry
+	nil,                                 // 78: gametrace.internalipc.SampleBytesResponse.LengthHistogramEntry
+	nil,                                 // 79: gametrace.internalipc.SampleBytesResponse.FirstByteDistributionEntry
 }
 var file_pkg_internalipc_proto_internal_proto_depIdxs = []int32{
-	76, // 0: gametrace.internalipc.TestPluginResponse.type_histogram:type_name -> gametrace.internalipc.TestPluginResponse.TypeHistogramEntry
+	77, // 0: gametrace.internalipc.TestPluginResponse.type_histogram:type_name -> gametrace.internalipc.TestPluginResponse.TypeHistogramEntry
 	3,  // 1: gametrace.internalipc.TestPluginResponse.sample_events:type_name -> gametrace.internalipc.TestEventLite
 	4,  // 2: gametrace.internalipc.TestPluginResponse.error_samples:type_name -> gametrace.internalipc.TestErrorLite
 	7,  // 3: gametrace.internalipc.VerifyResponse.violations:type_name -> gametrace.internalipc.VerifyViolation
 	8,  // 4: gametrace.internalipc.VerifyResponse.quality:type_name -> gametrace.internalipc.VerifyQuality
 	11, // 5: gametrace.internalipc.SampleBytesResponse.packets:type_name -> gametrace.internalipc.SampledPacket
-	77, // 6: gametrace.internalipc.SampleBytesResponse.length_histogram:type_name -> gametrace.internalipc.SampleBytesResponse.LengthHistogramEntry
-	78, // 7: gametrace.internalipc.SampleBytesResponse.first_byte_distribution:type_name -> gametrace.internalipc.SampleBytesResponse.FirstByteDistributionEntry
+	78, // 6: gametrace.internalipc.SampleBytesResponse.length_histogram:type_name -> gametrace.internalipc.SampleBytesResponse.LengthHistogramEntry
+	79, // 7: gametrace.internalipc.SampleBytesResponse.first_byte_distribution:type_name -> gametrace.internalipc.SampleBytesResponse.FirstByteDistributionEntry
 	13, // 8: gametrace.internalipc.StartCaptureRequest.live:type_name -> gametrace.internalipc.PcapLiveConfig
 	14, // 9: gametrace.internalipc.StartCaptureRequest.file:type_name -> gametrace.internalipc.PcapFileConfig
 	15, // 10: gametrace.internalipc.StartCaptureRequest.mobile:type_name -> gametrace.internalipc.MobileSourceConfig
 	26, // 11: gametrace.internalipc.ListCaptureSessionsResponse.sessions:type_name -> gametrace.internalipc.CaptureSessionSummary
 	28, // 12: gametrace.internalipc.ListPluginsResponse.plugins:type_name -> gametrace.internalipc.PluginSummary
-	41, // 13: gametrace.internalipc.CreateProxyLeaseResponse.lease:type_name -> gametrace.internalipc.ProxyLeaseState
-	41, // 14: gametrace.internalipc.ListProxyLeasesResponse.leases:type_name -> gametrace.internalipc.ProxyLeaseState
-	41, // 15: gametrace.internalipc.GetProxyLeaseResponse.lease:type_name -> gametrace.internalipc.ProxyLeaseState
-	41, // 16: gametrace.internalipc.StartLeaseCaptureResponse.lease:type_name -> gametrace.internalipc.ProxyLeaseState
-	54, // 17: gametrace.internalipc.ProbeInfo.interfaces:type_name -> gametrace.internalipc.ProbeNicInfo
-	53, // 18: gametrace.internalipc.ListProbesResponse.probes:type_name -> gametrace.internalipc.ProbeInfo
-	53, // 19: gametrace.internalipc.GetProbeResponse.probe:type_name -> gametrace.internalipc.ProbeInfo
-	71, // 20: gametrace.internalipc.ProbeListArchiveResponse.segments:type_name -> gametrace.internalipc.ProbeArchiveSegmentMeta
-	16, // 21: gametrace.internalipc.CaptureControl.StartCapture:input_type -> gametrace.internalipc.StartCaptureRequest
-	18, // 22: gametrace.internalipc.CaptureControl.StopCapture:input_type -> gametrace.internalipc.StopCaptureRequest
-	20, // 23: gametrace.internalipc.CaptureControl.GetCaptureStatus:input_type -> gametrace.internalipc.GetCaptureStatusRequest
-	24, // 24: gametrace.internalipc.CaptureControl.ListCaptureSessions:input_type -> gametrace.internalipc.ListCaptureSessionsRequest
-	22, // 25: gametrace.internalipc.CaptureControl.ListInterfaces:input_type -> gametrace.internalipc.ListInterfacesRequest
-	0,  // 26: gametrace.internalipc.CaptureControl.DecodeRawPackets:input_type -> gametrace.internalipc.DecodeRawPacketsRequest
-	27, // 27: gametrace.internalipc.CaptureControl.ListPlugins:input_type -> gametrace.internalipc.ListPluginsRequest
-	30, // 28: gametrace.internalipc.CaptureControl.GetPluginManifest:input_type -> gametrace.internalipc.GetPluginManifestRequest
-	32, // 29: gametrace.internalipc.CaptureControl.DeregisterPlugin:input_type -> gametrace.internalipc.DeregisterPluginRequest
-	34, // 30: gametrace.internalipc.CaptureControl.SetSessionPlugin:input_type -> gametrace.internalipc.SetSessionPluginRequest
-	36, // 31: gametrace.internalipc.CaptureControl.WatchPlugins:input_type -> gametrace.internalipc.WatchPluginsRequest
-	2,  // 32: gametrace.internalipc.CaptureControl.TestPlugin:input_type -> gametrace.internalipc.TestPluginRequest
-	6,  // 33: gametrace.internalipc.CaptureControl.Verify:input_type -> gametrace.internalipc.VerifyRequest
-	10, // 34: gametrace.internalipc.CaptureControl.SampleBytes:input_type -> gametrace.internalipc.SampleBytesRequest
-	38, // 35: gametrace.internalipc.CaptureControl.GetRegistryAddr:input_type -> gametrace.internalipc.GetRegistryAddrRequest
-	40, // 36: gametrace.internalipc.CaptureControl.CreateProxyLease:input_type -> gametrace.internalipc.CreateProxyLeaseRequest
-	43, // 37: gametrace.internalipc.CaptureControl.ListProxyLeases:input_type -> gametrace.internalipc.ListProxyLeasesRequest
-	45, // 38: gametrace.internalipc.CaptureControl.GetProxyLease:input_type -> gametrace.internalipc.GetProxyLeaseRequest
-	47, // 39: gametrace.internalipc.CaptureControl.ReleaseProxyLease:input_type -> gametrace.internalipc.ReleaseProxyLeaseRequest
-	55, // 40: gametrace.internalipc.CaptureControl.ListProbes:input_type -> gametrace.internalipc.ListProbesRequest
-	57, // 41: gametrace.internalipc.CaptureControl.GetProbe:input_type -> gametrace.internalipc.GetProbeRequest
-	59, // 42: gametrace.internalipc.CaptureControl.ProbeStartCapture:input_type -> gametrace.internalipc.ProbeStartCaptureRequest
-	61, // 43: gametrace.internalipc.CaptureControl.ProbeStopCapture:input_type -> gametrace.internalipc.ProbeStopCaptureRequest
-	63, // 44: gametrace.internalipc.CaptureControl.ProbeUpdateFilter:input_type -> gametrace.internalipc.ProbeUpdateFilterRequest
-	65, // 45: gametrace.internalipc.CaptureControl.ProbeRetryCapture:input_type -> gametrace.internalipc.ProbeRetryCaptureRequest
-	67, // 46: gametrace.internalipc.CaptureControl.ProbeRename:input_type -> gametrace.internalipc.ProbeRenameRequest
-	69, // 47: gametrace.internalipc.CaptureControl.ProbeRevoke:input_type -> gametrace.internalipc.ProbeRevokeRequest
-	72, // 48: gametrace.internalipc.CaptureControl.ProbeListArchive:input_type -> gametrace.internalipc.ProbeListArchiveRequest
-	74, // 49: gametrace.internalipc.CaptureControl.ProbeImportArchive:input_type -> gametrace.internalipc.ProbeImportArchiveRequest
-	49, // 50: gametrace.internalipc.CaptureControl.StartLeaseCapture:input_type -> gametrace.internalipc.StartLeaseCaptureRequest
-	51, // 51: gametrace.internalipc.CaptureControl.StopLeaseCapture:input_type -> gametrace.internalipc.StopLeaseCaptureRequest
-	17, // 52: gametrace.internalipc.CaptureControl.StartCapture:output_type -> gametrace.internalipc.StartCaptureResponse
-	19, // 53: gametrace.internalipc.CaptureControl.StopCapture:output_type -> gametrace.internalipc.StopCaptureResponse
-	21, // 54: gametrace.internalipc.CaptureControl.GetCaptureStatus:output_type -> gametrace.internalipc.GetCaptureStatusResponse
-	25, // 55: gametrace.internalipc.CaptureControl.ListCaptureSessions:output_type -> gametrace.internalipc.ListCaptureSessionsResponse
-	23, // 56: gametrace.internalipc.CaptureControl.ListInterfaces:output_type -> gametrace.internalipc.ListInterfacesResponse
-	1,  // 57: gametrace.internalipc.CaptureControl.DecodeRawPackets:output_type -> gametrace.internalipc.DecodeRawPacketsResponse
-	29, // 58: gametrace.internalipc.CaptureControl.ListPlugins:output_type -> gametrace.internalipc.ListPluginsResponse
-	31, // 59: gametrace.internalipc.CaptureControl.GetPluginManifest:output_type -> gametrace.internalipc.GetPluginManifestResponse
-	33, // 60: gametrace.internalipc.CaptureControl.DeregisterPlugin:output_type -> gametrace.internalipc.DeregisterPluginResponse
-	35, // 61: gametrace.internalipc.CaptureControl.SetSessionPlugin:output_type -> gametrace.internalipc.SetSessionPluginResponse
-	37, // 62: gametrace.internalipc.CaptureControl.WatchPlugins:output_type -> gametrace.internalipc.PluginEvent
-	5,  // 63: gametrace.internalipc.CaptureControl.TestPlugin:output_type -> gametrace.internalipc.TestPluginResponse
-	9,  // 64: gametrace.internalipc.CaptureControl.Verify:output_type -> gametrace.internalipc.VerifyResponse
-	12, // 65: gametrace.internalipc.CaptureControl.SampleBytes:output_type -> gametrace.internalipc.SampleBytesResponse
-	39, // 66: gametrace.internalipc.CaptureControl.GetRegistryAddr:output_type -> gametrace.internalipc.GetRegistryAddrResponse
-	42, // 67: gametrace.internalipc.CaptureControl.CreateProxyLease:output_type -> gametrace.internalipc.CreateProxyLeaseResponse
-	44, // 68: gametrace.internalipc.CaptureControl.ListProxyLeases:output_type -> gametrace.internalipc.ListProxyLeasesResponse
-	46, // 69: gametrace.internalipc.CaptureControl.GetProxyLease:output_type -> gametrace.internalipc.GetProxyLeaseResponse
-	48, // 70: gametrace.internalipc.CaptureControl.ReleaseProxyLease:output_type -> gametrace.internalipc.ReleaseProxyLeaseResponse
-	56, // 71: gametrace.internalipc.CaptureControl.ListProbes:output_type -> gametrace.internalipc.ListProbesResponse
-	58, // 72: gametrace.internalipc.CaptureControl.GetProbe:output_type -> gametrace.internalipc.GetProbeResponse
-	60, // 73: gametrace.internalipc.CaptureControl.ProbeStartCapture:output_type -> gametrace.internalipc.ProbeStartCaptureResponse
-	62, // 74: gametrace.internalipc.CaptureControl.ProbeStopCapture:output_type -> gametrace.internalipc.ProbeStopCaptureResponse
-	64, // 75: gametrace.internalipc.CaptureControl.ProbeUpdateFilter:output_type -> gametrace.internalipc.ProbeUpdateFilterResponse
-	66, // 76: gametrace.internalipc.CaptureControl.ProbeRetryCapture:output_type -> gametrace.internalipc.ProbeRetryCaptureResponse
-	68, // 77: gametrace.internalipc.CaptureControl.ProbeRename:output_type -> gametrace.internalipc.ProbeRenameResponse
-	70, // 78: gametrace.internalipc.CaptureControl.ProbeRevoke:output_type -> gametrace.internalipc.ProbeRevokeResponse
-	73, // 79: gametrace.internalipc.CaptureControl.ProbeListArchive:output_type -> gametrace.internalipc.ProbeListArchiveResponse
-	75, // 80: gametrace.internalipc.CaptureControl.ProbeImportArchive:output_type -> gametrace.internalipc.ProbeImportArchiveResponse
-	50, // 81: gametrace.internalipc.CaptureControl.StartLeaseCapture:output_type -> gametrace.internalipc.StartLeaseCaptureResponse
-	52, // 82: gametrace.internalipc.CaptureControl.StopLeaseCapture:output_type -> gametrace.internalipc.StopLeaseCaptureResponse
-	52, // [52:83] is the sub-list for method output_type
-	21, // [21:52] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	30, // 13: gametrace.internalipc.ListPluginsResponse.recent_failures:type_name -> gametrace.internalipc.PluginFailure
+	42, // 14: gametrace.internalipc.CreateProxyLeaseResponse.lease:type_name -> gametrace.internalipc.ProxyLeaseState
+	42, // 15: gametrace.internalipc.ListProxyLeasesResponse.leases:type_name -> gametrace.internalipc.ProxyLeaseState
+	42, // 16: gametrace.internalipc.GetProxyLeaseResponse.lease:type_name -> gametrace.internalipc.ProxyLeaseState
+	42, // 17: gametrace.internalipc.StartLeaseCaptureResponse.lease:type_name -> gametrace.internalipc.ProxyLeaseState
+	55, // 18: gametrace.internalipc.ProbeInfo.interfaces:type_name -> gametrace.internalipc.ProbeNicInfo
+	54, // 19: gametrace.internalipc.ListProbesResponse.probes:type_name -> gametrace.internalipc.ProbeInfo
+	54, // 20: gametrace.internalipc.GetProbeResponse.probe:type_name -> gametrace.internalipc.ProbeInfo
+	72, // 21: gametrace.internalipc.ProbeListArchiveResponse.segments:type_name -> gametrace.internalipc.ProbeArchiveSegmentMeta
+	16, // 22: gametrace.internalipc.CaptureControl.StartCapture:input_type -> gametrace.internalipc.StartCaptureRequest
+	18, // 23: gametrace.internalipc.CaptureControl.StopCapture:input_type -> gametrace.internalipc.StopCaptureRequest
+	20, // 24: gametrace.internalipc.CaptureControl.GetCaptureStatus:input_type -> gametrace.internalipc.GetCaptureStatusRequest
+	24, // 25: gametrace.internalipc.CaptureControl.ListCaptureSessions:input_type -> gametrace.internalipc.ListCaptureSessionsRequest
+	22, // 26: gametrace.internalipc.CaptureControl.ListInterfaces:input_type -> gametrace.internalipc.ListInterfacesRequest
+	0,  // 27: gametrace.internalipc.CaptureControl.DecodeRawPackets:input_type -> gametrace.internalipc.DecodeRawPacketsRequest
+	27, // 28: gametrace.internalipc.CaptureControl.ListPlugins:input_type -> gametrace.internalipc.ListPluginsRequest
+	31, // 29: gametrace.internalipc.CaptureControl.GetPluginManifest:input_type -> gametrace.internalipc.GetPluginManifestRequest
+	33, // 30: gametrace.internalipc.CaptureControl.DeregisterPlugin:input_type -> gametrace.internalipc.DeregisterPluginRequest
+	35, // 31: gametrace.internalipc.CaptureControl.SetSessionPlugin:input_type -> gametrace.internalipc.SetSessionPluginRequest
+	37, // 32: gametrace.internalipc.CaptureControl.WatchPlugins:input_type -> gametrace.internalipc.WatchPluginsRequest
+	2,  // 33: gametrace.internalipc.CaptureControl.TestPlugin:input_type -> gametrace.internalipc.TestPluginRequest
+	6,  // 34: gametrace.internalipc.CaptureControl.Verify:input_type -> gametrace.internalipc.VerifyRequest
+	10, // 35: gametrace.internalipc.CaptureControl.SampleBytes:input_type -> gametrace.internalipc.SampleBytesRequest
+	39, // 36: gametrace.internalipc.CaptureControl.GetRegistryAddr:input_type -> gametrace.internalipc.GetRegistryAddrRequest
+	41, // 37: gametrace.internalipc.CaptureControl.CreateProxyLease:input_type -> gametrace.internalipc.CreateProxyLeaseRequest
+	44, // 38: gametrace.internalipc.CaptureControl.ListProxyLeases:input_type -> gametrace.internalipc.ListProxyLeasesRequest
+	46, // 39: gametrace.internalipc.CaptureControl.GetProxyLease:input_type -> gametrace.internalipc.GetProxyLeaseRequest
+	48, // 40: gametrace.internalipc.CaptureControl.ReleaseProxyLease:input_type -> gametrace.internalipc.ReleaseProxyLeaseRequest
+	56, // 41: gametrace.internalipc.CaptureControl.ListProbes:input_type -> gametrace.internalipc.ListProbesRequest
+	58, // 42: gametrace.internalipc.CaptureControl.GetProbe:input_type -> gametrace.internalipc.GetProbeRequest
+	60, // 43: gametrace.internalipc.CaptureControl.ProbeStartCapture:input_type -> gametrace.internalipc.ProbeStartCaptureRequest
+	62, // 44: gametrace.internalipc.CaptureControl.ProbeStopCapture:input_type -> gametrace.internalipc.ProbeStopCaptureRequest
+	64, // 45: gametrace.internalipc.CaptureControl.ProbeUpdateFilter:input_type -> gametrace.internalipc.ProbeUpdateFilterRequest
+	66, // 46: gametrace.internalipc.CaptureControl.ProbeRetryCapture:input_type -> gametrace.internalipc.ProbeRetryCaptureRequest
+	68, // 47: gametrace.internalipc.CaptureControl.ProbeRename:input_type -> gametrace.internalipc.ProbeRenameRequest
+	70, // 48: gametrace.internalipc.CaptureControl.ProbeRevoke:input_type -> gametrace.internalipc.ProbeRevokeRequest
+	73, // 49: gametrace.internalipc.CaptureControl.ProbeListArchive:input_type -> gametrace.internalipc.ProbeListArchiveRequest
+	75, // 50: gametrace.internalipc.CaptureControl.ProbeImportArchive:input_type -> gametrace.internalipc.ProbeImportArchiveRequest
+	50, // 51: gametrace.internalipc.CaptureControl.StartLeaseCapture:input_type -> gametrace.internalipc.StartLeaseCaptureRequest
+	52, // 52: gametrace.internalipc.CaptureControl.StopLeaseCapture:input_type -> gametrace.internalipc.StopLeaseCaptureRequest
+	17, // 53: gametrace.internalipc.CaptureControl.StartCapture:output_type -> gametrace.internalipc.StartCaptureResponse
+	19, // 54: gametrace.internalipc.CaptureControl.StopCapture:output_type -> gametrace.internalipc.StopCaptureResponse
+	21, // 55: gametrace.internalipc.CaptureControl.GetCaptureStatus:output_type -> gametrace.internalipc.GetCaptureStatusResponse
+	25, // 56: gametrace.internalipc.CaptureControl.ListCaptureSessions:output_type -> gametrace.internalipc.ListCaptureSessionsResponse
+	23, // 57: gametrace.internalipc.CaptureControl.ListInterfaces:output_type -> gametrace.internalipc.ListInterfacesResponse
+	1,  // 58: gametrace.internalipc.CaptureControl.DecodeRawPackets:output_type -> gametrace.internalipc.DecodeRawPacketsResponse
+	29, // 59: gametrace.internalipc.CaptureControl.ListPlugins:output_type -> gametrace.internalipc.ListPluginsResponse
+	32, // 60: gametrace.internalipc.CaptureControl.GetPluginManifest:output_type -> gametrace.internalipc.GetPluginManifestResponse
+	34, // 61: gametrace.internalipc.CaptureControl.DeregisterPlugin:output_type -> gametrace.internalipc.DeregisterPluginResponse
+	36, // 62: gametrace.internalipc.CaptureControl.SetSessionPlugin:output_type -> gametrace.internalipc.SetSessionPluginResponse
+	38, // 63: gametrace.internalipc.CaptureControl.WatchPlugins:output_type -> gametrace.internalipc.PluginEvent
+	5,  // 64: gametrace.internalipc.CaptureControl.TestPlugin:output_type -> gametrace.internalipc.TestPluginResponse
+	9,  // 65: gametrace.internalipc.CaptureControl.Verify:output_type -> gametrace.internalipc.VerifyResponse
+	12, // 66: gametrace.internalipc.CaptureControl.SampleBytes:output_type -> gametrace.internalipc.SampleBytesResponse
+	40, // 67: gametrace.internalipc.CaptureControl.GetRegistryAddr:output_type -> gametrace.internalipc.GetRegistryAddrResponse
+	43, // 68: gametrace.internalipc.CaptureControl.CreateProxyLease:output_type -> gametrace.internalipc.CreateProxyLeaseResponse
+	45, // 69: gametrace.internalipc.CaptureControl.ListProxyLeases:output_type -> gametrace.internalipc.ListProxyLeasesResponse
+	47, // 70: gametrace.internalipc.CaptureControl.GetProxyLease:output_type -> gametrace.internalipc.GetProxyLeaseResponse
+	49, // 71: gametrace.internalipc.CaptureControl.ReleaseProxyLease:output_type -> gametrace.internalipc.ReleaseProxyLeaseResponse
+	57, // 72: gametrace.internalipc.CaptureControl.ListProbes:output_type -> gametrace.internalipc.ListProbesResponse
+	59, // 73: gametrace.internalipc.CaptureControl.GetProbe:output_type -> gametrace.internalipc.GetProbeResponse
+	61, // 74: gametrace.internalipc.CaptureControl.ProbeStartCapture:output_type -> gametrace.internalipc.ProbeStartCaptureResponse
+	63, // 75: gametrace.internalipc.CaptureControl.ProbeStopCapture:output_type -> gametrace.internalipc.ProbeStopCaptureResponse
+	65, // 76: gametrace.internalipc.CaptureControl.ProbeUpdateFilter:output_type -> gametrace.internalipc.ProbeUpdateFilterResponse
+	67, // 77: gametrace.internalipc.CaptureControl.ProbeRetryCapture:output_type -> gametrace.internalipc.ProbeRetryCaptureResponse
+	69, // 78: gametrace.internalipc.CaptureControl.ProbeRename:output_type -> gametrace.internalipc.ProbeRenameResponse
+	71, // 79: gametrace.internalipc.CaptureControl.ProbeRevoke:output_type -> gametrace.internalipc.ProbeRevokeResponse
+	74, // 80: gametrace.internalipc.CaptureControl.ProbeListArchive:output_type -> gametrace.internalipc.ProbeListArchiveResponse
+	76, // 81: gametrace.internalipc.CaptureControl.ProbeImportArchive:output_type -> gametrace.internalipc.ProbeImportArchiveResponse
+	51, // 82: gametrace.internalipc.CaptureControl.StartLeaseCapture:output_type -> gametrace.internalipc.StartLeaseCaptureResponse
+	53, // 83: gametrace.internalipc.CaptureControl.StopLeaseCapture:output_type -> gametrace.internalipc.StopLeaseCaptureResponse
+	53, // [53:84] is the sub-list for method output_type
+	22, // [22:53] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_pkg_internalipc_proto_internal_proto_init() }
@@ -6278,7 +6402,7 @@ func file_pkg_internalipc_proto_internal_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_internalipc_proto_internal_proto_rawDesc), len(file_pkg_internalipc_proto_internal_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   79,
+			NumMessages:   80,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

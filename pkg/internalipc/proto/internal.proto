@@ -359,6 +359,17 @@ message PluginSummary {
 
 message ListPluginsResponse {
   repeated PluginSummary plugins = 1;
+  // 最近注册失败记录（内存 ring buffer，15min TTL，owner 作用域同 plugins）。
+  repeated PluginFailure recent_failures = 2;
+}
+
+// PluginFailure 最近的解码器注册失败记录（dial 插件地址不通等）。
+message PluginFailure {
+  string name = 1;
+  string socket_path = 2;    // 注册时上报的地址
+  string error = 3;          // 拨号错误与诊断建议
+  string owner = 4;          // 注册方属主（空串 = 匿名/系统）
+  int64 timestamp_unix = 5;
 }
 
 message GetPluginManifestRequest {
@@ -406,13 +417,16 @@ message SetSessionPluginResponse {
 message WatchPluginsRequest {}
 
 // PluginEvent 插件注册表状态变化通知。
-// type 取值：register（新注册）| deregister（主动注销）| online（离线→在线）| offline（在线→离线）。
+// type 取值：register | deregister | online | offline | register_failed。
 message PluginEvent {
-  string type = 1;             // register | deregister | online | offline
+  string type = 1;             // register | deregister | online | offline | register_failed
   string instance_id = 2;      // 插件实例 ID
   string name = 3;             // 插件名（manifest.name）
   bool online = 4;             // 事件后是否在线
   int64 timestamp_unix = 5;    // 事件发生时间（Unix 秒）
+  string socket_path = 6;      // register_failed：注册时上报、拨号失败的插件地址
+  string error = 7;            // register_failed：拨号错误与诊断建议
+  string owner = 8;            // 事件归属（register_failed 订阅侧按 owner 过滤）
 }
 
 // GetRegistryAddrRequest 无参数。
