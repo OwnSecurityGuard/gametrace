@@ -81,12 +81,19 @@ type sessionMetadata struct {
 
 // pluginEventJSON 是插件事件 SSE 推送的 JSON 负载，与 proto PluginEvent 对应。
 type pluginEventJSON struct {
-	Type       string `json:"type"` // register | deregister | online | offline
+	Type       string `json:"type"` // register | deregister | online | offline | register_failed
 	InstanceID string `json:"instance_id"`
 	Name       string `json:"name"`
 	Online     bool   `json:"online"`
 	Timestamp  int64  `json:"timestamp_unix"`
+	SocketPath string `json:"socket_path,omitempty"` // register_failed：尝试拨号的地址
+	Error      string `json:"error,omitempty"`       // register_failed：拨号错误与诊断建议
+	Owner      string `json:"owner,omitempty"`       // register_failed：订阅侧过滤用
 }
+
+// pluginEventTypeRegisterFailed 是 register_failed 的 type 值
+// （对应 pkg/plugin.PluginEventRegisterFailed，此处用字面量避免跨包依赖）。
+const pluginEventTypeRegisterFailed = "register_failed"
 
 // captureReader 组合 EventReader + ProjectionReader，供 gt-mcp 查询事件和投影数据。
 // gt-mcp 只读，通过此接口访问 capture.sqlite，便于未来替换存储后端。
@@ -890,7 +897,20 @@ func (m *mcpCapture) handleListRegisteredPlugins(ctx context.Context, req mcp.Ca
 			"owner":          p.GetOwner(),
 		})
 	}
-	return successResult(map[string]any{"plugins": plugins}), nil
+	var failures []map[string]any
+	for _, f := range resp.GetRecentFailures() {
+		failures = append(failures, map[string]any{
+			"name":           f.GetName(),
+			"socket_path":    f.GetSocketPath(),
+			"error":          f.GetError(),
+			"owner":          f.GetOwner(),
+			"timestamp_unix": f.GetTimestampUnix(),
+		})
+	}
+	return successResult(map[string]any{
+		"plugins": plugins, "count": len(plugins),
+		"recent_register_failures": failures,
+	}), nil
 }
 
 func (m *mcpCapture) handleGetPluginManifest(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -2112,6 +2132,9 @@ func (m *mcpCapture) startPluginEventWatcher() {
 					Name:       ev.GetName(),
 					Online:     ev.GetOnline(),
 					Timestamp:  ev.GetTimestampUnix(),
+					SocketPath: ev.GetSocketPath(),
+					Error:      ev.GetError(),
+					Owner:      ev.GetOwner(),
 				})
 			}
 			time.Sleep(time.Second)
@@ -2139,6 +2162,9 @@ func (m *mcpCapture) handleEventsSSE(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
+	// 订阅者身份（auth.Middleware 注入；匿名模式下无 Principal）。
+	sub, hasSub := auth.PrincipalFrom(r.Context())
+
 	for {
 		select {
 		case <-r.Context().Done():
@@ -2147,6 +2173,11 @@ func (m *mcpCapture) handleEventsSSE(w http.ResponseWriter, r *http.Request) {
 			_, _ = fmt.Fprintf(w, ": keep-alive\n\n")
 			flusher.Flush()
 		case ev := <-ch:
+			// register_failed 按 owner 过滤（匿名事件与 admin 全见）；
+			// 其余事件保持既有全员广播行为不变。
+			if ev.Type == pluginEventTypeRegisterFailed && !visibleToSubscriber(ev, sub, hasSub) {
+				continue
+			}
 			data, err := json.Marshal(ev)
 			if err != nil {
 				continue
@@ -2155,6 +2186,23 @@ func (m *mcpCapture) handleEventsSSE(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// visibleToSubscriber 判断 register_failed 事件是否对当前 SSE 订阅者可见：
+// 事件无 owner（匿名/系统）→ 全员；订阅者 admin → 全部；否则仅同 owner；
+// 匿名订阅者（无 Principal）只见匿名事件。仅用于 register_failed，
+// 其余事件类型不过滤（保持既有广播行为）。
+func visibleToSubscriber(ev pluginEventJSON, sub *auth.Principal, hasSub bool) bool {
+	if ev.Owner == "" {
+		return true
+	}
+	if hasSub && sub != nil {
+		if sub.IsAdmin {
+			return true
+		}
+		return sub.Owner == ev.Owner
+	}
+	return false
 }
 
 // resolvePluginsDir resolves the plugins directory to an absolute path.

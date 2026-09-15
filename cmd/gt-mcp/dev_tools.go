@@ -372,14 +372,45 @@ func (m *mcpCapture) handleStatusPlugin(ctx context.Context, req mcp.CallToolReq
 	runtimeState, runtime := m.runtimeState(ctx, name, devProcess)
 	next := nextAction(artifact["state"].(string), runtimeState)
 
-	return successResult(map[string]any{
+	out := map[string]any{
 		"name":         name,
 		"artifact":     artifact,
 		"runtime":      runtime,
 		"dev_process":  devProcess,
 		"last_attempt": lastAttempt,
 		"next_action":  next,
-	}), nil
+	}
+	// 注册失败（Runtime Plane ring buffer）：命中同名失败时并入，
+	// 指导修 .env 的 GT_DECODER_PUBLIC_ADDR（error 里含来源 IP 建议）。
+	if f := m.latestRegisterFailure(ctx, name); f != nil {
+		out["register_failure"] = f
+		if runtimeState == "offline" {
+			out["next_action"] = "注册失败：平台拨不通插件 Decode 地址（见 register_failure.error，含来源 IP 建议值）；修正 .env 的 GT_DECODER_PUBLIC_ADDR 后重新 activate_plugin"
+		}
+	}
+	return successResult(out), nil
+}
+
+// latestRegisterFailure 查询 Runtime Plane 注册失败 ring buffer 中同名插件的最近记录。
+func (m *mcpCapture) latestRegisterFailure(ctx context.Context, name string) map[string]any {
+	if m.pipelineClient == nil {
+		return nil
+	}
+	resp, err := m.pipelineClient.ListPlugins(ctx, &pb.ListPluginsRequest{})
+	if err != nil {
+		return nil
+	}
+	for _, f := range resp.GetRecentFailures() {
+		if f.GetName() == name {
+			return map[string]any{
+				"socket_path":    f.GetSocketPath(),
+				"error":          f.GetError(),
+				"owner":          f.GetOwner(),
+				"timestamp_unix": f.GetTimestampUnix(),
+			}
+		}
+	}
+	return nil
 }
 
 // runtimeState queries the registry for the named plugin and derives a runtime

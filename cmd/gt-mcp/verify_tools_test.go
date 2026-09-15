@@ -24,6 +24,8 @@ type fakeCaptureClient struct {
 	dbDir          string
 	listPluginsReq *pb.ListPluginsRequest
 	manifestReq    *pb.GetPluginManifestRequest
+	// recentFailures 预设 ListPlugins 返回的注册失败记录。
+	recentFailures []*pb.PluginFailure
 	// liveSessions 预设 ListCaptureSessions 的返回值（nil = 无 live 会话）。
 	liveSessions *pb.ListCaptureSessionsResponse
 }

@@ -26,9 +26,12 @@ func (f *fakeCaptureClient) StartCapture(ctx context.Context, in *pb.StartCaptur
 
 func (f *fakeCaptureClient) ListPlugins(ctx context.Context, in *pb.ListPluginsRequest, _ ...grpc.CallOption) (*pb.ListPluginsResponse, error) {
 	f.listPluginsReq = in
-	return &pb.ListPluginsResponse{Plugins: []*pb.PluginSummary{
-		{Name: "http", Online: true, Owner: "alice"},
-	}}, nil
+	return &pb.ListPluginsResponse{
+		Plugins: []*pb.PluginSummary{
+			{Name: "http", Online: true, Owner: "alice"},
+		},
+		RecentFailures: f.recentFailures,
+	}, nil
 }
 
 func (f *fakeCaptureClient) GetPluginManifest(ctx context.Context, in *pb.GetPluginManifestRequest, _ ...grpc.CallOption) (*pb.GetPluginManifestResponse, error) {
