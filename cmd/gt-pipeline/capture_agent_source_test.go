@@ -101,9 +101,11 @@ schemas:
     fields:
       hp: { type: uint32 }
 `
+	sock, stop := startFakeDecoderMain(t)
+	defer stop()
 	if _, err := s.registry.Register(
 		auth.WithPrincipal(context.Background(), &auth.Principal{Owner: "alice"}),
-		&pb.RegisterRequest{SocketPath: "unix:/nonexistent/decoder.sock", Manifest: []byte(manifest)},
+		&pb.RegisterRequest{SocketPath: sock, Manifest: []byte(manifest)},
 	); err != nil {
 		t.Fatal(err)
 	}

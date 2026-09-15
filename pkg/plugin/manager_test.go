@@ -81,7 +81,7 @@ semantic_rules:
 }
 
 // TestRegister_AcceptsSemanticDeclaration 验证合法的四层声明能通过注册校验：
-// 语义层不拦截（grpc.Dial 为惰性连接，socket 不存在不影响注册结果），
+// 语义层不拦截（Register 会先做 Decode 地址可达性探测，需真实监听 socket），
 // 注册成功并返回 instance_id。
 func TestRegister_AcceptsSemanticDeclaration(t *testing.T) {
 	good := `api_version: gt.decoder/v2
@@ -98,9 +98,11 @@ schemas:
     fields:
       hp: { type: uint32, semantic: health, unit: hp, aggregatable: true }
 `
+	sock, stop := startFakeDecoder(t)
+	defer stop()
 	s := NewRegistryServer(10)
 	resp, err := s.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: "unix:/nonexistent/decoder.sock",
+		SocketPath: sock,
 		Manifest:   []byte(good),
 	})
 	if err != nil {

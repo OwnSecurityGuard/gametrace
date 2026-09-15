@@ -21,8 +21,10 @@ type: decoder
 transports:
   - udp
 `
+	sock, stop := startFakeDecoder(t)
+	defer stop()
 	if _, err := s.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: "unix:/nonexistent/udp.sock",
+		SocketPath: sock,
 		Manifest:   []byte(udpManifest),
 	}); err != nil {
 		t.Fatalf("register udp decoder: %v", err)

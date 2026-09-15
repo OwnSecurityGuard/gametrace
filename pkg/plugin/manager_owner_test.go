@@ -34,8 +34,10 @@ func TestRegister_OwnerScopedCoexistence(t *testing.T) {
 	defer s.Close()
 
 	reg := func(owner string) string {
+		sock, stop := startFakeDecoder(t)
+		defer stop()
 		resp, err := s.Register(ownerCtx(owner), &pb.RegisterRequest{
-			SocketPath: "unix:/nonexistent/decoder.sock",
+			SocketPath: sock,
 			Manifest:   []byte(sharedManifest),
 		})
 		if err != nil {
@@ -87,8 +89,10 @@ func TestRegister_FullKeyLookup(t *testing.T) {
 	s := NewRegistryServer(10)
 	defer s.Close()
 
+	sock, stop := startFakeDecoder(t)
+	defer stop()
 	if _, err := s.Register(ownerCtx("alice"), &pb.RegisterRequest{
-		SocketPath: "unix:/nonexistent/decoder.sock",
+		SocketPath: sock,
 		Manifest:   []byte(sharedManifest),
 	}); err != nil {
 		t.Fatal(err)
@@ -423,13 +427,15 @@ func TestConcurrentRegisterAndLookup(t *testing.T) {
 	defer s.Close()
 
 	done := make(chan struct{})
+	sock, stop := startFakeDecoder(t)
+	defer stop()
 	for i := 0; i < 8; i++ {
 		go func(n int) {
 			defer func() { done <- struct{}{} }()
 			owner := string(rune('a' + n%4))
 			for j := 0; j < 50; j++ {
 				_, _ = s.Register(ownerCtx(owner), &pb.RegisterRequest{
-					SocketPath: "unix:/nonexistent/decoder.sock",
+					SocketPath: sock,
 					Manifest:   []byte(sharedManifest),
 				})
 				_, _ = s.FindByNameFor(owner, "shared-decoder")

@@ -17,6 +17,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/peer"
 	"gopkg.in/yaml.v3"
 )
 
@@ -68,6 +69,9 @@ const (
 	PluginEventOnline PluginEventType = "online"
 	// PluginEventOffline 插件心跳超时被判离线（在线→离线翻转）。
 	PluginEventOffline PluginEventType = "offline"
+	// PluginEventRegisterFailed 注册失败（平台拨号插件 Decode 地址不通等）。
+	// 失败的注册不进注册表；事件携带 SocketPath/Error/Owner 诊断字段。
+	PluginEventRegisterFailed PluginEventType = "register_failed"
 )
 
 // PluginEvent 是插件注册表状态变化的通知，用于即时推送（避免轮询）。
@@ -77,7 +81,36 @@ type PluginEvent struct {
 	Name       string
 	Online     bool
 	Timestamp  time.Time
+	// 以下为 register_failed 专用字段（其余事件为零值）：
+	// SocketPath 注册时上报的插件地址；Error 拨号错误与诊断建议；
+	// Owner 注册方属主（SSE 订阅侧按此过滤，匿名为空串）。
+	SocketPath string
+	Error      string
+	Owner      string
 }
+
+// RegisterFailure 记录一次注册失败的诊断信息（dial 插件地址失败）。
+// ring buffer 容量 20、条目 TTL 15 分钟；name+socket_path+error 同 key
+// 5 分钟内去重（SDK 以 1→30s 退避无限重试，不去重会刷屏）。
+type RegisterFailure struct {
+	Name       string
+	SocketPath string
+	Error      string
+	Owner      string
+	Timestamp  time.Time
+}
+
+// maxRecentFailures 是注册失败 ring buffer 的容量。
+const maxRecentFailures = 20
+
+// 测试可覆盖的时间参数。
+var (
+	failureTTL         = 15 * time.Minute
+	failureDedupWindow = 5 * time.Minute
+	// registerProbeTimeout 是 Register 阶段对插件 Decode 地址做可达性探测的
+	// 超时（错误远端地址/被防火墙丢弃的 SYN 不应长时间挂住注册 RPC）。
+	registerProbeTimeout = 5 * time.Second
+)
 
 // RegistryServer 实现 PluginRegistry gRPC 服务，被动接受插件注册。
 // 插件进程由外部编排（systemd/脚本）独立启动，RegistryServer 不再 spawn 子进程，
@@ -102,6 +135,12 @@ type RegistryServer struct {
 	// 按 owner 分桶、FIFO；与 tunnelPending 保证 Connect↔Register 按到达顺序配对。
 	tunnelAwaiting map[string][]string
 
+	// 注册失败 ring buffer（register_failed 事件源数据）：容量 20、TTL 15min、
+	// name+socket_path+error 同 key 5min 去重。
+	failMu       sync.Mutex
+	failures     []RegisterFailure
+	failLastSeen map[string]time.Time
+
 	// 事件总线：插件注册/注销/上下线时向订阅者推送 PluginEvent。
 	// 订阅者通道带缓冲，emit 非阻塞（订阅者处理不过来则丢弃，避免阻塞注册表主路径）。
 	listenerMu  sync.Mutex
@@ -122,6 +161,7 @@ func NewRegistryServer(heartbeatSec int32) *RegistryServer {
 		listeners:      map[int64]chan PluginEvent{},
 		tunnelPending:  map[string][]pb.DecoderClient{},
 		tunnelAwaiting: map[string][]string{},
+		failLastSeen:   map[string]time.Time{},
 	}
 	// Connect 反向隧道：owner 从流上下文解析（gRPC auth 拦截器注入 Principal；
 	// 未接入认证时 OwnerFrom 返回 ""，即匿名/本地语义）。
@@ -241,6 +281,21 @@ func (s *RegistryServer) Register(ctx context.Context, req *pb.RegisterRequest) 
 	var conn *grpc.ClientConn
 	var client pb.DecoderClient
 	if !tunnel {
+		// 真实可达性探测：grpc.NewClient 是懒连接，创建时不会报错——不主动
+		// 探测的话，错误的 GT_DECODER_PUBLIC_ADDR 要到首次解码 RPC 才暴露。
+		// SDK 保证 Decode server 先于 Register 启动（sdk/registry.go），
+		// 正确配置的插件不受影响；探测失败则拒绝注册（SDK 退避重试自愈）。
+		pctx, pcancel := context.WithTimeout(ctx, registerProbeTimeout)
+		probe, perr := dialTarget(pctx, req.SocketPath)
+		pcancel()
+		if perr != nil {
+			// 诊断建议随错误返回给 SDK（插件控制台可见），同时入账 ring buffer
+			// 并发 register_failed 事件（前端 toast / 插件面板 / status_plugin）。
+			hint := dialFailureHint(ctx, req.SocketPath, perr)
+			s.recordFailure(m, req.SocketPath, hint, owner)
+			return nil, fmt.Errorf("dial plugin socket: %w (%s)", perr, hint)
+		}
+		_ = probe.Close()
 		conn, err = dialDecoder(ctx, req.SocketPath)
 		if err != nil {
 			return nil, fmt.Errorf("dial plugin socket: %w", err)
@@ -319,6 +374,103 @@ func (s *RegistryServer) Register(ctx context.Context, req *pb.RegisterRequest) 
 		InstanceId:           instanceID,
 		HeartbeatIntervalSec: s.heartbeatSec,
 	}, nil
+}
+
+// dialFailureHint 生成拨号失败的诊断建议：底层错误 + 注册连接来源 IP 建议值 +
+// 回环地址场景的 Docker 提示。仅作建议文本，不做自动纠正（证据驱动原则）。
+func dialFailureHint(ctx context.Context, socketPath string, dialErr error) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%v", dialErr)
+	if src := peerSourceIP(ctx); src != "" {
+		if port := socketPort(socketPath); port != "" {
+			fmt.Fprintf(&sb, "; 注册连接来源 IP %s，可尝试 GT_DECODER_PUBLIC_ADDR=%s:%s", src, src, port)
+		} else {
+			fmt.Fprintf(&sb, "; 注册连接来源 IP %s", src)
+		}
+	}
+	if host, _, err := net.SplitHostPort(socketPath); err == nil &&
+		(host == "127.0.0.1" || host == "localhost" || host == "::1") {
+		sb.WriteString("; GT_DECODER_PUBLIC_ADDR/GT_DECODER_ADDR 指向回环地址：平台（尤其 Docker 部署）回拨的是平台自身，请改填平台可回拨的宿主机地址（如 GT_PUBLIC_HOST 或宿主机局域网 IP）")
+	}
+	return sb.String()
+}
+
+// peerSourceIP 返回 RPC 调用方的来源 IP（地址的 host 部分）。
+func peerSourceIP(ctx context.Context) string {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.Addr == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(p.Addr.String())
+	if err != nil {
+		return p.Addr.String()
+	}
+	return host
+}
+
+// socketPort 返回 host:port 形态地址的端口；unix:/npipe: 等非 TCP 形态返回空。
+func socketPort(socketPath string) string {
+	_, port, err := net.SplitHostPort(socketPath)
+	if err != nil {
+		return ""
+	}
+	return port
+}
+
+// recordFailure 记录一次注册失败并返回是否入账：name+socket_path+error 同 key
+// 在去重窗口内返回 false（不记录、不发事件）。入账时向事件总线发 register_failed。
+func (s *RegistryServer) recordFailure(m *Manifest, socketPath, errMsg, owner string) bool {
+	key := m.Name + "|" + socketPath + "|" + errMsg
+	now := time.Now()
+	s.failMu.Lock()
+	if last, ok := s.failLastSeen[key]; ok && now.Sub(last) < failureDedupWindow {
+		s.failMu.Unlock()
+		return false
+	}
+	s.failLastSeen[key] = now
+	kept := make([]RegisterFailure, 0, len(s.failures)+1)
+	for _, f := range s.failures {
+		if now.Sub(f.Timestamp) < failureTTL {
+			kept = append(kept, f)
+		} else {
+			delete(s.failLastSeen, f.Name+"|"+f.SocketPath+"|"+f.Error)
+		}
+	}
+	kept = append(kept, RegisterFailure{
+		Name: m.Name, SocketPath: socketPath, Error: errMsg, Owner: owner, Timestamp: now,
+	})
+	if overflow := len(kept) - maxRecentFailures; overflow > 0 {
+		for _, f := range kept[:overflow] {
+			delete(s.failLastSeen, f.Name+"|"+f.SocketPath+"|"+f.Error)
+		}
+		kept = kept[overflow:]
+	}
+	s.failures = kept
+	s.failMu.Unlock()
+
+	s.emit(PluginEvent{
+		Type:       PluginEventRegisterFailed,
+		Name:       m.Name,
+		SocketPath: socketPath,
+		Error:      errMsg,
+		Owner:      owner,
+		Timestamp:  now,
+	})
+	return true
+}
+
+// ListRegisterFailures 返回未过期的注册失败快照（新的在前）。
+func (s *RegistryServer) ListRegisterFailures() []RegisterFailure {
+	now := time.Now()
+	s.failMu.Lock()
+	defer s.failMu.Unlock()
+	out := make([]RegisterFailure, 0, len(s.failures))
+	for i := len(s.failures) - 1; i >= 0; i-- {
+		if now.Sub(s.failures[i].Timestamp) < failureTTL {
+			out = append(out, s.failures[i])
+		}
+	}
+	return out
 }
 
 // formatReport 把语义契约 Report 压缩为适合注册错误消息的单行摘要，
@@ -793,8 +945,8 @@ func dialTarget(ctx context.Context, target string) (net.Conn, error) {
 		return dialNamedPipe(strings.TrimPrefix(target, "npipe:"))
 	case strings.HasPrefix(target, `\\.\pipe\`):
 		return dialNamedPipe(target)
-	case strings.ContainsRune(target, '/'):
-		// 裸路径视为 Unix socket
+	case strings.ContainsRune(target, '/') || strings.ContainsRune(target, '\\'):
+		// 裸路径视为 Unix socket（Windows 路径分隔符是反斜杠）
 		return (&net.Dialer{}).DialContext(ctx, "unix", target)
 	default:
 		// host:port 走 TCP（跨机器部署）

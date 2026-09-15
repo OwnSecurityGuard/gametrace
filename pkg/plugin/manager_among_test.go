@@ -8,10 +8,13 @@ import (
 )
 
 // regShared 按指定 owner 注册一个共享名插件（非隧道，注册即在线）。
+// Register 会做 Decode 地址可达性探测，因此每次注册用独立的真实监听 socket。
 func regShared(t *testing.T, s *RegistryServer, owner string) string {
 	t.Helper()
+	sock, stop := startFakeDecoder(t)
+	defer stop()
 	resp, err := s.Register(ownerCtx(owner), &pb.RegisterRequest{
-		SocketPath: "unix:/nonexistent/decoder.sock",
+		SocketPath: sock,
 		Manifest:   []byte(sharedManifest),
 	})
 	if err != nil {
@@ -53,15 +56,19 @@ func TestFindByNameAmong(t *testing.T) {
 	}
 
 	// 3) 匿名（系统）插件恒可见
+	sysSock, stopSys := startFakeDecoder(t)
+	defer stopSys()
 	if _, err := s.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: "unix:/nonexistent/decoder.sock",
+		SocketPath: sysSock,
 		Manifest:   []byte(sharedManifest),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	// 系统插件键是裸名；上面的 owner 键都在它前面。用不同的名字注册系统插件验证可见性。
+	sysSock2, stopSys2 := startFakeDecoder(t)
+	defer stopSys2()
 	if _, err := s.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: "unix:/nonexistent/decoder.sock",
+		SocketPath: sysSock2,
 		Manifest: []byte(`api_version: gt.decoder/v2
 name: sys-decoder
 protocol: test_proto
