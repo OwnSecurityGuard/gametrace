@@ -16,9 +16,14 @@
 package main
 
 import (
+	"os"
+
 	"github.com/OwnSecurityGuard/gametrace/sdk"
 )
 
 func main() {
-	sdk.RunRegisterLoop(newDecoder().decode)
+	// GT_AUTH_TOKEN 来自 .env（token 模式平台必需；匿名模式可留空）。
+	sdk.RunRegisterLoopWithOptions(newDecoder().decode, sdk.RegisterOptions{
+		AuthToken: os.Getenv("GT_AUTH_TOKEN"),
+	})
 }
