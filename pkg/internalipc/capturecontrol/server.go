@@ -33,6 +33,8 @@ type CaptureEngine interface {
 	DecodeRawPackets(ctx context.Context, req DecodeRawPacketsRequest) (DecodeRawPacketsResult, error)
 	// ListPlugins 列出当前已注册的插件摘要。
 	ListPlugins(ctx context.Context) ([]PluginSummary, error)
+	// ListRegisterFailures 列出最近的解码器注册失败记录（owner 作用域同 ListPlugins）。
+	ListRegisterFailures(ctx context.Context) ([]RegisterFailure, error)
 	// GetPluginManifest 获取指定插件的 manifest bytes。
 	GetPluginManifest(ctx context.Context, name string) ([]byte, error)
 	// DeregisterPlugin 注销指定插件（按 instance_id 或 name）。
@@ -160,6 +162,19 @@ type PluginEvent struct {
 	InstanceID string
 	Name       string
 	Online     bool
+	Timestamp  time.Time
+	// register_failed 专用字段（其余事件为零值）。
+	SocketPath string
+	Error      string
+	Owner      string
+}
+
+// RegisterFailure 是最近一次注册失败的诊断记录（与 proto PluginFailure 对应）。
+type RegisterFailure struct {
+	Name       string
+	SocketPath string
+	Error      string
+	Owner      string
 	Timestamp  time.Time
 }
 
@@ -549,7 +564,21 @@ func (s *Server) ListPlugins(ctx context.Context, req *pb.ListPluginsRequest) (*
 			Owner:             p.Owner,
 		})
 	}
-	return &pb.ListPluginsResponse{Plugins: out}, nil
+	failures, err := s.engine.ListRegisterFailures(withRequestOwner(ctx, req.GetOwner(), req.GetAllOwners()))
+	if err != nil {
+		return nil, err
+	}
+	fails := make([]*pb.PluginFailure, 0, len(failures))
+	for _, f := range failures {
+		fails = append(fails, &pb.PluginFailure{
+			Name:          f.Name,
+			SocketPath:    f.SocketPath,
+			Error:         f.Error,
+			Owner:         f.Owner,
+			TimestampUnix: f.Timestamp.Unix(),
+		})
+	}
+	return &pb.ListPluginsResponse{Plugins: out, RecentFailures: fails}, nil
 }
 
 // GetPluginManifest 处理获取插件 manifest RPC。
@@ -624,6 +653,9 @@ func (s *Server) WatchPlugins(req *pb.WatchPluginsRequest, stream grpc.ServerStr
 			Name:          ev.Name,
 			Online:        ev.Online,
 			TimestampUnix: ev.Timestamp.Unix(),
+			SocketPath:    ev.SocketPath,
+			Error:         ev.Error,
+			Owner:         ev.Owner,
 		}); err != nil {
 			return err
 		}

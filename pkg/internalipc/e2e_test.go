@@ -1,4 +1,4 @@
-﻿package internalipc_test
+package internalipc_test
 
 import (
 	"context"
@@ -120,6 +120,9 @@ func (f *fakeCaptureEngine) DeregisterPlugin(ctx context.Context, instanceID, na
 	return instanceID, nil
 }
 func (f *fakeCaptureEngine) ListPlugins(ctx context.Context) ([]capturecontrol.PluginSummary, error) {
+	return nil, nil
+}
+func (f *fakeCaptureEngine) ListRegisterFailures(ctx context.Context) ([]capturecontrol.RegisterFailure, error) {
 	return nil, nil
 }
 func (f *fakeCaptureEngine) GetPluginManifest(ctx context.Context, name string) ([]byte, error) {

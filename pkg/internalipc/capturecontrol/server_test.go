@@ -3,6 +3,7 @@ package capturecontrol
 import (
 	"context"
 	"testing"
+	"time"
 
 	pb "gametrace/pkg/internalipc/proto"
 )
@@ -30,6 +31,9 @@ type fakeEngine struct {
 	sampleResult  SampleBytesResult
 	sampleErr     error
 	sampleLastReq SampleBytesRequest
+
+	// failures 预设 ListRegisterFailures 返回的注册失败记录。
+	failures []RegisterFailure
 }
 
 func (f *fakeEngine) StartSession(ctx context.Context, req StartSessionRequest) (StartSessionResult, error) {
@@ -80,6 +84,10 @@ func (f *fakeEngine) GetPluginManifest(ctx context.Context, name string) ([]byte
 }
 func (f *fakeEngine) GetRegistryAddr(ctx context.Context) (string, error) {
 	return ":9091", nil
+}
+
+func (f *fakeEngine) ListRegisterFailures(ctx context.Context) ([]RegisterFailure, error) {
+	return f.failures, nil
 }
 
 func (f *fakeEngine) CreateProxyLease(ctx context.Context, req CreateProxyLeaseRequest) (ProxyLease, error) {
@@ -247,5 +255,25 @@ func TestServer_StartCaptureMobile(t *testing.T) {
 	}
 	if m.ListenAddr != "127.0.0.1:9090" {
 		t.Errorf("unexpected mobile config: %+v", m)
+	}
+}
+
+func TestListPluginsIncludesRegisterFailures(t *testing.T) {
+	ts := time.Now()
+	s := NewServer(&fakeEngine{failures: []RegisterFailure{{
+		Name: "my-plug", SocketPath: "127.0.0.1:61887", Error: "connection refused", Owner: "alice", Timestamp: ts,
+	}}})
+	resp, err := s.ListPlugins(context.Background(), &pb.ListPluginsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := resp.GetRecentFailures()
+	if len(fs) != 1 {
+		t.Fatalf("want 1 recent failure, got %d", len(fs))
+	}
+	if fs[0].GetName() != "my-plug" || fs[0].GetSocketPath() != "127.0.0.1:61887" ||
+		fs[0].GetError() != "connection refused" || fs[0].GetOwner() != "alice" ||
+		fs[0].GetTimestampUnix() != ts.Unix() {
+		t.Errorf("failure mapping mismatch: %+v", fs[0])
 	}
 }
