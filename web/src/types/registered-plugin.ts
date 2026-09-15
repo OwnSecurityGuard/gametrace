@@ -12,10 +12,21 @@ export interface RegisteredPlugin {
   owner?: string;
 }
 
+/** list_registered_plugins 返回的最近注册失败记录（后端 15min TTL 自动消失） */
+export interface PluginRegisterFailure {
+  name: string;
+  socket_path: string;
+  error: string;
+  owner?: string;
+  timestamp_unix: number;
+}
+
 /** list_registered_plugins 完整响应 */
 export interface ListRegisteredPluginsResult {
   ok: boolean;
   plugins: RegisteredPlugin[];
+  /** 最近的解码器注册失败（平台拨号插件地址不通等） */
+  recent_register_failures?: PluginRegisterFailure[] | null;
 }
 
 /** set_session_plugin 响应 */

@@ -19,7 +19,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Dialog } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast";
 import { Power, Wifi, WifiOff, Activity, FlaskConical, Lock, Puzzle, AlertTriangle, RotateCw, X, Hammer, FileCode2, ScrollText, Wrench } from "lucide-react";
-import type { RegisteredPlugin } from "@/types/registered-plugin";
+import type { PluginRegisterFailure, RegisteredPlugin } from "@/types/registered-plugin";
 import type { SessionInfo } from "@/types/session";
 import type { TestPluginResult, TestEventLite } from "@/types/plugin-test";
 import type { BuildPluginResult, ExplainPluginResult } from "@/types/plugin-dev";
@@ -32,6 +32,7 @@ import { RAW_DEBUG_ENABLED } from "@/lib/env";
 const EMPTY_PLUGINS: RegisteredPlugin[] = [];
 const EMPTY_SESSIONS: SessionInfo[] = [];
 const EMPTY_PLUGIN_INFOS: PluginInfo[] = [];
+const EMPTY_FAILURES: PluginRegisterFailure[] = [];
 
 /** 格式化为 HH:mm:ss（last_heartbeat 为 unix 秒） */
 function fmtClock(unix: number): string {
@@ -76,6 +77,8 @@ export function PluginPanel() {
   const baselineSet = useRef(false);
 
   const plugins = data?.plugins ?? EMPTY_PLUGINS;
+  // 最近注册失败（平台拨号插件地址不通）：后端 15min TTL，SSE 失效 + 5s 轮询双保障
+  const failures = data?.recent_register_failures ?? EMPTY_FAILURES;
   // 当前登录身份（匿名模式下为 null），用于把 owner 归属显示为「我」。
   const identity = useIdentity();
 
@@ -253,6 +256,27 @@ export function PluginPanel() {
           />
         ))}
       </div>
+
+      {failures.length > 0 && (
+        <div className="border-t px-4 py-3 space-y-2">
+          <div className="flex items-center gap-2 text-xs font-semibold text-destructive">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            最近注册失败（15 分钟内）
+          </div>
+          {failures.map((f) => (
+            <div
+              key={`${f.name}-${f.timestamp_unix}`}
+              className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs space-y-1"
+            >
+              <div className="font-medium">
+                {f.name} — 平台拨不通 <code className="text-[11px]">{f.socket_path}</code>
+              </div>
+              <div className="text-destructive break-all">{f.error}</div>
+              <div className="text-muted-foreground">{fmtTime(f.timestamp_unix)}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* 测试插件：隐私安全通道。原始包仅服务端解码，不回传、不落库。 */}
       <div ref={testSectionRef} className="border-t">

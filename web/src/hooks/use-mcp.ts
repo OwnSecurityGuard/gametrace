@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tansta
 import { mcpClient } from "@/lib/mcp-client";
 import { useAuthToken } from "@/hooks/use-auth";
 import { withTokenParam, notifyAuthError, wasRecentlyUnauthorized } from "@/lib/auth";
+import { toast } from "@/components/ui/toast";
 import type { ListSessionsResult } from "@/types/session";
 import type { ListDecodedDataResult } from "@/types/event";
 import type {
@@ -369,7 +370,24 @@ export function usePluginEventStream() {
   const token = useAuthToken();
   useEffect(() => {
     const es = new EventSource(withTokenParam("/events/plugins"));
-    es.addEventListener("plugin", () => {
+    es.addEventListener("plugin", (e) => {
+      // register_failed：即时 toast（含尝试地址与诊断建议），其余事件维持缓存失效
+      try {
+        const ev = JSON.parse((e as MessageEvent<string>).data) as {
+          type: string;
+          name?: string;
+          socket_path?: string;
+          error?: string;
+        };
+        if (ev.type === "register_failed") {
+          toast.error(
+            `插件 ${ev.name ?? "未知"} 注册失败：平台拨不通 ${ev.socket_path ?? "解码器地址"}`,
+            ev.error,
+          );
+        }
+      } catch {
+        // 非 JSON 负载：维持原行为（仅失效缓存）
+      }
       void queryClient.invalidateQueries({ queryKey: ["registeredPlugins"] });
       void queryClient.invalidateQueries({ queryKey: ["sessions"] });
     });
