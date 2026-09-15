@@ -553,9 +553,45 @@ func (s *pipelineService) SubscribePlugins(ctx context.Context) (<-chan capturec
 					Name:       ev.Name,
 					Online:     ev.Online,
 					Timestamp:  ev.Timestamp,
+					SocketPath: ev.SocketPath,
+					Error:      ev.Error,
+					Owner:      ev.Owner,
 				}
 			}
 		}
 	}()
+	return out, nil
+}
+
+// ListRegisterFailures 列出最近的解码器注册失败（owner 作用域同 ListPlugins：
+// 非 admin 只见自己的 + 匿名，admin 见全部）。
+func (s *pipelineService) ListRegisterFailures(ctx context.Context) ([]capturecontrol.RegisterFailure, error) {
+	if s.registry == nil {
+		return nil, fmt.Errorf("registry not available")
+	}
+	owner := auth.OwnerFrom(ctx)
+	allOwners := false
+	if p, ok := auth.PrincipalFrom(ctx); ok {
+		allOwners = p.IsAdmin
+	}
+	out := make([]capturecontrol.RegisterFailure, 0)
+	for _, f := range s.registry.ListRegisterFailures() {
+		if !allOwners {
+			if owner == "" {
+				if f.Owner != "" {
+					continue // 匿名调用方只见匿名失败
+				}
+			} else if f.Owner != "" && f.Owner != owner {
+				continue // 其他 owner 的失败不可见
+			}
+		}
+		out = append(out, capturecontrol.RegisterFailure{
+			Name:       f.Name,
+			SocketPath: f.SocketPath,
+			Error:      f.Error,
+			Owner:      f.Owner,
+			Timestamp:  f.Timestamp,
+		})
+	}
 	return out, nil
 }
