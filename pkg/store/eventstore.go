@@ -179,6 +179,10 @@ type RawPacketRow struct {
 	Protocol  string
 	Payload   []byte
 	LinkType  int
+	// ConnID 是落库时写入的连接实例标识。离线补解码必须复用它而不是重新派生：
+	// 实时路径按连接生命周期派生（同一五元组重连会拿新 ID），raw_packets 行
+	// 不带 TCP 控制位，重新派生会得到不同的值，导致事件与原始帧连不上。
+	ConnID string
 }
 
 // MetricRow 对应 aggregated_metrics 的一行。

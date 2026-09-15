@@ -254,7 +254,7 @@ func applyLimitOffset(query string, args []any, limit, offset int) (string, []an
 // capture.sqlite 为单 session 库，raw_packets 表目前无 session_id 列。
 // timestamp 兼容 INTEGER（新）与文本（旧库）两种存储，经 scanPacketTime 归一。
 func (s *SQLiteStore) QueryRawPackets(ctx context.Context, q RawPacketQuery) ([]RawPacketRow, error) {
-	query := `SELECT id, timestamp, src, dst, protocol, payload, link_type
+	query := `SELECT id, timestamp, src, dst, protocol, payload, link_type, conn_id
 FROM raw_packets WHERE 1=1`
 	var args []any
 	if q.Protocol != "" {
@@ -280,9 +280,11 @@ FROM raw_packets WHERE 1=1`
 	for rows.Next() {
 		var r RawPacketRow
 		var ts any
-		if err := rows.Scan(&r.ID, &ts, &r.Src, &r.Dst, &r.Protocol, &r.Payload, &r.LinkType); err != nil {
+		var connID sql.NullString
+		if err := rows.Scan(&r.ID, &ts, &r.Src, &r.Dst, &r.Protocol, &r.Payload, &r.LinkType, &connID); err != nil {
 			return nil, err
 		}
+		r.ConnID = connID.String
 		t, err := scanPacketTime(ts)
 		if err != nil {
 			return nil, err

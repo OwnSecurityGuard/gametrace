@@ -351,7 +351,7 @@ func (s *PGStore) QueryEventsByCorrelation(ctx context.Context, correlationID st
 // QueryRawPackets 查询 raw_packets（PG 版按 session_id 隔离）。
 func (s *PGStore) QueryRawPackets(ctx context.Context, q RawPacketQuery) ([]RawPacketRow, error) {
 	var a pgArgs
-	query := `SELECT id, timestamp, src, dst, protocol, payload, link_type
+	query := `SELECT id, timestamp, src, dst, protocol, payload, link_type, conn_id
 	FROM raw_packets WHERE session_id = ` + a.next(s.sessionID)
 	if q.Protocol != "" {
 		query += ` AND protocol = ` + a.next(q.Protocol)
@@ -372,9 +372,11 @@ func (s *PGStore) QueryRawPackets(ctx context.Context, q RawPacketQuery) ([]RawP
 	for rows.Next() {
 		var r RawPacketRow
 		var ts any
-		if err := rows.Scan(&r.ID, &ts, &r.Src, &r.Dst, &r.Protocol, &r.Payload, &r.LinkType); err != nil {
+		var connID sql.NullString
+		if err := rows.Scan(&r.ID, &ts, &r.Src, &r.Dst, &r.Protocol, &r.Payload, &r.LinkType, &connID); err != nil {
 			return nil, err
 		}
+		r.ConnID = connID.String
 		t, err := scanPacketTime(ts)
 		if err != nil {
 			return nil, err

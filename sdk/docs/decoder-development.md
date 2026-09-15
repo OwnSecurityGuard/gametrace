@@ -218,7 +218,7 @@ draft := event.Draft{
     Value:          businessValue,          // required, root must be object
     Meta:           metaValue,              // optional; omitted when null
     Analysis:       analysisValue,          // optional; omitted when null
-    CorrelationKey: flowKey.Canonical(),
+    CorrelationKey: businessSessionID,      // business session/operation id, NOT the flow key
 }
 resp, err := draft.ToResponse(req.GetInputId())
 if err != nil { /* send error + done */ }
@@ -360,9 +360,16 @@ Do not use:
 packet_id as correlation_key
 flow_id as causation_input_id
 random UUID as business correlation
+FlowKey.Canonical() / 5-tuple as correlation_key   ← connection identity, not business
 ```
 
 unless the protocol/domain contract explicitly defines that mapping.
+
+Connection identity is **not** the plugin's job: the host derives `ConnID` from the
+5-tuple plus the TCP lifecycle (a new generation on every reconnect), and `pair`
+semantic rules group request/response within that connection. Putting a flow key into
+`correlation_key` only collides with the pair result — the value is overwritten by the
+tighter request-response group (the host preserves it under `meta.corr_key`).
 
 ## 14. Event schema discipline
 

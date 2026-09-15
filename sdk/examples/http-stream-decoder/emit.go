@@ -37,7 +37,6 @@ func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string,
 				},
 			}),
 			Meta:           event.ValueFromMap(map[string]any{"direction": "client_to_server"}),
-			CorrelationKey: flowID,
 		}
 	} else {
 		c.responses++
@@ -61,7 +60,6 @@ func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string,
 				},
 			}),
 			Meta:           event.ValueFromMap(map[string]any{"direction": "server_to_client"}),
-			CorrelationKey: flowID,
 		}
 	}
 	d.counts[flowID] = c

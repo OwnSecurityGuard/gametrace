@@ -76,7 +76,6 @@ func (d *decoder) emitHandshake(stream pb.Decoder_DecodeV2Server, inputID, flowI
 			Analysis: event.ValueFromMap(map[string]any{
 				"_state_changes": []any{handshakeChange(flowID, false)},
 			}),
-			CorrelationKey: flowID,
 		})
 	}
 	if hs.status != 101 {
@@ -91,7 +90,6 @@ func (d *decoder) emitHandshake(stream pb.Decoder_DecodeV2Server, inputID, flowI
 		Analysis: event.ValueFromMap(map[string]any{
 			"_state_changes": []any{handshakeChange(flowID, true)},
 		}),
-		CorrelationKey: flowID,
 	})
 }
 
@@ -184,7 +182,6 @@ func (d *decoder) emitData(stream pb.Decoder_DecodeV2Server, inputID, flowID str
 		Analysis: event.ValueFromMap(map[string]any{
 			"_state_changes": []any{stateChange(flowID, path, fs.counts)},
 		}),
-		CorrelationKey: flowID,
 	}
 	if opcode == wsOpBinary {
 		draft.Type = "ws.binary"
@@ -221,7 +218,6 @@ func (d *decoder) emitControl(stream pb.Decoder_DecodeV2Server, inputID, flowID 
 		Analysis: event.ValueFromMap(map[string]any{
 			"_state_changes": []any{stateChange(flowID, "control_frames", fs.counts)},
 		}),
-		CorrelationKey: flowID,
 	})
 }
 

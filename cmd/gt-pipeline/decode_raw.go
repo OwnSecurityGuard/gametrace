@@ -380,8 +380,14 @@ func rawRowToPacket(r store.RawPacketRow) (event.Packet, error) {
 		Protocol:  protocol,
 		Metadata:  map[string]any{},
 	}
-	// 与实时路径（capture_task）一致地派生 conn_id，保证离线补解码产生的
-	// 事件也能按连接聚合（Connections 页面的 event_count）。
-	deriveConnID(&pkt)
+	// 优先复用落库时的 conn_id：实时抓包按连接生命周期派生（同一五元组重连会
+	// 拿新 ID），这里没有 TCP 控制位无法重建代次，重新派生会得到不同的标识，
+	// 使离线补解码的事件与 raw_packets 里的原始帧连不上。
+	// 历史库没有 conn_id 时退回按规范五元组派生。
+	if r.ConnID != "" {
+		pkt.Metadata["conn_id"] = r.ConnID
+	} else {
+		deriveConnID(&pkt)
+	}
 	return pkt, nil
 }

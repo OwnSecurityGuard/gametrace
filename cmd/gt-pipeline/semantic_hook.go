@@ -33,6 +33,10 @@ const (
 	// metaKeyMsgName 是 name 效果写入的 meta 字段名（规则从 payload 提取的消息名）。
 	metaKeyMsgName = "msg_name"
 
+	// metaKeyCorrelationKey 是 pair 覆盖 Trace.CorrelationID 前，
+	// 插件声明的业务关联键（Draft.CorrelationKey）的转存位置。
+	metaKeyCorrelationKey = "corr_key"
+
 	// maxPendingPairs 是待配对池上限，防止异常流量下无限增长。
 	maxPendingPairs = 4096
 
@@ -48,6 +52,9 @@ const (
 type pendingPair struct {
 	hit rule.PairHit
 	evt *event.Event
+	// conn 是事件所属连接实例（EventContext.ConnID）。配对池按连接分片，
+	// 这里冗余存一份用于显式校验两侧同源（分片键已带 conn，属双保险）。
+	conn string
 	at  time.Time
 }
 
@@ -264,16 +271,21 @@ func (e *semanticEngine) applySemantics(ev *event.Event, sems []rule.Semantic) {
 // CausationID 指向请求方。角色由 pair 规则 sides 的声明顺序决定：
 // Side 0 = 请求方、Side 1 = 响应方（SDK 新 pair 模型：每侧自带 key，
 // 不再有规则级 key），与到达先后无关。
+// 配对池按**连接实例**分片：分片键 = ConnID + 规则 ID + 配对键。
+// 协议里 per-connection 自增的配对键（每条连接各自从 1 开始的 seq）只在连接内
+// 唯一，不做分片时两条连接的同值键会互相覆盖、跨连接错配（F6）。
+// 没有连接标识的事件（无五元组 / 未派生 conn_id）退化为全局池，行为与修复前一致。
 func (e *semanticEngine) applyPairs(ev *event.Event, hits []rule.PairHit) {
 	if len(hits) == 0 {
 		return
 	}
+	conn := ev.Context.ConnID
 	for _, h := range hits {
-		mapKey := h.RuleID + "\x00" + h.Key
+		mapKey := conn + "\x00" + h.RuleID + "\x00" + h.Key
 
 		e.mu.Lock()
 		prev, ok := e.pending[mapKey]
-		if ok && prev.evt != nil && rule.MatchPair(prev.hit, h) {
+		if ok && prev.evt != nil && prev.conn == conn && rule.MatchPair(prev.hit, h) {
 			delete(e.pending, mapKey)
 			e.mu.Unlock()
 
@@ -286,6 +298,11 @@ func (e *semanticEngine) applyPairs(ev *event.Event, hits []rule.PairHit) {
 				req, resp = prev.evt, ev
 			}
 			corr := string(req.Identity.ID)
+			// CorrelationKey 是业务会话标识（一次对局 / 一次事务），pair 的
+			// 分组键是更紧的一问一答。两者不同粒度，覆盖前把业务键转存到
+			// Meta.corr_key，避免插件声明的业务会话标识被静默吃掉。
+			preserveCorrelationKey(req, corr)
+			preserveCorrelationKey(resp, corr)
 			req.Trace.CorrelationID = corr
 			resp.Trace.CorrelationID = corr
 			resp.Trace.CausationID = req.Identity.ID
@@ -294,13 +311,30 @@ func (e *semanticEngine) applyPairs(ev *event.Event, hits []rule.PairHit) {
 		if len(e.pending) >= maxPendingPairs {
 			e.evictExpired(time.Now())
 		}
-		e.pending[mapKey] = pendingPair{hit: h, evt: ev, at: time.Now()}
+		e.pending[mapKey] = pendingPair{hit: h, evt: ev, conn: conn, at: time.Now()}
 		e.inserts++
 		if e.inserts%512 == 0 {
 			e.evictExpired(time.Now())
 		}
 		e.mu.Unlock()
 	}
+}
+
+// preserveCorrelationKey 在 pair 覆盖 Trace.CorrelationID 前，把插件声明的
+// 业务关联键转存到 Meta.corr_key。原值为空或与新键相同时不写。
+func preserveCorrelationKey(ev *event.Event, pairKey string) {
+	old := ev.Trace.CorrelationID
+	if old == "" || old == pairKey {
+		return
+	}
+	meta := map[string]event.Value{}
+	if cur, ok := ev.Meta.AsObject(); ok {
+		for k, v := range cur {
+			meta[k] = v
+		}
+	}
+	meta[metaKeyCorrelationKey] = event.ValueString(old)
+	ev.Meta = event.ValueObject(meta)
 }
 
 // evictExpired 丢弃超时的待配对项；调用方必须持有写锁。

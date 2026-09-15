@@ -259,7 +259,7 @@ v2 **不再使用** `data`/`_fields` 顶层 JSON。插件通过 `event.Draft` �
 | `Value` | 纯业务载荷（根必须是 object），如 `{playerId, x, y}` | `payload_msgpack` |
 | `Meta` | 元信息（可选）：`direction`、`msg_name`、`role`、`is_push` 等系统附加字段 | `meta_msgpack`（`IsNull()` 时不传输） |
 | `Analysis` | 分析数据（可选）：`_state_changes`、`entity`、`entity_type`、`entity_id`、`change_count` 等平台投影所需数据 | `analysis_msgpack`（`IsNull()` 时不传输） |
-| `CorrelationKey` | 业务关联键 → `Trace.CorrelationID` | `correlation_key` |
+| `CorrelationKey` | **业务会话/业务操作**关联键 → `Trace.CorrelationID`。**不是连接标识**：连接身份由宿主派生的 `ConnID` 承担，把 `FlowKey.Canonical()` / `flow_id` 塞在这里是误用 | `correlation_key` |
 | `CausationInputID` | 因果输入 id（请求→响应配对）→ `Trace.CausationID` | `causation_input_id` |
 
 ```go
@@ -277,7 +277,8 @@ draft := event.Draft{
 		"msg_name":  "Request",
 		"role":      "request",
 	}),
-	CorrelationKey: flowID,
+	// 不填连接标识（flowID / 五元组）——连接身份归宿主派生的 ConnID；
+	// 这里只填业务会话/操作标识（如 battle_id / txn_id），没有就不填。
 }
 resp, err := draft.ToResponse(inputID) // → *pb.DecodeResponseV2
 ```
@@ -594,7 +595,8 @@ draft := event.Draft{
 			"after":        true,
 		}},
 	}),
-	CorrelationKey: req.GetFlowId(),
+	// 业务会话标识（如 op_id / battle_id）；不是 req.GetFlowId() 那种连接标识。
+	CorrelationKey: businessOpID,
 }
 resp, err := draft.ToResponse(req.GetInputId())
 if err != nil {

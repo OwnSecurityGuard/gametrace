@@ -455,6 +455,10 @@ Analysis  分析数据：_state_changes、entity、entity_type、
   `Draft.ToResponse` 负责编码为 `DecodeResponseV2` 三段。
 - 宿主存储时三段合并为扁平 MsgPack 落 `events.payload`（旧数据兼容）；读取时按保留键
   （`_meta`、`_state_changes`、`entity*`、`change_count`）拆分回填 `Meta`/`Analysis`。
+- `CorrelationKey` 是**业务会话/业务操作**标识（一次对局、一次事务），不是连接标识。
+  连接身份由宿主按五元组 + TCP 生命周期派生为 `ConnID`。pair 语义规则配对成功时，
+  `Trace.CorrelationID` 会被更紧的「一问一答」分组键覆盖，插件填的原值宿主转存到
+  `Meta.corr_key`，不丢。
 - 旧插件未上报 Meta/Analysis 时，宿主从扁平 payload 自动拆分兜底。
 
 ---

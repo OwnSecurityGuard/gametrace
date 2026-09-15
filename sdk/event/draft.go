@@ -27,7 +27,18 @@ type Draft struct {
 	// 平台推导/投影所需的数据。传输契约中对应 DecodeResponseV2.analysis_msgpack；IsNull() 时不传输。
 	Analysis Value
 
-	// CorrelationKey 由插件填的业务关联键（→ Trace.CorrelationID，宿主规范化）。
+	// CorrelationKey 是插件填的**业务关联键**（→ Trace.CorrelationID）。
+	//
+	// 语义：把属于同一次业务操作/业务会话的事件归为一组——一次登录事务、
+	// 一局对局、一次交易。取值来自协议里的业务字段（op_id / battle_id / txn_id）。
+	//
+	// **不是连接标识**。连接身份由宿主派生的 ConnID 承担（五元组 + TCP
+	// 生命周期，实例级唯一），插件既拿不到也不需要：把 FlowKey.Canonical() /
+	// 五元组塞在这里是误用，会让连接身份与业务会话身份互相污染。
+	//
+	// 优先级：pair 规则配对成功时，Trace.CorrelationID 会被写入更紧的
+	// 「一问一答」分组键（请求方事件 ID）；宿主把插件填的原值转存到
+	// Meta.corr_key，业务会话标识不丢。
 	CorrelationKey string
 	// CausationInputID 由插件填的因果输入 id（→ Trace.CausationID，宿主解析）。
 	CausationInputID string

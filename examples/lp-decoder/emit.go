@@ -159,7 +159,6 @@ func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string,
 	draft.Analysis = event.ValueFromMap(map[string]any{
 		"_state_changes": []any{change},
 	})
-	draft.CorrelationKey = flowID
 	d.counts[flowID] = c
 
 	resp, err := draft.ToResponse(inputID)

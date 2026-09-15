@@ -63,6 +63,10 @@ type captureTask struct {
 	// Semantic Rule）。规则随解码器重建（注册/热切换）重新载入，见 run。
 	sem *semanticEngine
 
+	// conns 为实时抓包的包派生连接实例标识（ConnectionID），带 TCP 连接生命周期：
+	// 同一五元组关闭后重连会拿到新的 ConnectionID，避免跨代连接在 pair 池里错配。
+	conns *connTracker
+
 	// 生命周期（atomic，无锁）
 	state atomic.Int32 // capture.State 的 int32 值
 
@@ -561,6 +565,7 @@ func (t *captureTask) run() {
 	// 热切换解码器时重新载入（见 hot-reload 分支）。
 	t.sem = newSemanticEngine(t.logger, t.registry)
 	t.sem.refreshRules(t.owner, t.getPlugin())
+	t.conns = newConnTracker()
 
 	sources, err := openCaptureSources(t.ctx, t.iface, t.port, t.pcapFile, t.liveCfg, t.mobileCfg, t.agentHub, t.sessionID, t.agentOnly)
 	if err != nil {
@@ -625,10 +630,11 @@ func (t *captureTask) run() {
 				pkt.ID = string(event.NewEventID())
 			}
 			// 派生 conn_id：移动代理在 Metadata 携带真实 conn_id（优先保留）；
-			// agent / 本地网卡抓包没有，按规范五元组（双向排序）派生，使
-			// raw_packets 落库与解码事件上下文都带连接标识——Connections 页面
-			// 依赖 raw_packets.conn_id 聚合，缺失时整个页面为空。
-			deriveConnID(&pkt)
+			// 其余来源由 connTracker 按连接生命周期派生（同一五元组重连会拿到
+			// 新的 ConnectionID），写入 Metadata["conn_id"] 供 AppendRawPackets
+			// 落库与解码事件上下文使用——Connections 页面依赖 raw_packets.conn_id
+			// 聚合，缺失时整个页面为空。
+			t.conns.assign(&pkt)
 			raws = append(raws, pkt)
 			resolveDecoder(false)
 			if pkt.Protocol == "" {
@@ -752,9 +758,11 @@ func (t *captureTask) pluginOwnerCandidates() []string {
 }
 
 // deriveConnID 为无连接标识的包派生 conn_id（幂等：已有则保留）。
-// 移动代理在 Packet.Metadata 携带真实 conn_id；agent / 本地网卡抓包没有，
-// 按 TCP 五元组双向排序生成规范键（同一连接两个方向得到相同 conn_id），
-// 写入 Metadata["conn_id"] 供 AppendRawPackets 落库与解码事件上下文使用。
+//
+// 这是**离线补解码**路径（rawRowToPacket）的兜底：raw_packets 行不带 TCP 控制位，
+// 无法重建连接代次，只能用规范五元组作为连接标识。实时抓包路径走 connTracker
+// （带连接生命周期，能区分同一五元组的先后两代）。离线路径优先使用落库时写入的
+// conn_id，只有历史数据缺失时才落到这里。
 func deriveConnID(pkt *event.Packet) {
 	// 仅 TCP / UDP 等带五元组的传输层协议派生连接标识；
 	// 移动代理等已在 Metadata 携带 conn_id，由下方分支优先保留。
@@ -769,15 +777,10 @@ func deriveConnID(pkt *event.Packet) {
 	if !pkt.Src.IsValid() || !pkt.Dst.IsValid() {
 		return
 	}
-	a, b := pkt.Src.String(), pkt.Dst.String()
-	if b < a {
-		a, b = b, a
-	}
 	if pkt.Metadata == nil {
 		pkt.Metadata = map[string]any{}
 	}
-	// 协议不同则连接归一维度不同，故以 "protocol:..." 为前缀（tcp:/udp:）。
-	pkt.Metadata["conn_id"] = pkt.Protocol + ":" + a + "<->" + b
+	pkt.Metadata["conn_id"] = canonicalTuple(pkt)
 }
 
 // decoderAction 给定一次 registry.Find 的结果与当前 dispatcher 状态，

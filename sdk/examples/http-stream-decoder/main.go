@@ -11,8 +11,10 @@
 //	HTTP requests  (client -> server)  -> http.request  event
 //	HTTP responses (server -> client)  -> http.response event
 //
-// Requests and responses of the same TCP connection are correlated through the
-// direction-independent flow id (FlowKey.Canonical) as CorrelationKey.
+// Requests and responses of the same TCP connection are correlated by the
+// `http.pair_request_response` semantic rule (see plugin.yaml), not by
+// CorrelationKey: connection identity belongs to the host-derived ConnID,
+// CorrelationKey is reserved for business session/operation ids.
 package main
 
 import (

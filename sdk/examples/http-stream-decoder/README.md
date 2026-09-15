@@ -19,7 +19,8 @@ capture frame → framing.ExtractL7 → framing.Reassembler → HTTP 消息解�
 
 - `DecodeRequest.payload` 是**完整链路层帧**；`framing.ExtractL7(payload, link_type)` 负责剥离。
 - TCP 流通过 `framing.Reassembler` 跨包重组；解析不完整时保留字节等待后续包。
-- 请求/响应按 `FlowKey.Canonical()`（方向无关的流标识）作为 `CorrelationKey` 关联。
+- 请求/响应由 `plugin.yaml` 的 `http.pair_request_response` 语义规则配对（键 `_meta.flow_id`）；
+  `CorrelationKey` 不再承载连接身份——连接身份归宿主派生的 `ConnID`，该字段只填业务会话/操作标识。
 - 每个 `input_id` 最终必须回 `done=true`（本例在 `decode` 尾部统一发送）。
 - 超过 4MB 仍无法解析的流直接丢弃，防止内存无限增长。
 

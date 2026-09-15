@@ -1,6 +1,6 @@
 ---
 name: "decoder-plugin-guide"
-description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gt-plugin-sdk）接入 GameTrace 平台：协议分析、插件骨架、TCP 重组与握手处理、plugin.yaml、测试与验证。当用户要为新协议编写解码插件、接入自定义游戏协议或解析网络协议为业务事件时调用。"
+description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gt-plugin-sdk）接入 GameTrace 平台：协议分析、插件骨架、TCP 重组与握手处理、plugin.yaml、测试与验证。semantic_rules 的选取标准、约束、校验机制与验收标准见 §5.2–§5.6。当用户要为新协议编写解码插件、接入自定义游戏协议、解析网络协议为业务事件，或要编写/审查/修正 semantic_rules 时调用。"
 ---
 
 # GameTrace 解码插件开发指南
@@ -102,7 +102,7 @@ func loadDotEnv(path string) {
 4. 方向判定依据：固定服务器端口 / 标志位 / 无法判定（由宿主补齐）？
 5. 语义证据：候选 semantic_rules 的出处（哪个消息、哪个字段、哪一侧；双向都发的标签单独标记）。
 
-协议笔记写进插件注释与 plugin.yaml 的 `hints`；另产出一份**语义规则证据表**（每条候选规则标注依据来源；证据不足的标「待确认」），它是 §5.2 写规则的输入——写 plugin.yaml 前与用户对齐，不猜。
+协议笔记写进插件注释与 plugin.yaml 的 `hints`；另产出一份**语义规则证据表**（每条候选规则标注依据来源；证据不足的标「待确认」），它是 §5.3 四道准入门的输入——写 plugin.yaml 前与用户对齐，不猜。
 
 ### 2. 插件骨架
 
@@ -207,7 +207,7 @@ type Event struct {
 	EventType      string         // 形如 "<protocol>.<msg_type>"，如 "wesnoth.login"
 	Payload        map[string]any // 业务字段（payload 根对象），纯业务，不带平台字段
 	Meta           map[string]any // 元信息（direction 等），前端「元信息」弹窗展示
-	CorrelationKey string         // 会话标识：seg.Flow.Canonical()，宿主按连接配对
+	CorrelationKey string         // 业务会话/操作标识（battle_id / txn_id 等）；不是连接标识
 }
 ```
 
@@ -276,7 +276,8 @@ func (d *decoder) Decode(req *pb.DecodeRequest) (events []*Event, err error) {
 		if n == 0 || n > maxFrame { d.reasm.Forget(seg.Flow); break } // 失步：丢弃流状态
 		if len(raw) < 4+int(n) { break } // 不完整，等下一段
 		ev := d.decodePayload(raw[4:4+n], seg)
-		ev.CorrelationKey = seg.Flow.Canonical() // 会话标识（双向往返同值）
+		// 不设 CorrelationKey：连接身份由宿主派生的 ConnID 承担。
+		// 该字段只在协议里有真正的业务会话/操作 id 时才填。
 		events = append(events, ev)
 		s.Consume(4 + int(n))
 	}
@@ -289,14 +290,14 @@ func (d *decoder) Decode(req *pb.DecodeRequest) (events []*Event, err error) {
 - `framing.Reassembler` 按 `FlowKey`（每方向流一个缓冲）隔离，**天然支持多连接**，可跨 goroutine 并发调用（内部有锁）；单流的 Bytes/Consume 必须串行。
 - 方向判定：读 `seg.Flow.SrcPort/DstPort`，目的端口 == 服务器端口 → C→S，否则 S→C；无法判定返回空，宿主补齐。
 - 失步（长度非法）时 `Forget` 丢弃该流状态，让下一个段从中间重新自同步。
-- 事件必须设 `CorrelationKey = seg.Flow.Canonical()`，宿主才能按连接配对。
+- **不要设 `CorrelationKey`**（除非协议里有真正的业务会话/操作 id）。连接身份由宿主按五元组 + TCP 生命周期派生为 `ConnID`，请求/响应配对由 `semantic_rules` 的 pair 规则声明；把 `seg.Flow.Canonical()` 塞进 `CorrelationKey` 是误用，会在 pair 命中时被覆盖（宿主把原值转存到 `Meta.corr_key`）。
 - 长度字段注意字节序（wesnoth 是 big-endian）。
 
 **UDP 场景**（与 TCP 差异，SDK 已处理好，解码器只需注意语义）：
 
 - `framing.ExtractL7` 对 UDP 同样返回 Segment（`IsTCP=false`、`Seq/Flags` 为零）；每个 UDP 包是**自包含**的，`Reassembler.Push` 对 UDP 直接透传（返回整包负载、不进入重组缓冲），`Consume` 为 no-op。
 - UDP **没有**连接握手与跨段重组：每包独立解码，包内第一个字段即业务数据，不存在「首 4 字节握手」逻辑（`seen` 簿记只对 TCP 有意义）。
-- 方向判定与 TCP 相同（按端口），`CorrelationKey = seg.Flow.Canonical()` 同样设置（宿主按五元组会话配对）。
+- 方向判定与 TCP 相同（按端口）。UDP 同样**不设** `CorrelationKey`（无连接生命周期，更没有"连接会话"可填）。
 - 多连接（多对端）天然隔离：不同五元组是不同 `FlowKey`；UDP 无 FIN/RST，无流生命周期，`handshakes` 簿记不适用于 UDP，SYN/RST 重置逻辑对 UDP 段（`IsTCP=false`）自然跳过。
 
 ### 4. 负载解析器与 Payload 规范化
@@ -357,14 +358,15 @@ semantic_rules:
 
 规则 = Predicate(`when`) + Effect，**决定事件怎么被解释/关联，权重高于解码器硬编码**。effect 是一个闭集，插件只需声明，执行由平台完成。
 
-> **补充原则：能上规则不硬编码，语义规则尽量补全；但每条规则必须先有证据，不虚构、不猜**（出处规范与"拿不准就与用户确认"的流程见 §5.2）。
+> **补充原则：能上规则不硬编码；但每条规则必须先过 §5.3 的四道准入门，不虚构、不猜。**
+> 先读 §5.2 的运行期执行事实——平台只校验声明形状，运行期失效是静默的。
 
 | effect | 作用 | 产出(host) | 必填字段 |
 |---|---|---|---|
 | `name` | 从 payload 提取消息名 | `meta.msg_name` | `key` |
 | `annotate` | 打角色标签：request/response/notification/error | `meta.semantic` | `semantic` |
 | `pair` | 请求-响应配对（同一个“来回”） | `correlation_id`（双方相同）+ `causation_id`（响应方→请求方） | `sides`（恰好 2 个，每侧自带 `key`） |
-| `extract` | 父事件拆出子事件（**父子关系**） | 子事件继承父连接等来源，`parent_id` 指父、继承父 `correlation_id` | `source` + `child` |
+| `extract` | 父事件拆出子事件（**父子关系**） | 子事件继承父连接等来源，`parent_id` 指父、继承父 `correlation_id` | `source` + `child`（`child.event_type` 与 `child.schema_id` **两者都必填**，缺一报 `gt.semantic.extract-child-required`） |
 
 **① `name` —— 消息名**（替代解码器写死）：
 
@@ -408,7 +410,12 @@ pair 恰好 2 个 `sides`，每侧自带 `key`（该侧配对键 GJSON path，�
     source: ents                                        # 数组/对象路径：真实报文中存在的快照子结构
     child:
       event_type: entity_snapshot
+      schema_id: foo.entity_snapshot.v1                 # 必填（与 event_type 同级，漏了注册期报错）
 ```
+
+> 方向从哪来：规则里判定请求/响应侧用的是 `_meta.direction`，它由**解码器**写进 Meta 通道
+> （`Meta["direction"] = "client_to_server" | "server_to_client"`），平台把 Meta 并入求值视图的
+> `_meta` 键。解码器判不了方向就留空，不要猜——留空顶多是规则不命中，猜错会误导配对。
 
 **规则通用约束**（不满足会在注册期校验报错，留意宿主 `semantic rules:` 日志）：
 - `when` 谓词 = GJSON `path` + `op`（闭集：`eq/neq/exists/not_exists/gt/gte/lt/lte/in/not_in/contains/prefix/suffix`）+ `value`。
@@ -419,38 +426,165 @@ pair 恰好 2 个 `sides`，每侧自带 `key`（该侧配对键 GJSON path，�
 
 **验证**：注册后 `get_session_status`/宿主日志看规则加载；`list_decoded_data` 抽查 `meta.msg_name`、`meta.semantic`、`trace.correlation_id/causation_id`，以及 `extract` 子事件的 `parent_id` 是否指向父事件。
 
-#### 5.2 补充原则：证据驱动（每条规则都要有出处，不虚构）
+#### 5.2 运行期执行事实（写规则前必读）
 
-**目标是"能用规则表达的语义尽量用规则，且每条规则都能溯源"**，不是"写得越多越好"。语义规则权重高于解码器硬编码，一旦写错会直接误导前端的方向/角色/配对展示；**宁可少一条，也不写无证据的规则**。
+**平台只在注册期校验声明形状**（`rule.RulesReport` → `gt.semantic.*`：id 格式、effect 闭集、必填字段、op 闭集）。下面 10 条是**运行期语义，注册期一条都不查**——写错就是静默失效，或更糟：结构合法但运行期错配、错标。
 
-**规则证据表**（§1 协议分析的产出物之一，写 plugin.yaml 前逐条过）。每条候选规则回答"依据是什么"，并把答案写进规则注释（参考 wesnoth 解码器的"证据注解"范式：每条规则注明哪个消息、哪个字段、哪一侧、为什么）：
+源码依据：`sdk/rule/evaluate.go`、`sdk/rule/predicate.go`、`cmd/gt-pipeline/semantic_hook.go`。
 
-| 规则 | 必须能回答的证据问题 | 没有证据时的处理 |
+| # | 事实 | 对写规则的约束 |
 |---|---|---|
-| `pair` | 两侧 `key` 的取值在真实"一问一答"里相等吗（回显字段）？`when` 是否拦截了推送/广播，避免它们被配对？ | 未验证的配对键不写，或与用户确认 |
-| `annotate` | 该 `msg_type` 在本协议里天然单向吗？方向依据是什么（固定服务器端口 / 字段 / 消息身份）？**双向都发的标签呢？** | 双向标签**留空不标注**；标错方向比不标更糟 |
-| `name` | 提取字段在所有目标消息里都存在且能区分消息吗？会不会抽到业务无意义的字段？ | 只在一个子集存在的字段不要当全局 `name` |
-| `extract` | `source` 指向的数组/对象真的存在于真实报文吗？父-子是"一拆多"，还是两种平级消息？ | 平级消息误用 extract 会搅乱前端父子层级 |
+| F1 | 求值视图 = `payload` 合并 Meta 进 `_meta`；**payload 自带 `_meta` 时平台不再合并 Meta** | 解码器不得在 payload 里放 `_meta` 键 |
+| F2 | 方向的唯一权威路径是 `_meta.direction`，取值闭集 `client_to_server` / `server_to_client` | 用别的字段名或取值一律不命中 |
+| F3 | 除 `exists` / `not_exists`，**path 不存在一律判 false** | 不能用 `neq` 表达"字段不存在"或"没有错误" |
+| F4 | `eq/neq/in/gt/gte/lt/lte` **kind 感知，不隐式转型**：`0` ≠ `"0"` | `value` 字面量类型必须与 payload 一致 |
+| F5 | `name` 规则先跑，**仅首个命中**写入 `_meta.msg_name`（按声明顺序） | 多条 name 规则只有第一条有效，其余空转 |
+| F6 | pair 待配对池是 `semanticEngine.pending`（每个抓包任务一个），键 = `ConnID + \x00 + RuleID + \x00 + 配对键`；`MatchPair` 只比「同规则 + 键相等 + Side 不同」 | 配对键只需**连接内唯一**；无 `ConnID` 的事件（无五元组）退化为全局池 |
+| F7 | 待配对 TTL **30s**，且事件 flush 落库后配对不回写（宿主注释已标为已知限制） | 异步/长轮询/匹配队列这类响应不能声明 pair |
+| F8 | `evalPair` 短路：命中 side i 就取 side i 的 key，key 缺失**直接 no-hit，不再试另一侧** | pair 两侧谓词必须互斥，两侧 key 都必须存在 |
+| F9 | extract 的 `source` 指向标量 / `null` → **静默产出 0 个子事件** | `exists` 通过不代表能拆；必须是数组或对象 |
+| F10 | annotate 同一标签去重后写入 `meta.semantic` 数组 | 不要为同一 semantic 声明多条规则 |
+| F11 | `CorrelationKey` 是**业务会话/操作**标识；pair 命中时 `Trace.CorrelationID` 被更紧的「一问一答」分组键（请求方事件 ID）覆盖，原值转存 `Meta.corr_key` | 别把连接身份（五元组 / `flow_id` / `FlowKey.Canonical()`）填进 `CorrelationKey`——它会被 pair 结果吃掉，且连接身份宿主已经自己派生 |
 
-规则注释写明证据来源（**官方案例**）：
+求值顺序：**全部 `name` 规则（按声明顺序，首个命中注入 `_meta.msg_name`）→ 其余规则**。因此凡用 `_meta.msg_name` 分支的 annotate/pair，前提是 name 规则确实命中；name 未命中时后续分支全部落空。
+
+**F6 详解：连接维度是怎么来的**（`cmd/gt-pipeline/semantic_hook.go` `applyPairs`）。早期版本配对池是全局单表（键只有 `RuleID + 配对键`），两条 TCP 连接 A、B 用 per-connection 自增 `seq`（各从 1 开始）时：
+
+1. A 发 `seq=1` 请求 → `pending["rule\x001"] = A的请求`（Side 0）
+2. B 发 `seq=1` 请求 → `MatchPair(Side 0, Side 0)` 同侧返回 false → 落到 `e.pending[mapKey] = B的请求`，**A 的请求被静默覆盖，永久丢失**
+3. A 回 `seq=1` 响应（Side 1）→ 与 B 的请求 Side 不同 → **判定配对成功**
+
+结果：A 的响应配到 B 的请求，`causation_id` 指向 B。单连接时 `seq` 唯一不会暴露——这也是示例插件从未触发该问题的原因。
+
+> **平台已修复（2026-09-15）**：pair 池按 `ConnID` 分片，配对键只需**连接内唯一**。
+> per-connection 自增 seq 这类键现在可以正常声明。
+>
+> `ConnID` 是**业务连接实例标识**，与五元组解耦：
+> **识别**连接边界靠网络事实（五元组 + TCP SYN/FIN/RST，绕不开），
+> **标识**连接实例用 `connTracker` 派生的 `ConnectionID`（`cmd/gt-pipeline/conn_tracker.go`）——
+> 格式 `tcp:10.0.0.2:50000<->10.0.0.1:9250#3`，`#N` 是代次。
+> 纯 SYN（不带 ACK）开新一代；FIN 半关闭到两侧才退役；RST 立即退役。
+> 因此**重连复用同一五元组会拿到新 ID**，两代连接的 seq 不会混。
+>
+> 注意：只有 pcap / 网卡抓包带 TCP 控制位；探针（agent）上报不带，
+> 此时退化为"每五元组一个实例、不退役"——比修复前不差，但代次无法区分。
+> 移动代理自带真实 `conn_id`，原样保留不参与派生。
+
+#### 5.3 规则选取：四道准入门
+
+目标是"能用规则表达的语义尽量用规则，且每条都站得住"，**不是写得越多越好**。每条候选规则必须依次过四道门；**任一不过就不写**，进「待确认」清单问用户。
+
+| 门 | 判据 | 不过的典型表现 |
+|---|---|---|
+| **G1 证据门** | 说得出出处（官方客户端/服务端源码 > 真实抓包报文 > 协议文档），注释能写清"哪个消息、哪个字段、哪一侧" | 注释里写不出依据来源 |
+| **G2 路径门** | `when.path` / `effect.key` / `effect.source` 在**真实解码产物**上存在，且类型确定（数字/字符串/数组/对象） | path 拼错、字段只在部分消息存在、`source` 是标量 |
+| **G3 取值门** | `when.value` 与配对键取值在真实报文里**出现过**，且字面量 kind 与 payload 一致（F4） | 规则永不命中（死规则） |
+| **G4 效果门** | 该 effect 在本协议真能成立：pair 键连接内唯一 + 30s 内往返；extract 的 source 是数组/对象；annotate 方向可判定 | 结构合法但运行期落空或错配 |
+
+排序约束：先 `name` → 再 `annotate` → 最后 `pair`。pair 风险最高（错配会直接污染前端左右并排展示），证据要求最严。
+
+#### 5.4 各 effect 的判据与反例
+
+**`name`** —— 判据：提取字段在**全部目标消息**里都存在且能区分消息。
+反例：只在部分消息存在的字段当全局 name；声明多条 name 规则指望"互补"（F5：只有第一条生效）。
+
+**`annotate`** —— 判据：角色由**可判定的事实**推出：`_meta.direction`、消息身份、或协议里明确的推送标志位（如 `seq == 0`）。**双向都发的消息留空不标**。
+反例：凭"我觉得这是请求"标注；照搬别的协议的标签。
+
+**`pair`** —— 判据（五条全满足）：
+1. 两侧 key 在真实"一问一答"里取值相等（回显字段，抓包核对过）；
+2. 两侧谓词互斥（F8），都指向 `_meta.direction` 或其他互斥事实；
+3. 配对键**连接内唯一**（F6：pair 池已按 ConnID 分片，per-connection 自增 seq 可用）；
+4. 往返在 30s 内且未经 flush（F7）；
+5. `when` 已拦截推送/广播。
+
+反例：两侧谓词都用 `exists` 导致永远命中 side 0（F8）。
+（per-connection 自增 seq 曾经是反例，F6 修复后已可用——但前提是事件带 `ConnID`，
+探针上报等无连接标识的来源仍会退化成全局池，此时仍按"全局唯一"要求自己。）
 
 ```yaml
 # 依 据：客户端发 [request_choice] 带 request_id；服务端在 [random_seed] /
-#         [change_controller_wml] 里回显同一 request_id（见服务端源码）。
+#        [change_controller_wml] 里回显同一 request_id（见服务端源码）。
+# 配对键：request_id 由服务端全局发号，跨连接唯一（已抓包核对无重复）。
+# 拦 截：when 限定 request_id 存在，服务端主动推送不带该字段，不参与配对。
 - id: wesnoth.pair_choice
   when: [ { path: request_id, op: exists } ]
   effect:
     type: pair
     sides:
-      - { path: msg_type, op: eq, value: request_choice, key: request_id }
-      - { path: msg_type, op: in, value: [random_seed, change_controller_wml], key: request_id }
+      - { path: _meta.direction, op: eq, value: client_to_server, key: request_id }
+      - { path: _meta.direction, op: eq, value: server_to_client, key: request_id }
 ```
 
-**依据来源按可信度**：官方客户端/服务端源码 > 真实抓包报文 > 协议文档（与 §1 一致）。
+**`extract`**（门槛最高，默认不主动写）—— 判据：
+1. `source` 在真实报文里是**数组或对象**，不是标量、也不是"看起来像列表的字符串"（F9）；
+2. 父-子确实是"一拆多"（一个网络消息承载多个逻辑子事件），不是两种平级消息；
+3. `child` 同时给 `event_type` 与 `schema_id`（两者必填）；
+4. 回放后子事件数 ≥1（见 §5.5）。
 
-**注册期只校验结构与路径，不校验语义事实**：规则 id 格式、effect 在闭集、pair 两侧各带 `key`、`when.path` 能对上 payload——这些检查通过**不代表规则在真实报文上成立**。`when.value` 是否真实出现、配对键是否真的相等、方向标签是否属实，注册校验抓不到；**虚构规则能通过注册，然后在运行期误导展示**。
+反例：`source` 指向字符串字段；`child` 漏 `schema_id`；把两种平级消息误当父子（搅乱前端层级）。
 
-**拿不准时列"待确认"清单问用户，不要猜**。协议分析时把证据不足的候选规则写进问题清单，逐条问用户，确认后再写入 plugin.yaml。例："[request_choice] 的服务端回应是 [random_seed] 和 [change_controller_wml] 都算，还是只有一个是响应？""聊天/加房这类双向标签到底该标什么？"
+#### 5.5 覆盖率回放（诊断产出，人工判定）
+
+声明合法 ≠ 运行期生效。规则写完后**必须**用真实抓包固件（或固件解码出的 payload + meta）回放并产出覆盖率表，**把表交给用户逐条判定**。0 命中的规则不得静默保留：删除 / 修正 / 在注释写明"已知未覆盖 + 原因 + 判定人"，三选一。
+
+两个指标，判据不同（示例代码可直接放进 `decode_test.go`）：
+
+```go
+// 指标一：逐条孤立回放 —— 该规则在固件上是否具备命中能力（G3/G4 的机器验证）。
+// 必须孤立跑：全量回放的 annotate 结果不带 RuleID，无法归因到具体规则。
+func ruleHits(t *testing.T, m *sdk.Manifest, views []sdkevent.Value) map[string]int {
+	t.Helper()
+	hits := make(map[string]int, len(m.SemanticRules))
+	for _, r := range m.SemanticRules {
+		for _, v := range views {
+			res, err := rule.Evaluate([]rule.Rule{r}, v)
+			if err != nil {
+				t.Fatalf("rule %s evaluate: %v", r.ID, err)
+			}
+			if len(res.Names)+len(res.Pairs)+len(res.Children)+len(res.Semantics) > 0 {
+				hits[r.ID]++
+			}
+		}
+	}
+	return hits
+}
+
+// 指标二：全量回放 —— name 规则只有首个命中会写入 _meta.msg_name（F5），
+// 孤立回放会高估，必须单独确认"实际生效"的是哪一条。
+func effectiveNameRules(t *testing.T, m *sdk.Manifest, views []sdkevent.Value) map[string]int {
+	t.Helper()
+	eff := map[string]int{}
+	for _, v := range views {
+		res, err := rule.Evaluate(m.SemanticRules, v)
+		if err != nil {
+			t.Fatalf("evaluate: %v", err)
+		}
+		if len(res.Names) > 0 {
+			eff[res.Names[0].RuleID]++
+		}
+	}
+	return eff
+}
+```
+
+> 片段依赖：`sdk`（`ParseManifest`）、`sdkrule "…/sdk/rule"`、`sdkevent "…/sdk/event"`。
+> `views` 是固件解码出的求值视图，构造方式与示例插件一致——`payload` 与 `meta` 合并成
+> `payload + {"_meta": meta}`（F1），保证与宿主 `withMetaObject` 的行为一致。
+
+产出表格交用户判定：
+
+| 规则 id | effect | 固件命中数 | name 实际生效 | 判定 |
+|---|---|---|---|---|
+| `foo.pair_ts` | pair | 12 | — | 保留 |
+| `foo.mark_push` | annotate | 0 | — | **删**：固件无推送样本，G3 不过 |
+
+判定规则：
+- 命中数 0 → 死规则，默认删除；确需保留（固件覆盖不到的稀有分支）必须在注释写明原因并经用户确认。
+- 多条 `name` 规则里"实际生效"为 0 → 空转规则，删除或调整声明顺序。
+- `pair` 两侧命中数应成对（各 N 次）；只命中一侧说明对侧谓词或 key 有问题（F8）。
+
+#### 5.6 虚构/无依据规则的常见说辞（都要拒绝）
 
 **虚构/无依据规则的常见说辞（都要拒绝）**：
 
@@ -477,10 +611,11 @@ pair 恰好 2 个 `sides`，每侧自带 `key`（该侧配对键 GJSON path，�
 3. 全链路：单帧解码、**一个消息跨多个 TCP 段**（reassembly，TCP）、同包多帧。
 4. 握手（TCP）：握手被消费、mid-stream attach（无握手段）。
 5. 畸形输入：非法长度、截断、压缩损坏 → 不 panic、不无限循环。
-6. **多连接**：两条独立连接互不干扰，correlation_key 不同。
+6. **多连接**：两条独立连接互不干扰（连接隔离由宿主 `ConnID` 保证，pair 池已按连接分片，见 F6）。
 7. **5-tuple 复用（重连，TCP）**：SYN 后新连接握手被再次正确消费（回归坑 1/坑 2）。
-8. manifest 一致性：`semantic_rules` 引用的 payload 路径（`when.path`/`effect.key`/`effect.source`）能实际解析，无死规则；**并用真实抓包固件核对规则取值**——`when.value`/配对 `key` 引用的值确实出现在真实报文（注册校验不查语义事实，见 §5.2）；不出现即证据不足，回退 §5.2 与用户确认。
-9. **Payload 纯度**：断言 payload 中不含协议外字段（对照 4.2 硬约束）。
+8. manifest 一致性：`semantic_rules` 引用的 payload 路径（`when.path`/`effect.key`/`effect.source`）能实际解析；`contract.NewPluginChecker().Check(m)` 零 violation。
+9. **规则覆盖率回放（§5.5，必做）**：用真实抓包固件跑 `rule.Evaluate`，产出「逐条命中数 + name 实际生效」覆盖率表并**交用户判定**；0 命中规则不得静默保留。声明期校验（`gt.semantic.*`）不查语义事实，只过它不能证明规则有效。
+10. **Payload 纯度**：断言 payload 中不含协议外字段（对照 4.2 硬约束）。
 
 固件构造用 `gopacket` 拼以太网 + IPv4 + TCP 帧，使 `framing.ExtractL7` 能读出端口（用于方向判定）；测试内对压缩负载直接预压缩后写入。
 
@@ -510,10 +645,17 @@ go test -count=1 ./...   # 必须 -count=1：go test 缓存会掩盖问题
 - [ ] Payload 为 JSON 可表达结构（key=value/二进制已转结构化字段）
 - [ ] 嵌套/编码字段是否拆分已与用户确认
 - [ ] 原始文本默认进 Meta；进 payload 需用户确认并声明 optional + 截断
-- [ ] 事件设了 CorrelationKey
-- [ ] 每条 semantic_rules 都写了证据注释（哪个消息/字段/哪一侧、依据来源）；无证据的规则不写或已进「待确认」清单问用户（§5.2）
+- [ ] **`CorrelationKey` 没被当成连接标识**：没有填 `seg.Flow.Canonical()` / `flow_id` / 五元组；只填了协议里的业务会话/操作 id，没有就不填（连接身份归宿主 `ConnID`）
+- [ ] payload 里没有 `_meta` 键（F1：有则平台不再合并 Meta）
+- [ ] 解码器写了 `Meta["direction"]`，取值只用 `client_to_server` / `server_to_client`（F2）
+- [ ] **每条 semantic_rules 都过了四道门**（§5.3）：G1 证据 / G2 路径 / G3 取值 / G4 效果；任缺一条的不写，进「待确认」清单问用户
+- [ ] 规则注释写了依据来源（哪个消息/字段/哪一侧、源码还是抓包）
+- [ ] `when` 没有用 `neq` 表达"字段不存在"（F3）；`value` 字面量类型与 payload 一致（F4）
+- [ ] `name` 规则至多一条生效，多条时确认过声明顺序（F5）
+- [ ] `pair` 配对键**连接内唯一**（F6，per-connection seq 可用）且已抓包核对；两侧谓词互斥（F8）；往返 30s 内（F7）；推送/广播已被 `when` 拦截
+- [ ] `extract` 的 `child` 同时给了 `event_type` 与 `schema_id`；`source` 确认是数组/对象而非标量（F9）
 - [ ] 双向都发的消息 `annotate` 已留空（不标错方向/角色）；标错比不标更糟
-- [ ] `pair` 两侧 `key` 取值已在真实报文核对相等；推送/广播已被 `when` 拦截
-- [ ] 测试覆盖：跨段重组、多连接、5-tuple 复用、manifest 一致性（UDP 插件加：分包独立、无握手）+ 真实抓包固件核对规则取值
+- [ ] 已跑覆盖率回放并产出覆盖率表交用户判定，0 命中规则已删除或写明原因（§5.5）
+- [ ] 测试覆盖：跨段重组、多连接、5-tuple 复用、manifest 一致性（UDP 插件加：分包独立、无握手）
 - [ ] `go vet` + `go build` + `go test -count=1` 全过
 - [ ] 宿主日志无 semantic rules error；前端消息名正确显示
