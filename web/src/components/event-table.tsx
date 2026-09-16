@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import type { DecodedEvent } from "@/types/event";
 import type { ConnectionSummary } from "@/types/connection";
+// 状态变更弹窗复用于 state-change-explorer：同一套 details 渲染，不另起一份。
+import { DetailDialog } from "./state-change-explorer";
 import {
   extractMeta,
   formatTimestamp,
@@ -105,6 +107,14 @@ function SummaryCell({ parts }: { parts: SummaryPart[] }) {
       ))}
     </span>
   );
+}
+
+/** 事件自带的变更数：优先 analysis.change_count，缺字段时回退到 _state_changes 长度。 */
+function stateChangeCount(event: DecodedEvent): number {
+  const analysis = analysisOf(event);
+  if (typeof analysis.change_count === "number") return analysis.change_count;
+  const sc = analysis._state_changes;
+  return Array.isArray(sc) ? sc.length : 0;
 }
 
 /** 复制 JSON 到剪贴板（失败给 toast，不静默）。 */
@@ -636,6 +646,7 @@ const EventRow = memo(function EventRow({
   onJumpToPartner,
   onJumpToChild,
   onCollapse,
+  onOpenStateChange,
 }: {
   event: DecodedEvent;
   partners: DecodedEvent[];
@@ -646,10 +657,12 @@ const EventRow = memo(function EventRow({
   onJumpToPartner: (id: string) => void;
   onJumpToChild: (id: string) => void;
   onCollapse: (id: string) => void;
+  onOpenStateChange: (id: string) => void;
 }) {
   const meta = useMemo(() => extractMeta(event.data, event.meta), [event.data, event.meta]);
   const summary = useMemo(() => summarizePayload(event.data, meta), [event.data, meta]);
-  const colSpan = 5;
+  const changeCount = useMemo(() => stateChangeCount(event), [event]);
+  const colSpan = 6;
 
   return (
     <Fragment key={event.id}>
@@ -704,6 +717,29 @@ const EventRow = memo(function EventRow({
         <TableCell className="w-16 py-2 text-right tabular-nums text-xs text-muted-foreground whitespace-nowrap">
           {formatSize(event.raw_len)}
         </TableCell>
+
+        {/* 状态变更入口：只有真正产生了实体变化的消息才有按钮 */}
+        <TableCell className="w-16 py-2 text-right whitespace-nowrap">
+          {changeCount > 0 ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenStateChange(event.id);
+              }}
+              title={`查看这条消息产生的 ${changeCount} 条实体状态变化`}
+              aria-label={`查看这条消息产生的 ${changeCount} 条实体状态变化`}
+              className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-primary hover:bg-primary/20"
+            >
+              <Activity className="h-3 w-3" />
+              {changeCount}
+            </button>
+          ) : (
+            <span className="text-[11px] text-muted-foreground/30" aria-hidden="true">
+              —
+            </span>
+          )}
+        </TableCell>
       </TableRow>
 
       {isExpanded && (
@@ -729,6 +765,8 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
   // 允许多行同时展开：对比请求/响应时不用来回点，这是最常见的阅读动作。
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  // 从事件表直接看实体变化：记下被点开的消息 id，弹窗走 get_state_change_detail(event_id)。
+  const [scEventId, setScEventId] = useState<string | null>(null);
 
   useEffect(() => {
     setPage(0);
@@ -950,6 +988,7 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
             <TableHead className="min-w-[220px]">消息</TableHead>
             <TableHead>摘要</TableHead>
             <TableHead className="w-16 text-right">大小</TableHead>
+            <TableHead className="w-16 text-right">状态变更</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -965,6 +1004,7 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
               onJumpToPartner={handleJumpTo}
               onJumpToChild={handleJumpTo}
               onCollapse={handleCollapse}
+              onOpenStateChange={setScEventId}
             />
           ))}
         </TableBody>
@@ -985,6 +1025,14 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
           </Button>
         </div>
       )}
+
+      {/* 实体状态变化弹窗：按行上的「状态变更」按钮唤起 */}
+      <DetailDialog
+        sessionId={sessionId}
+        detail={scEventId ? { eventId: scEventId } : null}
+        onClose={() => setScEventId(null)}
+        timeMode="relative"
+      />
     </div>
   );
 }

@@ -101,6 +101,11 @@ function compactJson(value: unknown): string {
   }
 }
 
+/** 前值展示：全量下发的帧本来就没有前值，渲染成 ∅ 会被读成「数据丢了」。 */
+function fromText(value: unknown): string {
+  return value === undefined || value === null ? "无前值" : compactJson(value);
+}
+
 /** 逗号/空格分隔的输入 → 数组。 */
 function parseList(v: string): string[] {
   return v
@@ -211,11 +216,15 @@ export function StateChangeExplorer({ sessionId, query, direction, connFilter }:
     [changes, hasFilter, query, direction, connFilter],
   );
 
-  // 锚点候选随查询结果累积：先看到什么就能拿什么当锚点，不必额外拉全量列表。
-  const [catalog, setCatalog] = useState<{ ops: { key: string; label: string }[]; entities: string[] }>({
-    ops: [],
-    entities: [],
-  });
+  // 锚点候选与过滤候选随查询结果累积：不必额外拉全量列表，
+  // 也不用要求用户先记住 Power / value / set 这些协议词才敢下过滤条件。
+  const [catalog, setCatalog] = useState<{
+    ops: { key: string; label: string }[];
+    entities: string[];
+    subjectTypes: string[];
+    paths: string[];
+    changeOps: string[];
+  }>({ ops: [], entities: [], subjectTypes: [], paths: [], changeOps: [] });
   useEffect(() => {
     if (!data) return;
     setCatalog((prev) => {
@@ -227,7 +236,21 @@ export function StateChangeExplorer({ sessionId, query, direction, connFilter }:
       for (const e of data.entities ?? []) {
         if (!entities.includes(e.key)) entities.push(e.key);
       }
-      return { ops, entities };
+      const add = (arr: string[], v: string) => {
+        if (v && !arr.includes(v)) arr.push(v);
+      };
+      const subjectTypes = [...prev.subjectTypes];
+      const paths = [...prev.paths];
+      const changeOps = [...prev.changeOps];
+      for (const c of data.changes ?? []) {
+        add(subjectTypes, c.subject_type);
+        add(paths, c.path);
+        add(changeOps, c.op);
+      }
+      subjectTypes.sort();
+      paths.sort();
+      changeOps.sort();
+      return { ops, entities, subjectTypes, paths, changeOps };
     });
   }, [data]);
 
@@ -446,7 +469,13 @@ interface QueryBarProps {
   onAnchorKind: (k: AnchorKind) => void;
   anchorId: string;
   onAnchorId: (v: string) => void;
-  catalog: { ops: { key: string; label: string }[]; entities: string[] };
+  catalog: {
+    ops: { key: string; label: string }[];
+    entities: string[];
+    subjectTypes: string[];
+    paths: string[];
+    changeOps: string[];
+  };
   beforeMs: number;
   afterMs: number;
   onBeforeMs: (v: number) => void;
@@ -577,26 +606,47 @@ function QueryBar(p: QueryBarProps) {
 
       <span className="ml-1 text-muted-foreground">过滤</span>
       <input
+        list="sc-suggest-types"
         className="h-7 w-28 rounded-md border border-border bg-background px-1.5 text-xs"
         placeholder="实体类型"
         value={p.typeFilter}
         onChange={(e) => p.onTypeFilter(e.target.value)}
         aria-label="按实体类型过滤"
+        title="从当前查询结果自动收集候选值，逗号分隔可填多个"
       />
+      <datalist id="sc-suggest-types">
+        {p.catalog.subjectTypes.map((t) => (
+          <option key={t} value={t} />
+        ))}
+      </datalist>
       <input
+        list="sc-suggest-paths"
         className="h-7 w-28 rounded-md border border-border bg-background px-1.5 text-xs"
         placeholder="字段路径"
         value={p.pathFilter}
         onChange={(e) => p.onPathFilter(e.target.value)}
         aria-label="按字段路径过滤"
+        title="从当前查询结果自动收集候选值，逗号分隔可填多个"
       />
+      <datalist id="sc-suggest-paths">
+        {p.catalog.paths.map((t) => (
+          <option key={t} value={t} />
+        ))}
+      </datalist>
       <input
+        list="sc-suggest-ops"
         className="h-7 w-24 rounded-md border border-border bg-background px-1.5 text-xs"
         placeholder="变化类型"
         value={p.opFilter}
         onChange={(e) => p.onOpFilter(e.target.value)}
         aria-label="按变化类型过滤"
+        title="从当前查询结果自动收集候选值（set / merge / delete），逗号分隔可填多个"
       />
+      <datalist id="sc-suggest-ops">
+        {p.catalog.changeOps.map((t) => (
+          <option key={t} value={t} />
+        ))}
+      </datalist>
 
       <div className="ml-auto flex items-center gap-2">
         <button
@@ -625,10 +675,13 @@ function SummaryBar({ data }: { data: { summary: { change_count: number; entity_
   const s = data.summary;
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-muted-foreground" aria-live="polite">
-      <span className="tabular-nums">
+      <span
+        className="tabular-nums"
+        title="概览统计的是本次查询结果的全部变更；下方每个组卡片里的计数只统计该组"
+      >
         <b className="font-semibold text-foreground">{s.change_count}</b> 条变化 ·{" "}
         <b className="font-semibold text-foreground">{s.entity_count}</b> 个实体 ·{" "}
-        <b className="font-semibold text-foreground">{s.field_count}</b> 个字段 ·{" "}
+        <b className="font-semibold text-foreground">{s.field_count}</b> 种字段 ·{" "}
         <b className="font-semibold text-foreground">{s.operation_count}</b> 次操作
       </span>
       {data.anchor?.resolved && (
@@ -654,6 +707,132 @@ interface ViewHandlers {
   onDetail: (d: { changeId?: string; eventId?: string; entity?: string; path?: string }) => void;
 }
 
+/** 组内主导实体：本次操作里改动最多的那个，拿它当组头的业务主语。 */
+function leadEntity(g: OperationGroup): EntityGroup | undefined {
+  if (!g.entities?.length) return undefined;
+  return g.entities.reduce((a, b) => (b.change_count > a.change_count ? b : a));
+}
+
+/** 同类型实体的聚合桶：10 个 Power:1001-* 先收成一行，点开才列出具体实体。 */
+interface EntityTypeBucket {
+  subject_type: string;
+  /** 该类型下的具体实体，按变化数降序。 */
+  entities: EntityGroup[];
+  entity_count: number;
+  change_count: number;
+  /** 该类型涉及的全部字段路径（去重，保持首次出现顺序）。 */
+  field_paths: string[];
+  first_offset_ms: number;
+  last_offset_ms: number;
+  first_change?: string;
+  last_change?: string;
+}
+
+function groupEntitiesByType(entities: EntityGroup[]): EntityTypeBucket[] {
+  const byType = new Map<string, EntityTypeBucket>();
+  for (const e of entities) {
+    let b = byType.get(e.subject_type);
+    if (!b) {
+      b = {
+        subject_type: e.subject_type,
+        entities: [],
+        entity_count: 0,
+        change_count: 0,
+        field_paths: [],
+        first_offset_ms: e.first_offset_ms,
+        last_offset_ms: e.last_offset_ms,
+        first_change: e.first_change,
+        last_change: e.last_change,
+      };
+      byType.set(e.subject_type, b);
+    }
+    b.entity_count += 1;
+    b.change_count += e.change_count;
+    for (const p of e.field_paths) {
+      if (!b.field_paths.includes(p)) b.field_paths.push(p);
+    }
+    if (e.first_offset_ms < b.first_offset_ms) {
+      b.first_offset_ms = e.first_offset_ms;
+      b.first_change = e.first_change;
+    }
+    if (e.last_offset_ms > b.last_offset_ms) {
+      b.last_offset_ms = e.last_offset_ms;
+      b.last_change = e.last_change;
+    }
+    b.entities.push(e);
+  }
+  const out = [...byType.values()];
+  // 变化多的类型排在前面，避免 10 个同形 Power 把真正的主角挤出首屏。
+  out.sort((x, y) => y.change_count - x.change_count || x.subject_type.localeCompare(y.subject_type));
+  for (const b of out) {
+    b.entities.sort((x, y) => y.change_count - x.change_count || x.key.localeCompare(y.key));
+  }
+  return out;
+}
+
+/**
+ * 实体类型聚合块。默认折叠（仅一个实体的类型直接展开，多一次点击没意义），
+ * 点标题展开该类型下的具体实体。focus 命中类型内实体时自动展开，保证跨视图跳转看得见落点。
+ */
+function EntityTypeSection({
+  bucket,
+  focus,
+  timeMode,
+  children,
+}: {
+  bucket: EntityTypeBucket;
+  focus: { entity?: string };
+  timeMode: "relative" | "absolute";
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(bucket.entity_count === 1);
+  const hasFocus = !!focus.entity && bucket.entities.some((e) => e.key === focus.entity);
+  useEffect(() => {
+    if (bucket.entity_count === 1 || hasFocus) setOpen(true);
+  }, [bucket.entity_count, hasFocus]);
+
+  // 类型下只有一个实体时直接以它为标题并展开，没必要让用户多点一次。
+  const only = bucket.entity_count === 1 ? bucket.entities[0] : undefined;
+  const title = only ? `${only.subject_type}:${only.subject_id}` : bucket.subject_type;
+  const preview = bucket.field_paths.slice(0, 5);
+  const restFields = bucket.field_paths.length - preview.length;
+
+  return (
+    <div className={cn("rounded border border-border/70", hasFocus && "border-primary/60")}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5 text-left hover:bg-muted/40"
+      >
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+        )}
+        <span className="font-mono text-xs font-semibold">{title}</span>
+        <span className="text-[11px] text-muted-foreground">
+          {bucket.change_count} 次变化
+          {!only && ` · ${bucket.entity_count} 个实体`} · {bucket.field_paths.length} 种字段
+        </span>
+        {bucket.field_paths.length > 0 && (
+          <span className="truncate font-mono text-[10px] text-muted-foreground/70" title={bucket.field_paths.join(", ")}>
+            {preview.join(", ")}
+            {restFields > 0 && ` +${restFields}`}
+          </span>
+        )}
+        <TimeLabel
+          offsetMs={bucket.first_offset_ms}
+          iso={bucket.first_change}
+          mode={timeMode}
+          className="ml-auto text-muted-foreground"
+        />
+      </button>
+      {open && <div className="space-y-1 border-t border-border/70 p-1">{children}</div>}
+    </div>
+  );
+}
+
 function OperationView({
   groups,
   focus,
@@ -667,70 +846,96 @@ function OperationView({
 } & ViewHandlers) {
   return (
     <div className="gt-scroll flex-1 space-y-2 overflow-y-auto pr-1">
-      {groups.map((g) => (
-        <div
-          key={g.key}
-          id={`sc-op-${g.key}`}
-          className={cn(
-            "rounded-lg border border-border bg-card p-3 transition-shadow",
-            focus.op === g.key && "ring-2 ring-primary/60",
-          )}
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <KindBadge kind={g.kind} />
-            <span className="font-mono text-sm font-semibold">{g.label}</span>
-            <TimeLabel offsetMs={g.start_offset_ms} iso={g.anchor.timestamp} mode={timeMode} className="text-muted-foreground" />
-            <span className="text-[11px] text-muted-foreground">
-              {g.entity_count} 个实体 · {g.change_count} 次变化 · {g.field_count} 个字段
-            </span>
-            <div className="ml-auto flex items-center gap-1">
-              <IconBtn title="以此操作为锚点" onClick={() => onAnchor(g.key)}>
-                <Crosshair className="h-3 w-3" />
-              </IconBtn>
-              <IconBtn title="查看完整协议链" onClick={() => onDetail({ eventId: g.anchor.event_id })}>
-                <History className="h-3 w-3" />
-              </IconBtn>
+      {groups.map((g) => {
+        const lead = leadEntity(g);
+        const typeBuckets = groupEntitiesByType(g.entities ?? []);
+        // anchor 已经作为组头上的协议名出现过一次，链里只列同操作的其余消息，
+        // 否则同一串「响应 SyncProfile T+400ms」会在同一屏里连着出现两遍。
+        const chain = (g.chain ?? []).filter((m) => m.event_id !== g.anchor.event_id);
+        return (
+          <div
+            key={g.key}
+            id={`sc-op-${g.key}`}
+            className={cn(
+              "rounded-lg border border-border bg-card p-3 transition-shadow",
+              focus.op === g.key && "ring-2 ring-primary/60",
+            )}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-mono text-sm font-semibold">
+                {lead ? `${lead.subject_type}:${lead.subject_id}` : g.label}
+              </span>
+              {lead && g.entity_count > 1 && (
+                <span className="text-[11px] text-muted-foreground">等 {g.entity_count} 个实体</span>
+              )}
+              {lead && (
+                <span
+                  className="inline-flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5"
+                  title="协议名：本次操作对应的协议消息（次要信息）"
+                >
+                  <KindBadge kind={g.kind} />
+                  <span className="font-mono text-[10px] text-muted-foreground">{g.label}</span>
+                </span>
+              )}
+              <TimeLabel offsetMs={g.start_offset_ms} iso={g.anchor.timestamp} mode={timeMode} className="text-muted-foreground" />
+              <span className="text-[11px] text-muted-foreground">
+                {g.change_count} 次变化 · {g.field_count} 种字段
+              </span>
+              <div className="ml-auto flex items-center gap-1">
+                <IconBtn title="以此操作为锚点" onClick={() => onAnchor(g.key)}>
+                  <Crosshair className="h-3 w-3" />
+                </IconBtn>
+                <IconBtn title="查看完整协议链" onClick={() => onDetail({ eventId: g.anchor.event_id })}>
+                  <History className="h-3 w-3" />
+                </IconBtn>
+              </div>
+            </div>
+
+            {chain.length > 0 && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] text-muted-foreground/70">同操作其余消息</span>
+                {chain.map((m, i) => (
+                  <span key={m.event_id} className="inline-flex items-center gap-1.5">
+                    {i > 0 && <ArrowRight className="h-3 w-3 text-muted-foreground/60" />}
+                    <button
+                      type="button"
+                      onClick={() => onDetail({ eventId: m.event_id })}
+                      title={`${m.msg_name} · ${absTime(m.timestamp)} · ${m.event_id}`}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-[11px] hover:bg-muted/60",
+                        m.kind === "request" && "border-sky-300/60",
+                        m.kind === "push" && "border-amber-300/60",
+                      )}
+                    >
+                      <KindBadge kind={m.kind} />
+                      {m.msg_name}
+                      <TimeLabel offsetMs={m.offset_ms} iso={m.timestamp} mode={timeMode} className="text-muted-foreground/70" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* 实体（按类型聚合）→ 字段变化 */}
+            <div className="mt-2 space-y-1">
+              {typeBuckets.map((b) => (
+                <EntityTypeSection key={b.subject_type} bucket={b} focus={focus} timeMode={timeMode}>
+                  {b.entities.map((e) => (
+                    <EntityRow
+                      key={e.key}
+                      entity={e}
+                      timeMode={timeMode}
+                      focus={focus}
+                      onOpen={() => onFocusEntity(e.key)}
+                      onDetail={onDetail}
+                    />
+                  ))}
+                </EntityTypeSection>
+              ))}
             </div>
           </div>
-
-          {/* 协议连：请求 → 响应 → 推送 */}
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {g.chain.map((m, i) => (
-              <span key={m.event_id} className="inline-flex items-center gap-1.5">
-                {i > 0 && <ArrowRight className="h-3 w-3 text-muted-foreground/60" />}
-                <button
-                  type="button"
-                  onClick={() => onDetail({ eventId: m.event_id })}
-                  title={`${m.msg_name} · ${absTime(m.timestamp)} · ${m.event_id}`}
-                  className={cn(
-                    "inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-[11px] hover:bg-muted/60",
-                    m.kind === "request" && "border-sky-300/60",
-                    m.kind === "push" && "border-amber-300/60",
-                  )}
-                >
-                  <KindBadge kind={m.kind} />
-                  {m.msg_name}
-                  <TimeLabel offsetMs={m.offset_ms} iso={m.timestamp} mode={timeMode} className="text-muted-foreground/70" />
-                </button>
-              </span>
-            ))}
-          </div>
-
-          {/* 实体 → 字段变化 */}
-          <div className="mt-2 space-y-1">
-            {g.entities?.map((e) => (
-              <EntityRow
-                key={e.key}
-                entity={e}
-                timeMode={timeMode}
-                focus={focus}
-                onOpen={() => onFocusEntity(e.key)}
-                onDetail={onDetail}
-              />
-            ))}
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -748,66 +953,99 @@ function EntityView({
   groups: EntityGroup[];
   onFocusOperation: (key: string) => void;
 } & ViewHandlers) {
+  const typeBuckets = useMemo(() => groupEntitiesByType(groups), [groups]);
   return (
     <div className="gt-scroll flex-1 space-y-2 overflow-y-auto pr-1">
-      {groups.map((g) => (
-        <div
-          key={g.key}
-          id={`sc-ent-${g.key}`}
-          className={cn(
-            "rounded-lg border border-border bg-card p-3 transition-shadow",
-            focus.entity === g.key && "ring-2 ring-primary/60",
-          )}
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <EntityChip entity={g} />
-            <span className="text-[11px] text-muted-foreground">
-              {g.change_count} 次变化 · {g.field_count} 个字段
-            </span>
-            <TimeLabel offsetMs={g.first_offset_ms} iso={g.first_change} mode={timeMode} className="text-muted-foreground" />
-            <ArrowRight className="h-3 w-3 text-muted-foreground/60" />
-            <TimeLabel offsetMs={g.last_offset_ms} iso={g.last_change} mode={timeMode} className="text-muted-foreground" />
-            <div className="ml-auto flex items-center gap-1">
-              <IconBtn title="以该实体为锚点" onClick={() => onAnchor(g.key)}>
-                <Crosshair className="h-3 w-3" />
-              </IconBtn>
-              <IconBtn title="查看完整变化历史" onClick={() => onDetail({ entity: g.key })}>
-                <History className="h-3 w-3" />
-              </IconBtn>
-            </div>
-          </div>
-
-          {g.field_paths.length > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-1">
-              {g.field_paths.map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => onDetail({ entity: g.key, path: p })}
-                  title={`查看字段 ${p} 的完整历史`}
-                  className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* 操作/事件 → 多次字段变化 */}
-          <div className="mt-2 space-y-1">
-            {g.operations?.map((hit) => (
-              <OperationHitRow
-                key={hit.key}
-                hit={hit}
-                timeMode={timeMode}
-                onOpen={() => onFocusOperation(hit.key)}
-                onDetail={onDetail}
-                entityKey={g.key}
-              />
-            ))}
-          </div>
-        </div>
+      {typeBuckets.map((b) => (
+        <EntityTypeSection key={b.subject_type} bucket={b} focus={focus} timeMode={timeMode}>
+          {b.entities.map((g) => (
+            <EntityCard
+              key={g.key}
+              entity={g}
+              focus={focus}
+              timeMode={timeMode}
+              onFocusOperation={onFocusOperation}
+              onAnchor={onAnchor}
+              onDetail={onDetail}
+            />
+          ))}
+        </EntityTypeSection>
       ))}
+    </div>
+  );
+}
+
+/** 单个实体的完整卡片：字段路径 + 命中它的操作列表。 */
+function EntityCard({
+  entity: g,
+  focus,
+  timeMode,
+  onFocusOperation,
+  onAnchor,
+  onDetail,
+}: {
+  entity: EntityGroup;
+  focus: { entity?: string };
+  timeMode: "relative" | "absolute";
+  onFocusOperation: (key: string) => void;
+  onAnchor: (key: string) => void;
+  onDetail: (d: { entity?: string; path?: string }) => void;
+}) {
+  return (
+    <div
+      id={`sc-ent-${g.key}`}
+      className={cn(
+        "rounded-lg border border-border bg-card p-3 transition-shadow",
+        focus.entity === g.key && "ring-2 ring-primary/60",
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <EntityChip entity={g} />
+        <span className="text-[11px] text-muted-foreground">
+          {g.change_count} 次变化 · {g.field_count} 个字段
+        </span>
+        <TimeLabel offsetMs={g.first_offset_ms} iso={g.first_change} mode={timeMode} className="text-muted-foreground" />
+        <ArrowRight className="h-3 w-3 text-muted-foreground/60" />
+        <TimeLabel offsetMs={g.last_offset_ms} iso={g.last_change} mode={timeMode} className="text-muted-foreground" />
+        <div className="ml-auto flex items-center gap-1">
+          <IconBtn title="以该实体为锚点" onClick={() => onAnchor(g.key)}>
+            <Crosshair className="h-3 w-3" />
+          </IconBtn>
+          <IconBtn title="查看完整变化历史" onClick={() => onDetail({ entity: g.key })}>
+            <History className="h-3 w-3" />
+          </IconBtn>
+        </div>
+      </div>
+
+      {g.field_paths.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          {g.field_paths.map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => onDetail({ entity: g.key, path: p })}
+              title={`查看字段 ${p} 的完整历史`}
+              className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 操作/事件 → 多次字段变化 */}
+      <div className="mt-2 space-y-1">
+        {g.operations?.map((hit) => (
+          <OperationHitRow
+            key={hit.key}
+            hit={hit}
+            timeMode={timeMode}
+            onOpen={() => onFocusOperation(hit.key)}
+            onDetail={onDetail}
+            entityKey={g.key}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -918,6 +1156,9 @@ function EntityRow({
   onDetail: (d: { changeId?: string; entity?: string; path?: string }) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const all = entity.changes ?? [];
+  const preview = all.slice(0, 3);
+  const restCount = all.length - preview.length;
   return (
     <div className={cn("rounded border border-border/70", focus.entity === entity.key && "border-primary/60")}>
       <div className="flex flex-wrap items-center gap-2 px-2 py-1">
@@ -928,7 +1169,26 @@ function EntityRow({
           <EntityChip entity={entity} />
         </button>
         <span className="text-[11px] text-muted-foreground">×{entity.change_count}</span>
-        <span className="truncate font-mono text-[10px] text-muted-foreground/70">{entity.field_paths.join(", ")}</span>
+        {/* 折叠态就要能看到「变成什么」：只给字段名等于没给信息 */}
+        {preview.length > 0 ? (
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2.5 font-mono text-[10px]">
+            {preview.map((c) => (
+              <span key={c.id} className="inline-flex items-center gap-1">
+                <span className="text-muted-foreground">{c.path}</span>
+                <span className="text-muted-foreground/70 line-through" title="变更前">
+                  {fromText(c.before)}
+                </span>
+                <ArrowRight className="h-2.5 w-2.5 shrink-0 text-muted-foreground/50" />
+                <span className="font-medium text-foreground" title="变更后">
+                  {compactJson(c.after)}
+                </span>
+              </span>
+            ))}
+            {restCount > 0 && <span className="text-muted-foreground/60">+{restCount} 项</span>}
+          </span>
+        ) : (
+          <span className="truncate font-mono text-[10px] text-muted-foreground/70">{entity.field_paths.join(", ")}</span>
+        )}
         <IconBtn title="查看该实体完整历史" onClick={() => onDetail({ entity: entity.key })}>
           <History className="h-3 w-3" />
         </IconBtn>
@@ -1044,7 +1304,11 @@ function ChangeRow({
 
 // ===== 详情弹窗 =====
 
-function DetailDialog({
+/**
+ * 变更上下文弹窗：changeId（单条变化）/ eventId（该消息所在操作的协议链）/ entity（实体历史）。
+ * 事件表的「状态变更」按钮复用的是 eventId 这条路径。
+ */
+export function DetailDialog({
   sessionId,
   detail,
   onClose,

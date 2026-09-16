@@ -729,15 +729,26 @@ func finalizeOperation(g *OperationGroup, idx messageIndex) {
 	g.Kind = anchor.Kind
 	g.ChangeCount = len(g.Changes)
 	g.EntityCount = len(entities)
+	paths := make(map[string]struct{}, len(g.Changes))
+	for _, c := range g.Changes {
+		paths[c.Path] = struct{}{}
+	}
+	g.FieldCount = len(paths)
 	for _, e := range entities {
 		finalizeEntity(e)
 		g.Entities = append(g.Entities, *e)
 	}
-	sort.Slice(g.Entities, func(i, j int) bool {
-		if g.Entities[i].FirstChange.Equal(g.Entities[j].FirstChange) {
-			return g.Entities[i].Key < g.Entities[j].Key
+	// 同一时刻的实体按「改动幅度」降序：改得多的实体通常就是本次操作的主角，
+	// 不这么做的话一批同步里几十个只改了一个字段的实体会把主角压到列表底下。
+	sort.SliceStable(g.Entities, func(i, j int) bool {
+		a, b := g.Entities[i], g.Entities[j]
+		if !a.FirstChange.Equal(b.FirstChange) {
+			return a.FirstChange.Before(b.FirstChange)
 		}
-		return g.Entities[i].FirstChange.Before(g.Entities[j].FirstChange)
+		if a.ChangeCount != b.ChangeCount {
+			return a.ChangeCount > b.ChangeCount
+		}
+		return a.Key < b.Key
 	})
 	if len(g.Changes) > 0 {
 		g.StartOffsetMS = g.Changes[0].OffsetMS
@@ -916,7 +927,15 @@ func groupByTime(changes []Change, q Query, t0 time.Time) []TimeBucket {
 	}
 	for i := range buckets {
 		entities := make(map[string]bool)
-		for _, op := range buckets[i].Operations {
+		for j := range buckets[i].Operations {
+			op := &buckets[i].Operations[j]
+			// 与按操作视图同规则：改得多的实体排在前面。
+			sort.SliceStable(op.Entities, func(a, b int) bool {
+				if op.Entities[a].ChangeCount != op.Entities[b].ChangeCount {
+					return op.Entities[a].ChangeCount > op.Entities[b].ChangeCount
+				}
+				return op.Entities[a].Key < op.Entities[b].Key
+			})
 			for _, e := range op.Entities {
 				entities[e.Key] = true
 			}
