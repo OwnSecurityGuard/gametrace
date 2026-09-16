@@ -1,17 +1,23 @@
 import { useState, useEffect, useMemo, Fragment, memo, useRef } from "react";
+import type { ReactNode } from "react";
 import { useDecodedData } from "@/hooks/use-mcp";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
+import { Dialog } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast";
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   ChevronsLeft,
   ChevronRight as TreeChevron,
   Table2,
+  Search,
   SearchX,
+  X,
   RotateCw,
   ArrowRight,
   Link2,
@@ -25,8 +31,6 @@ import {
 } from "lucide-react";
 import type { DecodedEvent } from "@/types/event";
 import type { ConnectionSummary } from "@/types/connection";
-// 状态变更弹窗复用于 state-change-explorer：同一套 details 渲染，不另起一份。
-import { DetailDialog } from "./state-change-explorer";
 import {
   extractMeta,
   formatTimestamp,
@@ -42,7 +46,14 @@ import {
   OpBadge,
   type EventMeta,
 } from "@/lib/event-display";
-import { eventMatchesQuery, eventMatchesDirection, eventMatchesConnection, type DirectionFilter } from "@/lib/fuzzy";
+import {
+  eventMatchesQuery,
+  eventMatchesDirection,
+  eventMatchesConnection,
+  fuzzyTokens,
+  haystackIncludes,
+  type DirectionFilter,
+} from "@/lib/fuzzy";
 
 interface EventTableProps {
   sessionId: string | null;
@@ -115,6 +126,356 @@ function stateChangeCount(event: DecodedEvent): number {
   if (typeof analysis.change_count === "number") return analysis.change_count;
   const sc = analysis._state_changes;
   return Array.isArray(sc) ? sc.length : 0;
+}
+
+/** 展示 before/after；缺失前值写「无前值」而不是 null —— 全量下发的首次赋值不是数据缺失。 */
+function fmtValue(v: unknown): string {
+  if (v === null || v === undefined) return "无前值";
+  if (typeof v === "object") return JSON.stringify(v);
+  if (typeof v === "string") return v;
+  return String(v);
+}
+
+interface ScChange {
+  id: string;
+  path: string;
+  op: string;
+  before: unknown;
+  after: unknown;
+}
+
+interface ScEntity {
+  key: string;
+  subject_type: string;
+  subject_id: string;
+  changes: ScChange[];
+}
+
+interface ScTypeBucket {
+  subject_type: string;
+  entities: ScEntity[];
+  change_count: number;
+}
+
+/**
+ * 两级聚合：先按实体类型收拢，再按具体实体分组。
+ * 批量同步一条消息能改十几个同类实体，平铺会把要看的那一个埋掉。
+ * 类型内按变化数降序，类型之间同样按变化数降序。
+ */
+function groupStateChanges(sc: Record<string, unknown>[]): ScTypeBucket[] {
+  const byType = new Map<string, Map<string, ScEntity>>();
+  sc.forEach((it, i) => {
+    const type = String(it.subject_type ?? "");
+    const id = String(it.subject_id ?? "");
+    let entities = byType.get(type);
+    if (!entities) {
+      entities = new Map();
+      byType.set(type, entities);
+    }
+    const key = `${type}:${id}`;
+    let e = entities.get(key);
+    if (!e) {
+      e = { key, subject_type: type, subject_id: id, changes: [] };
+      entities.set(key, e);
+    }
+    e.changes.push({
+      id: `${key}-${i}`,
+      path: String(it.path ?? ""),
+      op: String(it.op ?? ""),
+      before: it.before,
+      after: it.after,
+    });
+  });
+
+  const out: ScTypeBucket[] = [];
+  for (const [type, entities] of byType) {
+    const list = [...entities.values()].sort((a, b) => b.changes.length - a.changes.length);
+    out.push({
+      subject_type: type,
+      entities: list,
+      change_count: list.reduce((n, e) => n + e.changes.length, 0),
+    });
+  }
+  out.sort((a, b) => b.change_count - a.change_count || a.subject_type.localeCompare(b.subject_type));
+  return out;
+}
+
+/** 变更值 → 检索文本：缺失前值不入 haystack（否则搜「无」会命中所有首次赋值）。 */
+function hayValue(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") {
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return "";
+    }
+  }
+  return String(v);
+}
+
+/** 单条字段变更是否命中查询：实体类型 / id / 字段路径 / op / 变更前后的值。 */
+function scChangeMatches(entity: ScEntity, c: ScChange, tokens: string[]): boolean {
+  if (tokens.length === 0) return true;
+  const haystack = [
+    entity.subject_type,
+    entity.subject_id,
+    entity.key,
+    c.path,
+    c.op,
+    hayValue(c.before),
+    hayValue(c.after),
+  ]
+    .join(" ")
+    .toLowerCase();
+  return haystackIncludes(haystack, tokens);
+}
+
+/** 按单条变化的粒度过滤，保留原排序；实体/类型只留仍有命中的。 */
+function filterChangeBuckets(buckets: ScTypeBucket[], tokens: string[]): ScTypeBucket[] {
+  if (tokens.length === 0) return buckets;
+  const out: ScTypeBucket[] = [];
+  for (const b of buckets) {
+    const entities: ScEntity[] = [];
+    for (const e of b.entities) {
+      const changes = e.changes.filter((c) => scChangeMatches(e, c, tokens));
+      if (changes.length > 0) entities.push({ ...e, changes });
+    }
+    if (entities.length > 0) {
+      out.push({
+        ...b,
+        entities,
+        change_count: entities.reduce((n, e) => n + e.changes.length, 0),
+      });
+    }
+  }
+  return out;
+}
+
+/** 把命中片段包成 mark，让人看清这行为什么留下来。 */
+function Hl({ text, tokens }: { text: string; tokens: string[] }) {
+  if (tokens.length === 0) return <>{text}</>;
+  const lower = text.toLowerCase();
+  const ranges: [number, number][] = [];
+  for (const t of tokens) {
+    for (let i = lower.indexOf(t); i >= 0; i = lower.indexOf(t, i + t.length)) {
+      ranges.push([i, i + t.length]);
+    }
+  }
+  if (ranges.length === 0) return <>{text}</>;
+  ranges.sort((a, b) => a[0] - b[0]);
+
+  const out: ReactNode[] = [];
+  let cur = 0;
+  for (const [s, e] of ranges) {
+    if (s < cur) continue; // 关键词重叠时跳过已被覆盖的片段
+    if (s > cur) out.push(text.slice(cur, s));
+    out.push(
+      <mark key={s} className="rounded bg-amber-200/70 px-0.5 text-foreground">
+        {text.slice(s, e)}
+      </mark>,
+    );
+    cur = e;
+  }
+  if (cur < text.length) out.push(text.slice(cur));
+  return <>{out}</>;
+}
+
+/** 单个实体的变化块。 */
+function EntityChangeBlock({ entity, tokens }: { entity: ScEntity; tokens: string[] }) {
+  return (
+    <div className="rounded-lg border border-border p-2">
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <span className="font-mono text-xs">
+          <span className="text-muted-foreground/70">
+            <Hl text={`${entity.subject_type}:`} tokens={tokens} />
+          </span>
+          <span className="font-semibold text-foreground">
+            <Hl text={entity.subject_id} tokens={tokens} />
+          </span>
+        </span>
+        <span className="text-[11px] text-muted-foreground">{entity.changes.length} 条变化</span>
+      </div>
+      <ul className="space-y-0.5 pl-1">
+        {entity.changes.map((c) => (
+          <li key={c.id} className="flex flex-wrap items-center gap-1.5 text-xs">
+            <OpBadge op={c.op} />
+            <span className="font-mono text-foreground">
+              <Hl text={c.path} tokens={tokens} />
+            </span>
+            <span className="flex min-w-0 items-center gap-1 font-mono">
+              <span className="truncate text-muted-foreground/70 line-through" title={fmtValue(c.before)}>
+                {c.before === null || c.before === undefined ? (
+                  fmtValue(c.before)
+                ) : (
+                  <Hl text={fmtValue(c.before)} tokens={tokens} />
+                )}
+              </span>
+              <ArrowRight className="h-2.5 w-2.5 shrink-0 text-muted-foreground/50" />
+              <span className="truncate font-medium" title={fmtValue(c.after)}>
+                {c.after === null || c.after === undefined ? (
+                  fmtValue(c.after)
+                ) : (
+                  <Hl text={fmtValue(c.after)} tokens={tokens} />
+                )}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * 类型聚合块：默认折叠（只有一个实体时直接展开 —— 那还让用户多点一次没意义）。
+ */
+function TypeChangeBlock({ bucket, tokens }: { bucket: ScTypeBucket; tokens: string[] }) {
+  const only = bucket.entities.length === 1;
+  // 用户没手动点过时：单实体直接展开；过滤中一律展开 —— 搜到了还藏着让人再点一次没道理。
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const open = userOpen ?? (only || tokens.length > 0);
+  return (
+    <div className="rounded-lg border border-border/70">
+      <button
+        type="button"
+        onClick={() => setUserOpen(!open)}
+        aria-expanded={open}
+        className="flex w-full flex-wrap items-center gap-x-2 px-2 py-1.5 text-left hover:bg-muted/40"
+      >
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+        )}
+        <span className="font-mono text-xs font-semibold">
+          {only ? (
+            <>
+              <Hl text={bucket.subject_type} tokens={tokens} />
+              <span className="text-muted-foreground/70">:</span>
+              <Hl text={bucket.entities[0]?.subject_id ?? ""} tokens={tokens} />
+            </>
+          ) : (
+            <Hl text={bucket.subject_type} tokens={tokens} />
+          )}
+        </span>
+        <span className="text-[11px] text-muted-foreground">
+          {bucket.change_count} 条变化
+          {!only && ` · ${bucket.entities.length} 个实体`}
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-1 border-t border-border/70 p-1">
+          {bucket.entities.map((e) => (
+            <EntityChangeBlock key={e.key} entity={e} tokens={tokens} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 本条消息自己造成的实体变化。
+ *
+ * 数据直接用事件自带的 analysis._state_changes —— 它就是「这条消息改了什么」的声明，
+ * 不必再去拉整条操作链：那会把同一次操作里其它消息（请求 / 响应 / 后续推送）的变化一起倒进来，
+ * 点一条消息却看到一堆跟它无关的行。
+ */
+function StateChangeDialog({ event, onClose }: { event: DecodedEvent | null; onClose: () => void }) {
+  const analysis = useMemo(() => (event ? analysisOf(event) : {}), [event]);
+  const meta = useMemo(() => (event ? extractMeta(event.data, event.meta) : null), [event]);
+  const sc = useMemo(() => {
+    const raw = analysis._state_changes;
+    return Array.isArray(raw) ? (raw as Record<string, unknown>[]) : [];
+  }, [analysis]);
+  const groups = useMemo(() => groupStateChanges(sc), [sc]);
+  const entityCount = useMemo(() => groups.reduce((n, b) => n + b.entities.length, 0), [groups]);
+
+  // 换一行就重置过滤词：上一行的关键词留到下一行只会让人以为搜不到。
+  const [query, setQuery] = useState("");
+  const eventId = event?.id;
+  useEffect(() => {
+    setQuery("");
+  }, [eventId]);
+
+  const tokens = useMemo(() => fuzzyTokens(query), [query]);
+  const filtered = useMemo(() => filterChangeBuckets(groups, tokens), [groups, tokens]);
+  const hitCount = useMemo(
+    () => filtered.reduce((n, b) => n + b.change_count, 0),
+    [filtered],
+  );
+
+  return (
+    <Dialog
+      open={!!event}
+      onClose={onClose}
+      title={
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="font-mono">{meta?.msgName || "(unknown)"}</span>
+          <span className="text-xs font-normal text-muted-foreground">
+            本次产生 {sc.length} 条状态变化 · {groups.length} 类 / {entityCount} 个实体
+          </span>
+        </span>
+      }
+      description={
+        event ? (
+          <span className="font-mono">
+            {formatTimestamp(event.timestamp)}
+            {event.correlation_id ? ` · ${event.correlation_id}` : ""}
+          </span>
+        ) : undefined
+      }
+      className="max-w-2xl"
+    >
+      <div className="mb-2 flex items-center gap-2">
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/70" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="过滤实体 / 字段 / 值，空格分隔多个词"
+            aria-label="过滤状态变更"
+            className="h-8 pl-8 pr-8 text-xs"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              aria-label="清空过滤"
+              className="absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+        {tokens.length > 0 && (
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+            命中 {hitCount} / {sc.length} 条
+          </span>
+        )}
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyState
+          className="py-8"
+          icon={<SearchX className="h-5 w-5" />}
+          title="没有匹配的状态变化"
+          hint="试试只输字段片段（如 hp）或实体 id；多个词是「同时满足」。"
+          action={
+            <Button variant="outline" size="sm" onClick={() => setQuery("")}>
+              清空过滤
+            </Button>
+          }
+        />
+      ) : (
+        <div className="space-y-1.5">
+          {filtered.map((b) => (
+            <TypeChangeBlock key={b.subject_type} bucket={b} tokens={tokens} />
+          ))}
+        </div>
+      )}
+    </Dialog>
+  );
 }
 
 /** 复制 JSON 到剪贴板（失败给 toast，不静默）。 */
@@ -657,7 +1018,7 @@ const EventRow = memo(function EventRow({
   onJumpToPartner: (id: string) => void;
   onJumpToChild: (id: string) => void;
   onCollapse: (id: string) => void;
-  onOpenStateChange: (id: string) => void;
+  onOpenStateChange: (event: DecodedEvent) => void;
 }) {
   const meta = useMemo(() => extractMeta(event.data, event.meta), [event.data, event.meta]);
   const summary = useMemo(() => summarizePayload(event.data, meta), [event.data, meta]);
@@ -725,7 +1086,7 @@ const EventRow = memo(function EventRow({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                onOpenStateChange(event.id);
+                onOpenStateChange(event);
               }}
               title={`查看这条消息产生的 ${changeCount} 条实体状态变化`}
               aria-label={`查看这条消息产生的 ${changeCount} 条实体状态变化`}
@@ -765,8 +1126,8 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
   // 允许多行同时展开：对比请求/响应时不用来回点，这是最常见的阅读动作。
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [highlightId, setHighlightId] = useState<string | null>(null);
-  // 从事件表直接看实体变化：记下被点开的消息 id，弹窗走 get_state_change_detail(event_id)。
-  const [scEventId, setScEventId] = useState<string | null>(null);
+  // 从事件表直接看实体变化：整条事件留在手边，弹窗只渲染它自带的变更，不用再查一次。
+  const [scEvent, setScEvent] = useState<DecodedEvent | null>(null);
 
   useEffect(() => {
     setPage(0);
@@ -1004,7 +1365,7 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
               onJumpToPartner={handleJumpTo}
               onJumpToChild={handleJumpTo}
               onCollapse={handleCollapse}
-              onOpenStateChange={setScEventId}
+              onOpenStateChange={(ev) => setScEvent(ev)}
             />
           ))}
         </TableBody>
@@ -1026,13 +1387,8 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
         </div>
       )}
 
-      {/* 实体状态变化弹窗：按行上的「状态变更」按钮唤起 */}
-      <DetailDialog
-        sessionId={sessionId}
-        detail={scEventId ? { eventId: scEventId } : null}
-        onClose={() => setScEventId(null)}
-        timeMode="relative"
-      />
+      {/* 实体状态变化弹窗：只展示这条消息自己产生的变化 */}
+      <StateChangeDialog event={scEvent} onClose={() => setScEvent(null)} />
     </div>
   );
 }

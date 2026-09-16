@@ -1304,11 +1304,7 @@ function ChangeRow({
 
 // ===== 详情弹窗 =====
 
-/**
- * 变更上下文弹窗：changeId（单条变化）/ eventId（该消息所在操作的协议链）/ entity（实体历史）。
- * 事件表的「状态变更」按钮复用的是 eventId 这条路径。
- */
-export function DetailDialog({
+function DetailDialog({
   sessionId,
   detail,
   onClose,
