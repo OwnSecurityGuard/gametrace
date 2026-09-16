@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/tidwall/gjson"
@@ -349,6 +350,67 @@ sides:
 	}
 	if e.Sides[1].Key != "meta.req_seq" || len(e.Sides[1].All) != 1 || e.Sides[1].All[0].Path != "direction" {
 		t.Errorf("sides[1] = %+v", e.Sides[1])
+	}
+}
+
+// TestPairSideYAMLRoundTrip 验证 PairSide 序列化往返无损：
+// 序列化必须输出扁平形式（不得出现嵌套 predicate: 键），读回后角色判定完整。
+func TestPairSideYAMLRoundTrip(t *testing.T) {
+	effect := Effect{
+		Type: EffectPair,
+		Sides: []PairSide{
+			{Predicate: Predicate{Path: "direction", Op: OpEq, Value: "client_to_server"}, Key: "seqId"},
+			{Predicate: Predicate{All: []Predicate{{Path: "direction", Op: OpEq, Value: "server_to_client"}}}, Key: "meta.req_seq"},
+		},
+	}
+	raw, err := yaml.Marshal(effect)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(raw, []byte("predicate:")) {
+		t.Errorf("marshal must be flat, got nested predicate key:\n%s", raw)
+	}
+
+	var back Effect
+	if err := yaml.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("unmarshal round-trip: %v", err)
+	}
+	if len(back.Sides) != 2 {
+		t.Fatalf("sides = %d, want 2", len(back.Sides))
+	}
+	s0 := back.Sides[0]
+	if s0.Key != "seqId" || s0.Path != "direction" || s0.Op != OpEq || s0.Value != "client_to_server" {
+		t.Errorf("round-trip sides[0] = %+v", s0)
+	}
+	s1 := back.Sides[1]
+	if s1.Key != "meta.req_seq" || len(s1.All) != 1 || s1.All[0].Path != "direction" {
+		t.Errorf("round-trip sides[1] = %+v", s1)
+	}
+}
+
+// TestPairSideYAMLUnmarshal_Nested 验证兼容旧序列化器生成的嵌套 predicate 形式
+// （yaml.Marshal 对嵌入结构体默认包 predicate: 键的历史输出）。
+func TestPairSideYAMLUnmarshal_Nested(t *testing.T) {
+	yamlText := `sides:
+  - predicate:
+      path: direction
+      op: eq
+      value: client_to_server
+    key: seqId
+`
+	var e Effect
+	if err := yaml.Unmarshal([]byte(yamlText), &e); err != nil {
+		t.Fatalf("unmarshal nested: %v", err)
+	}
+	if len(e.Sides) != 1 {
+		t.Fatalf("sides = %d, want 1", len(e.Sides))
+	}
+	s := e.Sides[0]
+	if s.Key != "seqId" || s.Path != "direction" || s.Op != OpEq || s.Value != "client_to_server" {
+		t.Errorf("nested side = %+v", s)
+	}
+	if !s.Evaluate(gjson.Parse(`{"direction":"client_to_server"}`)) {
+		t.Error("nested side predicate should evaluate true")
 	}
 }
 

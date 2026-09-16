@@ -63,9 +63,35 @@ type PairSide struct {
 	Key string `yaml:"key"`
 }
 
+// MarshalYAML 输出扁平形式，与声明（手写 manifest）一致：
+//
+//	sides:
+//	  - { path: direction, op: eq, value: client_to_server, key: seqId }
+//
+// yaml.v3 对嵌入结构体默认不 inline，会把谓词字段包一层 predicate: 键，
+// 产生嵌套形式（register 序列化旧输出），导致读回时 PairSide.UnmarshalYAML
+// 只认扁平键而静默丢弃角色判定。这里显式输出扁平字段列表（不依赖 inline
+// 嵌入的运行时行为），保证序列化/反序列化往返无损。
+func (s PairSide) MarshalYAML() (any, error) {
+	type flatPairSide struct {
+		Key   string      `yaml:"key"`
+		All   []Predicate `yaml:"all,omitempty"`
+		Any   []Predicate `yaml:"any,omitempty"`
+		Path  string      `yaml:"path,omitempty"`
+		Op    Op          `yaml:"op,omitempty"`
+		Value any         `yaml:"value,omitempty"`
+	}
+	return flatPairSide{
+		Key: s.Key, All: s.All, Any: s.Any, Path: s.Path, Op: s.Op, Value: s.Value,
+	}, nil
+}
+
 // UnmarshalYAML 手工拆分 sides[i] 节点：key 字段归 PairSide.Key，
 // 其余字段（path/op/value/all/any）按 Predicate 解码；组合器 all/any
 // 支持与 when 一致（side 也可以是组合条件）。
+// 兼容两种形式：
+//   - 扁平：   { path: ..., op: ..., key: ... }
+//   - 嵌套：   { predicate: { path: ..., op: ... }, key: ... }（旧序列化输出）
 func (s *PairSide) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind != yaml.MappingNode {
 		return fmt.Errorf("pair side must be a mapping, got kind %d", value.Kind)
@@ -73,16 +99,22 @@ func (s *PairSide) UnmarshalYAML(value *yaml.Node) error {
 	var rest []*yaml.Node
 	for i := 0; i+1 < len(value.Content); i += 2 {
 		k, v := value.Content[i], value.Content[i+1]
-		if k.Value == "key" {
+		switch k.Value {
+		case "key":
 			if err := v.Decode(&s.Key); err != nil {
 				return err
 			}
-			continue
+		case "predicate":
+			// 嵌套形式：整个子节点就是谓词。
+			if err := v.Decode(&s.Predicate); err != nil {
+				return err
+			}
+		default:
+			rest = append(rest, k, v)
 		}
-		rest = append(rest, k, v)
 	}
 	if len(rest) == 0 {
-		return nil // 仅声明 key、无角色判定：合法性由 Validate 拦截
+		return nil // 仅声明 key 或仅有嵌套 predicate：嵌套已解码，扁平无剩余
 	}
 	sub := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: rest}
 	return s.Predicate.UnmarshalYAML(sub)

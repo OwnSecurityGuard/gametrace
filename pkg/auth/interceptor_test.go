@@ -192,3 +192,46 @@ func runStream(t *testing.T, r Resolver, ctx context.Context) (called bool, owne
 		})
 	return called, owner, err
 }
+
+// TestClientInterceptor_AttachesToken 验证客户端拦截器把 ctx 中 auth.WithToken
+// 注入的 token 附加为出站 authorization: Bearer <token> metadata；
+// 无 token 时原样透传（匿名模式），已有 metadata 不被覆盖丢失。
+func TestClientInterceptor_AttachesToken(t *testing.T) {
+	t.Parallel()
+
+	// 捕获出站 metadata 的假 invoker。
+	run := func(ctx context.Context) (md metadata.MD) {
+		t.Helper()
+		err := ClientUnaryInterceptor()(ctx, "/capturecontrol.v1.StartCapture", nil, nil,
+			nil, func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+				md, _ = metadata.FromOutgoingContext(ctx)
+				return nil
+			})
+		if err != nil {
+			t.Fatalf("unexpected err: %v", err)
+		}
+		return md
+	}
+
+	// 有 token：附加 Bearer。
+	md := run(WithToken(context.Background(), "gt_aaa"))
+	if got := md.Get(authorizationKey); len(got) != 1 || got[0] != "Bearer gt_aaa" {
+		t.Fatalf("authorization = %v, want [Bearer gt_aaa]", got)
+	}
+
+	// 无 token：不透传任何凭证，且不报错。
+	md = run(context.Background())
+	if got := md.Get(authorizationKey); len(got) != 0 {
+		t.Fatalf("anonymous should attach nothing, got %v", got)
+	}
+
+	// 已有其他 metadata 时保留。
+	base := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("x-trace", "t1"))
+	md = run(WithToken(base, "gt_bbb"))
+	if got := md.Get("x-trace"); len(got) != 1 || got[0] != "t1" {
+		t.Fatalf("existing metadata lost: %v", md)
+	}
+	if got := md.Get(authorizationKey); len(got) != 1 || got[0] != "Bearer gt_bbb" {
+		t.Fatalf("authorization = %v, want [Bearer gt_bbb]", got)
+	}
+}

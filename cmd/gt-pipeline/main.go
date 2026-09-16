@@ -275,11 +275,18 @@ func main() {
 	// CaptureControl gRPC server：供 gt-mcp / gt-trace 调用。
 	// 默认 :8088（TCP），可通过 -control-addr 覆盖。
 	//
-	// 信任边界：本 server 的鉴权语义假设唯一客户端是同机 gt-mcp（其 HTTP 层
-	// 已做 Bearer 鉴权）。StartCapture/ListPlugins 等请求里的 owner/all_owners
-	// 字段不做 gRPC 层校验——能直连本端口的进程可伪造任意身份。当前默认绑到
-	// 全接口（":9888"），把控制面暴露到局域网属于已知风险；收紧为回环监听或
-	// 接入 pkg/auth.UnaryInterceptor 是后续加固项（见 T12/T13 评审记录）。
+	// 鉴权与 registry/agent-ingest 一致：token 模式下挂 pkg/auth 拦截器，
+	// owner 以拦截器解析的 Principal 为准——直连（不经 HTTP 层）也能拿到
+	// owner 作用域，插件按 owner/name 注册时才能正确命中，并且请求字段
+	// （owner/all_owners）不再被信任（防伪造）。匿名模式不挂拦截器，
+	// owner 走 withRequestOwner 的请求字段透传，单机行为不变。
+	grpcSrv := grpc.NewServer()
+	if authResolver.Required() {
+		grpcSrv = grpc.NewServer(
+			grpc.ChainUnaryInterceptor(auth.UnaryInterceptor(authResolver)),
+			grpc.ChainStreamInterceptor(auth.StreamInterceptor(authResolver)),
+		)
+	}
 	var listener net.Listener
 	listener, err = internalipc.ListenAddr(*controlAddr)
 	if err != nil {
@@ -289,7 +296,6 @@ func main() {
 	config.WriteAddrFile(absWorkDir, "control", listener.Addr().String())
 	defer listener.Close()
 
-	grpcSrv := grpc.NewServer()
 	ccServer := capturecontrol.NewServer(engine)
 	if probeAdmin != nil {
 		ccServer.SetProbeAdmin(probeAdmin)

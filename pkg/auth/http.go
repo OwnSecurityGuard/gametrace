@@ -34,6 +34,10 @@ func Middleware(r Resolver, next http.Handler) http.Handler {
 		if p.IsAdmin {
 			w.Header().Set(HeaderAdmin, "true")
 		}
-		next.ServeHTTP(w, req.WithContext(WithPrincipal(req.Context(), p)))
+		// 原始 token 一并注入 context，供本进程内向 gRPC 服务（pipeline 等）
+		// 出站时经客户端拦截器附加 authorization metadata，保证跨协议身份一致。
+		ctx := req.Context()
+		ctx = WithToken(ctx, token)
+		next.ServeHTTP(w, req.WithContext(WithPrincipal(ctx, p)))
 	})
 }

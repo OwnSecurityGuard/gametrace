@@ -63,3 +63,37 @@ type principalStream struct {
 }
 
 func (s *principalStream) Context() context.Context { return s.ctx }
+
+// ClientUnaryInterceptor 是客户端侧拦截器：读 ctx 中的原始 token
+// （auth.WithToken 注入）并附加 authorization: Bearer <token> 出站 metadata。
+// 无 token 时原样放行（匿名模式），服务端校验兜底。
+// 让 HTTP 中间件解析出的凭证能跨协议透传到 gRPC 服务（如 gt-mcp → pipeline）。
+func ClientUnaryInterceptor() grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		return invoker(attachBearerToken(ctx), method, req, reply, cc, opts...)
+	}
+}
+
+// ClientStreamInterceptor 同 ClientUnaryInterceptor，作用于流式 RPC
+// （如 WatchPlugins 这类 server-stream 订阅）。
+func ClientStreamInterceptor() grpc.StreamClientInterceptor {
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		return streamer(attachBearerToken(ctx), desc, cc, method, opts...)
+	}
+}
+
+// attachBearerToken 把 ctx 中的 token 附加为出站 Bearer metadata。
+func attachBearerToken(ctx context.Context) context.Context {
+	token := TokenFrom(ctx)
+	if token == "" {
+		return ctx
+	}
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok {
+		md = metadata.MD{}
+	} else {
+		md = md.Copy()
+	}
+	md.Set(authorizationKey, "Bearer "+token)
+	return metadata.NewOutgoingContext(ctx, md)
+}

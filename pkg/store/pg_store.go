@@ -362,7 +362,9 @@ func (s *PGStore) QueryRawPackets(ctx context.Context, q RawPacketQuery) ([]RawP
 	if q.Dst != "" {
 		query += ` AND dst LIKE ` + a.next("%"+q.Dst+"%")
 	}
-	query += ` ORDER BY timestamp ASC` + a.limitOffset(q.Limit, q.Offset)
+	// 按 timestamp ASC 排序，并以 id ASC 作 tiebreaker：pcap 中多个包可能
+	// 共享同一纳秒时间戳，仅按 timestamp 排序时 SQL 对并列行的顺序不作保证。
+	query += ` ORDER BY timestamp ASC, id ASC` + a.limitOffset(q.Limit, q.Offset)
 	rows, err := s.db.QueryContext(ctx, query, a.slice()...)
 	if err != nil {
 		return nil, fmt.Errorf("query raw packets: %w", err)

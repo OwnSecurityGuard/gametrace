@@ -112,6 +112,21 @@ func (us *userStore) TokenByOwner(ctx context.Context, owner string) (string, er
 	return token, nil
 }
 
+// AnyToken 返回 users 表中按 owner 字典序的第一条 token，
+// 供后台系统通道（WatchPlugins 等无调用方 ctx 的场景）取确定性服务凭证；
+// 表为空返回 ("", nil)。
+func (us *userStore) AnyToken(ctx context.Context) (string, error) {
+	var token string
+	err := us.db.QueryRowContext(ctx, `SELECT token FROM users ORDER BY owner LIMIT 1`).Scan(&token)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
 // Revoke 删除用户（撤销其 token 即时失效）；返回是否删到了记录。
 func (us *userStore) Revoke(ctx context.Context, owner string) (bool, error) {
 	res, err := us.db.ExecContext(ctx, `DELETE FROM users WHERE owner=?`, owner)

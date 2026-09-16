@@ -269,7 +269,10 @@ FROM raw_packets WHERE 1=1`
 		query += " AND dst LIKE ?"
 		args = append(args, "%"+q.Dst+"%")
 	}
-	query += " ORDER BY timestamp ASC"
+	// 按 timestamp ASC 排序，并以 id ASC 作 tiebreaker：pcap 中多个包可能
+	// 共享同一纳秒时间戳，仅按 timestamp 排序时 SQL 对并列行的顺序不作保证，
+	// 分页（forEachRawDecoded）与逐包处理会依赖稳定顺序。
+	query += " ORDER BY timestamp ASC, id ASC"
 	query, args = applyLimitOffset(query, args, q.Limit, q.Offset)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -293,6 +294,30 @@ func (m *mcpCapture) callerToken(ctx context.Context) (string, string) {
 		}
 	}
 	return "", "anonymous"
+}
+
+// serviceToken 返回后台系统通道（WatchPlugins 等无调用方 ctx 的订阅流）
+// 使用的确定性服务凭证：env（tokensByOwner）按 owner 字典序取首个非空 token；
+// 无 env token 时退化查 users 表取首条。匿名模式返回空（服务端无拦截器，无需凭证）。
+func (m *mcpCapture) serviceToken() string {
+	if len(m.tokensByOwner) > 0 {
+		owners := make([]string, 0, len(m.tokensByOwner))
+		for o := range m.tokensByOwner {
+			owners = append(owners, o)
+		}
+		sort.Strings(owners)
+		for _, o := range owners {
+			if t := m.tokensByOwner[o]; t != "" {
+				return t
+			}
+		}
+	}
+	if m.users != nil {
+		if t, err := m.users.AnyToken(context.Background()); err == nil && t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // buildPluginEnvFile 生成可直接写入 .env 的文本（含注释）。

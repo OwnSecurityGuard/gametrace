@@ -51,13 +51,17 @@ func DialContextTarget(ctx context.Context, target string) (net.Conn, error) {
 
 // DialGRPCAddr 拨号到显式网络地址（用于跨机器部署）。
 // addr 可为 host:port（TCP）、unix:/path、npipe:\\.\pipe\name。
-func DialGRPCAddr(addr string) (*grpc.ClientConn, error) {
-	return grpc.NewClient(
-		"passthrough:///"+addr,
+// opts 可附加额外 DialOption（如身份透传的客户端拦截器）。
+func DialGRPCAddr(addr string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	base := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			return DialContextTarget(ctx, addr)
 		}),
+	}
+	return grpc.NewClient(
+		"passthrough:///"+addr,
+		append(base, opts...)...,
 	)
 }
 

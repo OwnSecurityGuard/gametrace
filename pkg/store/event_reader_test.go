@@ -1,4 +1,4 @@
-﻿package store
+package store
 
 import (
 	"context"
@@ -208,5 +208,39 @@ func TestSQLiteStore_QueryRawPackets(t *testing.T) {
 	}
 	if len(rows) != 1 {
 		t.Errorf("QueryRawPackets limit: got %d, want 1", len(rows))
+	}
+
+	// 同纳秒并列 timestamp：顺序必须按 (timestamp, id) 确定，
+	// 分页结果与全量查询的顺序一致（仅按 timestamp 排序时 SQL 不保证）。
+	tie := time.Now()
+	tiePkts := []event.Packet{
+		{Timestamp: tie, Src: netip.AddrPort{}, Dst: netip.AddrPort{}, Protocol: "tcp", Raw: []byte("a")},
+		{Timestamp: tie, Src: netip.AddrPort{}, Dst: netip.AddrPort{}, Protocol: "udp", Raw: []byte("b")},
+		{Timestamp: tie, Src: netip.AddrPort{}, Dst: netip.AddrPort{}, Protocol: "icmp", Raw: []byte("c")},
+	}
+	if err := s.AppendRawPackets(ctx, tiePkts); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := s.QueryRawPackets(ctx, RawPacketQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("QueryRawPackets after tie insert: got %d, want 5", len(all))
+	}
+	// 最后 3 行即 tie 段（前面两条不同时间的包排在前面）。
+	tieSeg := all[len(all)-3:]
+	page, err := s.QueryRawPackets(ctx, RawPacketQuery{Limit: 3, Offset: len(all) - 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 3 {
+		t.Fatalf("tie page: got %d rows, want 3", len(page))
+	}
+	for i := range tieSeg {
+		if page[i].ID != tieSeg[i].ID {
+			t.Fatalf("tie order mismatch at %d: page=%s full=%s", i, page[i].ID, tieSeg[i].ID)
+		}
 	}
 }

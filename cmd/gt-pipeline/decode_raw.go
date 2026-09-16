@@ -140,6 +140,16 @@ func (s *pipelineService) DecodeRawPackets(ctx context.Context, req capturecontr
 	if !ok {
 		return capturecontrol.DecodeRawPacketsResult{}, fmt.Errorf("plugin %s not found or not a decoder", req.Plugin)
 	}
+	// 解析实际命中的插件注册名（FindFor 按协议 hint 退化时可能与 req.Plugin 不同），
+	// 供语义规则按注册键（owner/name）重载。
+	pluginName := req.Plugin
+	if n, ok := s.registry.NameByClient(client); ok {
+		pluginName = n
+	}
+	// 语义规则引擎：与实时抓包路径一致执行 name/annotate/pair/extract，
+	// 否则离线解码只产出裸事件与状态变更，缺少语义富化。
+	sem := newSemanticEngine(logger, s.registry)
+	sem.refreshRules(auth.OwnerFrom(ctx), pluginName)
 
 	// 4. 按 dbDriver 打开会话存储（sqlite 走 capture.sqlite；postgres 走共享 PG 库）。
 	st, err := s.openSessionStore(req.SessionID, dbPath)
@@ -207,7 +217,11 @@ func (s *pipelineService) DecodeRawPackets(ctx context.Context, req capturecontr
 			if ev == nil {
 				continue
 			}
+			// 语义富化：与实时路径一致执行 name/annotate/pair/extract，
+			// extract 产出的子事件一并写入（子事件已带 ParentID）。
+			children := sem.enrichSemantics(ev)
 			pending = append(pending, ev)
+			pending = append(pending, children...)
 			scChanges, err := baseline.Apply(ev, req.SessionID)
 			if err != nil {
 				logger.Warn("state projection", "event_id", ev.Identity.ID, "error", err)

@@ -409,8 +409,16 @@ func newMCPCapture(iface, pluginsDir, workDir, pipelineAddr, httpAddr string, mc
 
 	// gRPC client 连接 gt-pipeline。
 	// 默认拨号 :8088（TCP），可通过 -pipeline-addr 覆盖。
+	// token 模式下 pipeline 的 CaptureControl 挂了 Bearer 拦截器：
+	// 出站拦截器从 ctx 读取代调用方中转的原始 token（auth.WithToken，
+	// 由 HTTP 鉴权中间件注入），附加 authorization metadata，保证跨协议身份一致；
+	// 匿名模式无 token，原样放行。
 	var conn *grpc.ClientConn
-	conn, err = internalipc.DialGRPCAddr(pipelineAddr)
+	conn, err = internalipc.DialGRPCAddr(
+		pipelineAddr,
+		grpc.WithChainUnaryInterceptor(auth.ClientUnaryInterceptor()),
+		grpc.WithChainStreamInterceptor(auth.ClientStreamInterceptor()),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("dial pipeline: %w", err)
 	}
@@ -2107,10 +2115,14 @@ func (m *mcpCapture) startPluginEventWatcher() {
 	if m.pipelineClient == nil {
 		return
 	}
+	// 后台流没有调用方请求 ctx：token 模式下附加确定性服务凭证
+	// （serviceToken），否则 token 模式下被 pipeline 的拦截器拒绝；
+	// 匿名模式返回空串，拦截器不附加、服务端放行。
+	watchCtx := auth.WithToken(context.Background(), m.serviceToken())
 	go func() {
 		backoff := time.Second
 		for {
-			stream, err := m.pipelineClient.WatchPlugins(context.Background(), &pb.WatchPluginsRequest{})
+			stream, err := m.pipelineClient.WatchPlugins(watchCtx, &pb.WatchPluginsRequest{})
 			if err != nil {
 				slog.Warn("watch plugins stream failed, retrying", "error", err, "backoff", backoff.String())
 				time.Sleep(backoff)
