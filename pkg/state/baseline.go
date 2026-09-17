@@ -76,6 +76,8 @@ func (m *MemoryBaselineStore) Put(base *EntityBaseline) {
 type BaselineManager struct {
 	store BaselineStore
 	mu    sync.Mutex
+	// noopSuppressed 累计被 noop 抑制丢弃的变更条数。Apply 持锁期间自增，读取走 NoopSuppressed。
+	noopSuppressed int64
 }
 
 // NewBaselineManager 创建基线管理器。store 为 nil 时使用内存实现。
@@ -86,8 +88,20 @@ func NewBaselineManager(store BaselineStore) *BaselineManager {
 	return &BaselineManager{store: store}
 }
 
+// NoopSuppressed 返回被抑制的「无实际变化」变更条数（见 Apply 的 noop 抑制）。
+func (bm *BaselineManager) NoopSuppressed() int64 {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+	return bm.noopSuppressed
+}
+
 // Apply 将事件中的 StateChange 与当前基线对比，生成 EnrichedStateChange 并更新基线。
 // 无基线时 BeforeResolved 为 false，不会伪造旧值。
+//
+// noop 抑制：基线上已有该 path 的真实旧值、且本次上报的 after 与之相等时，这次上报没有
+// 造成任何变化（批量同步里大量同值回吐），直接丢弃不产出变更记录。仅 BeforeResolved 时
+// 判定——首见实体没有基线，插件的首次赋值声明必须保留；delete（after 为空）与旧值天然
+// 不等，不参与判定。
 func (bm *BaselineManager) Apply(ev *event.Event, sessionID string) ([]store.EnrichedStateChange, error) {
 	if ev == nil {
 		return nil, nil
@@ -149,6 +163,12 @@ func (bm *BaselineManager) Apply(ev *event.Event, sessionID string) ([]store.Enr
 				enriched.Before = oldVal
 				enriched.BeforeResolved = true
 			}
+		}
+
+		// 无变化抑制：见 Apply 文档。被抑制时基线也不动（值本就没变）。
+		if enriched.BeforeResolved && enriched.Before.Equal(sc.After) {
+			bm.noopSuppressed++
+			continue
 		}
 
 		// 更新基线：after 非空时写入

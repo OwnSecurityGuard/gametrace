@@ -208,6 +208,9 @@ func (t *captureTask) run() {
 		eventCount  int64
 		metricCount int64
 
+		// noopSeen 是已上报过的 no-op 抑制条数，用于只打增量、不每轮重复。
+		noopSeen int64
+
 		// decodeErrs 由 decode worker goroutine 并发递增，用原子计数。
 		decodeErrs atomic.Int64
 
@@ -252,6 +255,14 @@ func (t *captureTask) run() {
 							"error", err, "buffered", len(enrichedSCs))
 						enrichedSCs = retainOnFailure(enrichedSCs, stateChangeMax, &stateChangeOverflow)
 					} else {
+						// 无实际变化的变更被基线抑制丢弃（同值回吐），只打增量避免每轮刷屏。
+						if baseline != nil {
+							if n := baseline.NoopSuppressed(); n > noopSeen {
+								t.logger.Debug("state changes suppressed as no-op",
+									"suppressed", n-noopSeen, "total", n)
+								noopSeen = n
+							}
+						}
 						enrichedSCs = enrichedSCs[:0]
 					}
 				}

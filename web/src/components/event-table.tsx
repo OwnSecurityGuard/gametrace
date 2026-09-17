@@ -283,9 +283,9 @@ function Hl({ text, tokens }: { text: string; tokens: string[] }) {
 /** 单个实体的变化块。 */
 function EntityChangeBlock({ entity, tokens }: { entity: ScEntity; tokens: string[] }) {
   return (
-    <div className="rounded-lg border border-border p-2">
+    <div className="rounded-lg border border-border p-2.5">
       <div className="mb-1 flex flex-wrap items-center gap-2">
-        <span className="font-mono text-xs">
+        <span className="font-mono text-sm">
           <span className="text-muted-foreground/70">
             <Hl text={`${entity.subject_type}:`} tokens={tokens} />
           </span>
@@ -293,25 +293,29 @@ function EntityChangeBlock({ entity, tokens }: { entity: ScEntity; tokens: strin
             <Hl text={entity.subject_id} tokens={tokens} />
           </span>
         </span>
-        <span className="text-[11px] text-muted-foreground">{entity.changes.length} 条变化</span>
+        <span className="text-xs text-muted-foreground">{entity.changes.length} 条变化</span>
       </div>
-      <ul className="space-y-0.5 pl-1">
+      {/* 值可能很长（嵌套 JSON）：宁可换行也别截断 —— 省略号后面是什么永远看不到。 */}
+      <ul className="space-y-1 pl-1">
         {entity.changes.map((c) => (
-          <li key={c.id} className="flex flex-wrap items-center gap-1.5 text-xs">
-            <OpBadge op={c.op} />
-            <span className="font-mono text-foreground">
+          <li key={c.id} className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-sm">
+            <OpBadge op={c.op} className="text-[11px]" />
+            <span className="break-all font-mono text-foreground">
               <Hl text={c.path} tokens={tokens} />
             </span>
-            <span className="flex min-w-0 items-center gap-1 font-mono">
-              <span className="truncate text-muted-foreground/70 line-through" title={fmtValue(c.before)}>
+            <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1 gap-y-0.5 font-mono">
+              <span
+                className="break-all text-muted-foreground/70 line-through"
+                title={fmtValue(c.before)}
+              >
                 {c.before === null || c.before === undefined ? (
                   fmtValue(c.before)
                 ) : (
                   <Hl text={fmtValue(c.before)} tokens={tokens} />
                 )}
               </span>
-              <ArrowRight className="h-2.5 w-2.5 shrink-0 text-muted-foreground/50" />
-              <span className="truncate font-medium" title={fmtValue(c.after)}>
+              <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+              <span className="break-all font-medium" title={fmtValue(c.after)}>
                 {c.after === null || c.after === undefined ? (
                   fmtValue(c.after)
                 ) : (
@@ -343,11 +347,11 @@ function TypeChangeBlock({ bucket, tokens }: { bucket: ScTypeBucket; tokens: str
         className="flex w-full flex-wrap items-center gap-x-2 px-2 py-1.5 text-left hover:bg-muted/40"
       >
         {open ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground/70" />
         ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" />
         )}
-        <span className="font-mono text-xs font-semibold">
+        <span className="font-mono text-sm font-semibold">
           {only ? (
             <>
               <Hl text={bucket.subject_type} tokens={tokens} />
@@ -358,7 +362,7 @@ function TypeChangeBlock({ bucket, tokens }: { bucket: ScTypeBucket; tokens: str
             <Hl text={bucket.subject_type} tokens={tokens} />
           )}
         </span>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           {bucket.change_count} 条变化
           {!only && ` · ${bucket.entities.length} 个实体`}
         </span>
@@ -412,44 +416,44 @@ function StateChangeDialog({ event, onClose }: { event: DecodedEvent | null; onC
       title={
         <span className="flex flex-wrap items-center gap-2">
           <span className="font-mono">{meta?.msgName || "(unknown)"}</span>
-          <span className="text-xs font-normal text-muted-foreground">
+          <span className="text-sm font-normal text-muted-foreground">
             本次产生 {sc.length} 条状态变化 · {groups.length} 类 / {entityCount} 个实体
           </span>
         </span>
       }
       description={
         event ? (
-          <span className="font-mono">
+          <span className="font-mono text-sm">
             {formatTimestamp(event.timestamp)}
             {event.correlation_id ? ` · ${event.correlation_id}` : ""}
           </span>
         ) : undefined
       }
-      className="max-w-2xl"
+      className="max-w-3xl"
     >
       <div className="mb-2 flex items-center gap-2">
         <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/70" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/70" />
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="过滤实体 / 字段 / 值，空格分隔多个词"
             aria-label="过滤状态变更"
-            className="h-8 pl-8 pr-8 text-xs"
+            className="h-9 pl-9 pr-9 text-sm"
           />
           {query && (
             <button
               type="button"
               onClick={() => setQuery("")}
               aria-label="清空过滤"
-              className="absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
             >
-              <X className="h-3.5 w-3.5" />
+              <X className="h-4 w-4" />
             </button>
           )}
         </div>
         {tokens.length > 0 && (
-          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
             命中 {hitCount} / {sc.length} 条
           </span>
         )}

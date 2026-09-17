@@ -5,7 +5,7 @@
 import { useMemo, useState } from "react";
 import { ArrowRight, ArrowLeft, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { unpackJsonStrings } from "@/lib/utils";
+import { cn, unpackJsonStrings } from "@/lib/utils";
 
 // ─── 元数据提取 ─────────────────────────────────────────────
 
@@ -390,7 +390,7 @@ export function StructuredFields({ obj }: { obj: Record<string, unknown> }) {
 }
 
 /** op 徽标：set 绿 / delete 红 / merge 琥珀（状态变更视图复用）。 */
-export function OpBadge({ op }: { op: string }) {
+export function OpBadge({ op, className }: { op: string; className?: string }) {
   const style =
     op === "set"
       ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
@@ -399,5 +399,9 @@ export function OpBadge({ op }: { op: string }) {
         : op === "merge"
           ? "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
           : "bg-muted text-muted-foreground";
-  return <Badge variant="outline" className={`font-mono text-[10px] ${style}`}>{op || "-"}</Badge>;
+  return (
+    <Badge variant="outline" className={cn(`font-mono text-[10px] ${style}`, className)}>
+      {op || "-"}
+    </Badge>
+  );
 }
