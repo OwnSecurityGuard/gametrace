@@ -463,10 +463,9 @@ func (t *captureTask) run() {
 			t.logger.Debug("decoded packet v2", "event_id", ev.Identity.ID, "event_type", ev.Identity.Type, "session", ev.Identity.SessionID)
 
 			// 语义规则（SDK）：插件声明、平台执行——annotate 打语义标签、
-			// pair 配对请求/响应、extract 拆出子事件。插件未声明时 no-op。
-			children := t.sem.enrichSemantics(ev)
+			// pair 配对请求/响应、name 提取消息名。插件未声明时 no-op。
+			t.sem.enrichSemantics(ev)
 			events = append(events, ev)
-			events = append(events, children...)
 
 			// State 层投影：从 _state_changes 提取并做 before/after 基线富化
 			scChanges, err := baseline.Apply(ev, t.sessionID)

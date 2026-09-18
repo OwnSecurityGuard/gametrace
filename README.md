@@ -29,7 +29,7 @@ Raw traffic is captured live on a team member's or a remote **probe's** machine 
 `.pcap`), decoded by independent plugin processes, and assembled into a **debug trace** —
 request/response pairs, state changes, and causal chains (OpenTelemetry-style `TraceContext`). Humans
 reflect on the same data through a first-class Web dashboard (`web/`) that surfaces sessions,
-connections, protocol events, extract parent/child hierarchies, pair relationships, and entity
+connections, protocol events, pair relationships, and entity
 state-change diffs.
 
 ## Features
@@ -157,7 +157,7 @@ Pick the track that matches what you are.
 5. **查看协议行为** — 点「停止抓包」，去「协议数据」：
 
    - `事件` — 解码后的每一条协议消息（含 msg_name / 方向 / 字段）；
-   - `关系` — 请求/响应配对与父子层级；
+   - `关系` — 请求/响应配对；
    - `状态变更` — 按**操作 / 实体 / 时间**三个视角看字段的前后值（如 `Player:1001.hp: 100 → 65`）。
 
    想看"某一次操作到底触发了哪些包"，用「行为」：标记一个行为窗口

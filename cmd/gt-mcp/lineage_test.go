@@ -13,9 +13,9 @@ import (
 	mcp "github.com/mark3labs/mcp-go/mcp"
 )
 
-// TestListDecodedDataLineageFields 验证协议血缘分析依赖的三个本源字段
-// （correlation_id / causation_id / parent_id）在 list_decoded_data 的输出行
-// 与 expr filter 中都可用——extract 父子血缘此前在 MCP 侧不可见（2026-09-14 补齐）。
+// TestListDecodedDataLineageFields 验证协议血缘分析依赖的两个 Trace 本源字段
+// （correlation_id / causation_id）在 list_decoded_data 的输出行与 expr filter
+// 中都可用。
 func TestListDecodedDataLineageFields(t *testing.T) {
 	ctx := context.Background()
 	workDir := t.TempDir()
@@ -67,31 +67,13 @@ func TestListDecodedDataLineageFields(t *testing.T) {
 	if got := byID["r2"]["causation_id"]; got != "r1" {
 		t.Errorf("r2 causation_id = %v, want r1", got)
 	}
-	// extract：子事件 parent_id 指回父事件。
-	if got := byID["c1"]["parent_id"]; got != "p1" {
-		t.Errorf("c1 parent_id = %v, want p1", got)
-	}
-	if got := byID["c2"]["parent_id"]; got != "p1" {
-		t.Errorf("c2 parent_id = %v, want p1", got)
-	}
-	if got := byID["p1"]["parent_id"]; got != "" {
-		t.Errorf("p1 parent_id = %v, want empty", got)
-	}
-	// 子事件业务字段（extract 拆出的实体状态；注意 entity/entity_id 等是平台
-	// 保留分析键，会被拆进 analysis 段，业务字段须避开，见 SplitReservedKeys）。
+	// 业务字段经 payload 透传（注意 entity/entity_id 等是平台保留分析键，
+	// 会被拆进 analysis 段，业务字段须避开，见 SplitReservedKeys）。
 	if data, ok := byID["c1"]["data"].(map[string]any); !ok || data["name"] != "hero" {
 		t.Errorf("c1 data.name = %v, want hero (data=%v)", byID["c1"]["data"], byID["c1"]["data"])
 	}
 
-	// ---- 2. filter 按 parent_id 查子事件（extract 血缘） ----
-	children := callDecodedTool(t, m, ctx, map[string]any{
-		"session_id": sessionID, "filter": `parent_id == "p1"`,
-	})
-	if got := children["total_matched"].(float64); got != 2 {
-		t.Fatalf("parent_id filter total_matched = %v, want 2", got)
-	}
-
-	// ---- 3. filter 按 correlation_id 拉配对组（pair 血缘） ----
+	// ---- 2. filter 按 correlation_id 拉配对组（pair 血缘） ----
 	group := callDecodedTool(t, m, ctx, map[string]any{
 		"session_id": sessionID, "filter": `correlation_id == "corr-1"`,
 	})
@@ -99,7 +81,7 @@ func TestListDecodedDataLineageFields(t *testing.T) {
 		t.Fatalf("correlation_id filter total_matched = %v, want 2", got)
 	}
 
-	// ---- 4. filter 按 causation_id 反查「谁响应了 r1」 ----
+	// ---- 3. filter 按 causation_id 反查「谁响应了 r1」 ----
 	resp := callDecodedTool(t, m, ctx, map[string]any{
 		"session_id": sessionID, "filter": `causation_id == "r1"`,
 	})
@@ -107,10 +89,10 @@ func TestListDecodedDataLineageFields(t *testing.T) {
 		t.Fatalf("causation_id filter total_matched = %v, want 1", got)
 	}
 
-	// ---- 5. 组合血缘 + 业务字段过滤 ----
+	// ---- 4. 组合血缘过滤 ----
 	mixed := callDecodedTool(t, m, ctx, map[string]any{
 		"session_id": sessionID,
-		"filter":     `parent_id == "p1" && data.name == "hero"`,
+		"filter":     `correlation_id == "corr-1" && causation_id == "r1"`,
 	})
 	if got := mixed["total_matched"].(float64); got != 1 {
 		t.Fatalf("combined filter total_matched = %v, want 1", got)
@@ -118,10 +100,10 @@ func TestListDecodedDataLineageFields(t *testing.T) {
 }
 
 // writeLineageFixture 写入协议血缘分析的典型数据：
-// 一对 pair 配对（r1 请求 → r2 响应）+ 一组 extract 父子（p1 快照 → c1/c2 子事件）。
+// 一对 pair 配对（r1 请求 → r2 响应）+ 三个普通事件（含业务字段）。
 func writeLineageFixture(t *testing.T, st *store.SQLiteStore, sessionID string, base time.Time) {
 	t.Helper()
-	mkEvent := func(id, msgName, direction string, offsetMS int64, correlation, causation, parent string) *event.Event {
+	mkEvent := func(id, msgName, direction string, offsetMS int64, correlation, causation string) *event.Event {
 		ev := event.NewEventWithTime(sessionID, event.EventType(msgName), "test",
 			event.ValueFromAny(map[string]any{
 				"_meta": map[string]any{"msg_name": msgName, "direction": direction},
@@ -129,22 +111,21 @@ func writeLineageFixture(t *testing.T, st *store.SQLiteStore, sessionID string, 
 			event.EventContext{FlowID: "flow-1", Direction: direction})
 		ev.Identity.ID = event.EventID(id)
 		ev.Trace = event.TraceContext{CorrelationID: correlation, CausationID: event.EventID(causation)}
-		ev.Identity.ParentID = event.EventID(parent)
 		return ev
 	}
-	mkChild := func(id string, offsetMS int64, name string) *event.Event {
-		ev := mkEvent(id, "EntityState", "server_to_client", offsetMS, "", "", "p1")
-		// 子事件业务字段（extract 拆出的实体状态）。业务字段名须避开平台保留
-		// 分析键（entity/entity_type/entity_id/change_count——会被拆进 analysis 段）。
+	mkEntity := func(id string, offsetMS int64, name string) *event.Event {
+		ev := mkEvent(id, "EntityState", "server_to_client", offsetMS, "", "")
+		// 业务字段名须避开平台保留分析键（entity/entity_type/entity_id/
+		// change_count——会被拆进 analysis 段）。
 		ev.Payload.Value.Object["name"] = event.Value{Kind: event.String, Str: name}
 		return ev
 	}
 	evs := []*event.Event{
-		mkEvent("r1", "UpgradeReq", "client_to_server", 0, "corr-1", "", ""),
-		mkEvent("r2", "UpgradeResp", "server_to_client", 200, "corr-1", "r1", ""),
-		mkEvent("p1", "Snapshot", "server_to_client", 300, "", "", ""),
-		mkChild("c1", 301, "hero"),
-		mkChild("c2", 302, "npc"),
+		mkEvent("r1", "UpgradeReq", "client_to_server", 0, "corr-1", ""),
+		mkEvent("r2", "UpgradeResp", "server_to_client", 200, "corr-1", "r1"),
+		mkEvent("p1", "Snapshot", "server_to_client", 300, "", ""),
+		mkEntity("c1", 301, "hero"),
+		mkEntity("c2", 302, "npc"),
 	}
 	if err := st.AppendEvents(context.Background(), evs); err != nil {
 		t.Fatal(err)

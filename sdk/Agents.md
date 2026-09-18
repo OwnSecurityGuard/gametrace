@@ -252,24 +252,16 @@ semantic_rules:
   - id: game.mark_push
     when: [ { path: seqId, op: eq, value: 0 } ]
     effect: { type: annotate, semantic: notification }
-  - id: game.extract_sync_db
-    when: [ { path: data.SyncDbData, op: exists } ]
-    effect:
-      type: extract
-      source: data.SyncDbData
-      child: { event_type: game.db.update, schema_id: game.db.update.v1 }
   - id: game.name_message
     when: [ { path: type, op: exists } ]
     effect: { type: name, key: type }        # v0.8.2+
 ```
 
-Effect set is closed: `pair`, `extract`, `annotate`, `name`.
+Effect set is closed: `pair`, `annotate`, `name`.
 
 - `pair` — exactly 2 `sides`; each side has its own `key` (GJSON path of the pairing
   value on that side — the two sides may point at different fields) plus role
   discrimination. There is no rule-level `key`.
-- `extract` — `source` (array → one child per element; object → one child; scalar/null →
-  none) plus `child.event_type` + `child.schema_id`.
 - `annotate` — `semantic` ∈ request / response / notification / error. Error and notification
   are Event attributes, not Relations.
 - `name` (v0.8.2) — `key` is the GJSON path of the message name. The host writes the first

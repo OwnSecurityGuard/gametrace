@@ -9,8 +9,6 @@ export interface DecodedEvent {
   correlation_id?: string;
   /** 响应侧特有：指向触发它的请求事件 id。 */
   causation_id?: string;
-  /** extract 语义规则产出的子事件特有：指向其父事件 id（顶级事件为空）。 */
-  parent_id?: string;
   data: Record<string, unknown>;
   /** v0.8.0：纯业务 payload（不含 _meta 与分析键）之上的元信息（direction/msg_name/role/is_push）。 */
   meta?: Record<string, unknown>;

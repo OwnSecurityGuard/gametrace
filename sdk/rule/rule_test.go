@@ -11,7 +11,7 @@ import (
 )
 
 // doc 必须覆盖用户实际协议的主要形态（§12）：
-// request/response（seqId 配对）、push（seqId=0）、SyncDbData 提取、error 标注。
+// request/response（seqId 配对）、push（seqId=0）、error 标注。
 const sampleEvent = `{
   "uri": "/battle/attack",
   "seqId": 123,
@@ -167,18 +167,12 @@ func TestRuleValidate(t *testing.T) {
 		t.Errorf("kebab rule id: want %s, got %v", RuleIDFormat, issues)
 	}
 
-	// extract
-	ext := Rule{
-		ID:   "game.extract_sync_db",
-		When: &Predicate{Path: "data.SyncDbData", Op: OpExists},
-		Effect: Effect{
-			Type:   EffectExtract,
-			Source: "data.SyncDbData",
-			Child:  &ChildSpec{EventType: "game.db.update", SchemaID: "game.db.update.v1"},
-		},
-	}
-	if issues := ext.Validate(); len(issues) != 0 {
-		t.Errorf("extract rule: want no issues, got %v", issues)
+	// 历史 extract 类型已删除：声明它必须报 effect-unknown
+	gone := good
+	gone.ID = "game.extract_sync_db"
+	gone.Effect = Effect{Type: "extract"}
+	if issues := gone.Validate(); len(issues) == 0 || issues[0].RuleID != EffectUnknown {
+		t.Errorf("removed extract effect: want %s, got %v", EffectUnknown, issues)
 	}
 
 	// annotate 未知 semantic
@@ -213,8 +207,8 @@ func TestRulesReportDuplicate(t *testing.T) {
 	}
 }
 
-// TestEvaluateSpecExample 复现方案 §12 的完整例子：四条规则命中后
-// 平台得到 Request↔Response 配对、notification/error 标注与 SyncDbData 子事件。
+// TestEvaluateSpecExample 复现方案 §12 的例子：三条规则命中后
+// 平台得到 Request↔Response 配对与 notification/error 标注。
 func TestEvaluateSpecExample(t *testing.T) {
 	rules := []Rule{
 		{
@@ -235,12 +229,6 @@ func TestEvaluateSpecExample(t *testing.T) {
 			Effect: Effect{Type: EffectAnnotate, Semantic: SemNotification},
 		},
 		{
-			ID:   "game.extract_sync_db",
-			When: &Predicate{Path: "data.SyncDbData", Op: OpExists},
-			Effect: Effect{Type: EffectExtract, Source: "data.SyncDbData",
-				Child: &ChildSpec{EventType: "game.db.update", SchemaID: "game.db.update.v1"}},
-		},
-		{
 			ID:     "game.mark_error",
 			When:   &Predicate{Path: "error", Op: OpExists},
 			Effect: Effect{Type: EffectAnnotate, Semantic: SemError},
@@ -259,7 +247,7 @@ func TestEvaluateSpecExample(t *testing.T) {
 	if len(reqRes.Pairs) != 1 || reqRes.Pairs[0].Key != "123" || reqRes.Pairs[0].Side != 0 {
 		t.Errorf("request pair: got %+v", reqRes.Pairs)
 	}
-	if len(reqRes.Semantics) != 0 || len(reqRes.Children) != 0 {
+	if len(reqRes.Semantics) != 0 {
 		t.Errorf("request should be bare: %+v", reqRes)
 	}
 
@@ -272,15 +260,6 @@ func TestEvaluateSpecExample(t *testing.T) {
 	}
 	if len(respRes.Semantics) != 1 || respRes.Semantics[0] != SemError {
 		t.Errorf("response semantics: got %+v", respRes.Semantics)
-	}
-	if len(respRes.Children) != 2 {
-		t.Fatalf("response children: got %d, want 2", len(respRes.Children))
-	}
-	if respRes.Children[0].SchemaID != "game.db.update.v1" {
-		t.Errorf("child schema: %s", respRes.Children[0].SchemaID)
-	}
-	if got, ok := respRes.Children[0].Value.GetByPath("player.id"); !ok || got.Int != 1 {
-		t.Errorf("child[0] payload: %s", respRes.Children[0].Value.String())
 	}
 
 	// 配对判定：request/response 各占一个 side，可配对；两个请求不可配对。
@@ -301,23 +280,6 @@ func TestEvaluateSpecExample(t *testing.T) {
 	}
 	if len(pushRes.Pairs) != 0 {
 		t.Errorf("push should not pair: got %+v", pushRes.Pairs)
-	}
-}
-
-func TestEvaluateNullExtractSilentSkip(t *testing.T) {
-	rule := Rule{
-		ID:   "game.extract_sync_db",
-		When: &Predicate{Path: "data.SyncDbData", Op: OpExists},
-		Effect: Effect{Type: EffectExtract, Source: "data.SyncDbData",
-			Child: &ChildSpec{EventType: "game.db.update", SchemaID: "game.db.update.v1"}},
-	}
-	v := mustValue(t, `{"data":{"SyncDbData":null}}`)
-	res, err := Evaluate([]Rule{rule}, v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(res.Children) != 0 {
-		t.Errorf("null source should yield no children, got %+v", res.Children)
 	}
 }
 

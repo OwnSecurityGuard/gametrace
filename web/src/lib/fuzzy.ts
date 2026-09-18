@@ -69,7 +69,7 @@ function flatten(o: unknown): string {
 
 /**
  * 事件是否命中查询。
- * 覆盖协议名、消息名、方向、id / correlation / causation / parent、
+ * 覆盖协议名、消息名、方向、id / correlation / causation、
  * 以及 data / meta / analysis 全量序列化文本。
  */
 export function eventMatchesQuery(ev: DecodedEvent, query: string): boolean {
@@ -83,7 +83,6 @@ export function eventMatchesQuery(ev: DecodedEvent, query: string): boolean {
     meta.direction,
     ev.correlation_id || "",
     ev.causation_id || "",
-    ev.parent_id || "",
     ev.id,
     flatten({ data: ev.data, meta: ev.meta, analysis: ev.analysis }),
   ].join(" ").toLowerCase();

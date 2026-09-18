@@ -208,7 +208,7 @@ rules:
 
   # ---- semantic 层（Protocol Semantic Rule，§10）----
   # 规则模型：Semantic Rule = Predicate + Effect；GJSON 取值，Predicate 判断，
-  # Effect 产生语义（pair / extract / annotate）。规则 ID 由 rule 包持有，
+  # Effect 产生语义（pair / annotate / name）。规则 ID 由 rule 包持有，
   # 本段收录原文供 verify/explain 回查。完整文档：docs/plugin-semantic-rules.md。
   - id: gt.semantic.rule-id-required
     topic: semantic
@@ -249,7 +249,7 @@ rules:
     topic: semantic
     layer: semantic
     severity: error
-    statement: effect.type ∈ pair|extract|annotate|name（第一版闭集）
+    statement: effect.type ∈ pair|annotate|name（闭集）
     doc_ref: docs/plugin-semantic-rules.md
 
   - id: gt.semantic.op-unknown
@@ -322,21 +322,6 @@ rules:
     severity: error
     statement: name effect 必须声明 key（消息名的 GJSON path，从 payload 提取 msg_name）
     doc_ref: docs/plugin-semantic-rules.md
-
-  - id: gt.semantic.extract-source-required
-    topic: semantic
-    layer: semantic
-    severity: error
-    statement: extract effect 必须声明 source（指向数组或对象的 GJSON path）
-    doc_ref: docs/plugin-semantic-rules.md
-
-  - id: gt.semantic.extract-child-required
-    topic: semantic
-    layer: semantic
-    severity: error
-    statement: extract effect 必须声明 child（event_type + schema_id）
-    doc_ref: docs/plugin-semantic-rules.md
-
 
   - id: gt.semantic.annotate-semantic-required
     topic: semantic

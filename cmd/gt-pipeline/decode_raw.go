@@ -239,11 +239,9 @@ func (s *pipelineService) DecodeRawPackets(ctx context.Context, req capturecontr
 			if ev == nil {
 				continue
 			}
-			// 语义富化：与实时路径一致执行 name/annotate/pair/extract，
-			// extract 产出的子事件一并写入（子事件已带 ParentID）。
-			children := sem.enrichSemantics(ev)
+			// 语义富化：与实时路径一致执行 name/annotate/pair。
+			sem.enrichSemantics(ev)
 			pending = append(pending, ev)
-			pending = append(pending, children...)
 			scChanges, err := baseline.Apply(ev, req.SessionID)
 			if err != nil {
 				logger.Warn("state projection", "event_id", ev.Identity.ID, "error", err)

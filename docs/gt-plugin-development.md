@@ -198,7 +198,7 @@ semantic_rules:
 
 | 层 | 声明段 | 作用 | 运行期载体 |
 |----|--------|------|-----------|
-| Semantic | `semantic_rules[]` | name/annotate/pair/extract 规则 | `meta` / `trace`（`correlation_id`+`causation_id`）/ 子事件 `parent_id` |
+| Semantic | `semantic_rules[]` | name/annotate/pair 规则 | `meta` / `trace`（`correlation_id`+`causation_id`） |
 
 - `event_type` 不得使用保留前缀 `gametrace.`。
 - 规则求值结果注入 `_meta`，宿主按 `_meta.*` 路径消费；事件业务 payload、Meta、Analysis 三段严格分离。

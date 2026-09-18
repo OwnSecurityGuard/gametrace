@@ -62,7 +62,6 @@ export const ANALYSIS_KEYS = new Set<string>([
   "correlation_id",
   "flow_id",
   "causation_id",
-  "parent_id",
   "relation",
 ]);
 

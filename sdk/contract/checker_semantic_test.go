@@ -6,9 +6,10 @@ import (
 
 	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
 	"github.com/OwnSecurityGuard/gametrace/sdk/event"
+	"github.com/OwnSecurityGuard/gametrace/sdk/rule"
 )
 
-// 覆盖方案 §12 的完整例子：四条规则（pair / notification / SyncDbData 提取 / error 标注）。
+// 覆盖方案 §12 的例子：三条规则（pair / notification 标注 / error 标注）。
 // 语义契约 v1 的 schemas/states 层已移除，semantic_rules 是唯一的语义声明。
 const semanticPluginManifest = `
 api_version: gt.decoder/v2
@@ -34,15 +35,6 @@ semantic_rules:
     effect:
       type: annotate
       semantic: notification
-  - id: my_game.extract_sync_db
-    when:
-      - { path: data.SyncDbData, op: exists }
-    effect:
-      type: extract
-      source: data.SyncDbData
-      child:
-        event_type: my_game.db.update
-        schema_id: my_game.db_update.v1
   - id: my_game.mark_error
     when:
       - { path: error, op: exists }
@@ -60,7 +52,7 @@ func parseSemanticManifest(t *testing.T) *sdk.Manifest {
 	return m
 }
 
-// 声明合法的四条规则 → 声明期零违规。
+// 声明合法的三条规则 → 声明期零违规。
 func TestSemanticRulesDeclarationValid(t *testing.T) {
 	r := NewPluginChecker().Check(parseSemanticManifest(t))
 	if r.HasErrors() {
@@ -78,7 +70,7 @@ func TestSemanticRulesDeclarationErrors(t *testing.T) {
 		ruleID string
 	}{
 		{"duplicate rule id", func(m *sdk.Manifest) {
-			m.SemanticRules[3].ID = m.SemanticRules[0].ID
+			m.SemanticRules[2].ID = m.SemanticRules[0].ID
 		}, "gt.semantic.rule-id-duplicate"},
 		{"unknown op", func(m *sdk.Manifest) {
 			m.SemanticRules[0].When.All[0].Op = "regex"
@@ -92,9 +84,9 @@ func TestSemanticRulesDeclarationErrors(t *testing.T) {
 		{"unknown annotate semantic", func(m *sdk.Manifest) {
 			m.SemanticRules[1].Effect.Semantic = "warning"
 		}, "gt.semantic.annotate-semantic-unknown"},
-		{"extract without child", func(m *sdk.Manifest) {
-			m.SemanticRules[2].Effect.Child = nil
-		}, "gt.semantic.extract-child-required"},
+		{"removed extract effect", func(m *sdk.Manifest) {
+			m.SemanticRules[2].Effect = rule.Effect{Type: "extract"}
+		}, "gt.semantic.effect-unknown"},
 		{"in without array", func(m *sdk.Manifest) {
 			m.SemanticRules[0].When.All[1].Value = "client_to_server"
 		}, "gt.semantic.value-array-required"},
@@ -109,7 +101,7 @@ func TestSemanticRulesDeclarationErrors(t *testing.T) {
 	}
 }
 
-// 运行期：规则评估成功 → 零违规（pair/annotate/extract 的命中是平台执行事实）。
+// 运行期：规则评估成功 → 零违规（pair/annotate 的命中是平台执行事实）。
 func TestSemanticRulesEventValid(t *testing.T) {
 	m := parseSemanticManifest(t)
 	pc := NewPluginChecker()
@@ -118,11 +110,7 @@ func TestSemanticRulesEventValid(t *testing.T) {
 		Value: event.ValueObject(map[string]event.Value{
 			"seqId": event.ValueInt(123),
 			"error": event.ValueString("hp insufficient"),
-			"data": event.ValueObject(map[string]event.Value{
-				"SyncDbData": event.ValueArray([]event.Value{
-					event.ValueObject(map[string]event.Value{"kind": event.ValueString("player")}),
-				}),
-			}),
+			"data":  event.ValueObject(map[string]event.Value{"kind": event.ValueString("player")}),
 		}),
 	}
 	r := pc.CheckEvent(m, d)

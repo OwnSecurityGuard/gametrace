@@ -5,11 +5,15 @@
 //
 //	Event JSON → GJSON 取值 → Predicate 判断 → Effect 产生语义
 //
-// 第一版 Effect 闭集只有四个：
+// Effect 闭集有三个：
 //   - pair     配对（Request ↔ Response 等键相等关系）
-//   - extract  提取（一个网络 Event 内的多个逻辑子事件）
 //   - annotate 标注（request/response/notification/error 语义属性）
 //   - name     命名（从 payload 经 GJSON 提取消息名称，写 meta.msg_name）
+//
+// 历史：曾有一个 extract 效果（把数组/对象字段拆成子事件），因宿主侧只挂
+// ParentID 就再无下文——子事件不过规则、不参与状态投影、schema_id 无处安放，
+// 而同一个"一拆多"在解码器里直接发多条事件（DecodeV2 响应本就是事件切片）
+// 能力更完整。已于 2026-09-18 整条删除（含 parent_id 列与前端父子视图）。
 //
 // 设计原则：Predicate 只做判断不做业务逻辑；不引入 Expr、脚本或自定义函数；
 // Group / 高级因果关系（caused-by 等）在真实协议事实出现之前不做。
@@ -43,16 +47,9 @@ type EffectType string
 
 const (
 	EffectPair     EffectType = "pair"
-	EffectExtract  EffectType = "extract"
 	EffectAnnotate EffectType = "annotate"
 	EffectName     EffectType = "name"
 )
-
-// ChildSpec 描述 extract 效果产出的子事件声明。
-type ChildSpec struct {
-	EventType string `yaml:"event_type"`
-	SchemaID  string `yaml:"schema_id"`
-}
 
 // PairSide 描述 pair 效果的一侧。
 // Key 是该侧事件中配对键的 GJSON path —— 两侧可指向不同字段
@@ -124,7 +121,6 @@ func (s *PairSide) UnmarshalYAML(value *yaml.Node) error {
 //
 // 字段按 Type 取用：
 //   - pair:     Sides（恰好 2 个；每侧自带 key 与角色判定）
-//   - extract:  Source（必填）+ Child（必填）
 //   - annotate: Semantic（必填，闭集）
 //   - name:     Key（必填，消息名称的 GJSON path）
 type Effect struct {
@@ -135,11 +131,6 @@ type Effect struct {
 	// 每个 side 自己的 key（两侧字段结构可以不同）。
 	Key   string     `yaml:"key,omitempty"`
 	Sides []PairSide `yaml:"sides,omitempty"`
-
-	// extract：Source 是 GJSON path，指向数组（每个元素一个子事件）
-	// 或对象（单个子事件）。子事件保留父事件来源关系，由宿主挂接。
-	Source string     `yaml:"source,omitempty"`
-	Child  *ChildSpec `yaml:"child,omitempty"`
 
 	// annotate：命中时给事件打上的语义标签。
 	Semantic Semantic `yaml:"semantic,omitempty"`
@@ -183,8 +174,6 @@ func (r Rule) Validate() []Issue {
 	switch r.Effect.Type {
 	case EffectPair:
 		issues = append(issues, r.validatePair()...)
-	case EffectExtract:
-		issues = append(issues, r.validateExtract()...)
 	case EffectAnnotate:
 		issues = append(issues, r.validateAnnotate()...)
 	case EffectName:
@@ -193,7 +182,7 @@ func (r Rule) Validate() []Issue {
 		issues = append(issues, Issue{RuleID: EffectRequired, Message: "effect.type is required", Severity: SeverityError})
 	default:
 		issues = append(issues, Issue{RuleID: EffectUnknown,
-			Message: fmt.Sprintf("effect.type %q not in pair|extract|annotate|name", r.Effect.Type), Severity: SeverityError})
+			Message: fmt.Sprintf("effect.type %q not in pair|annotate|name", r.Effect.Type), Severity: SeverityError})
 	}
 	return issues
 }
@@ -224,28 +213,6 @@ func (r Rule) validatePair() []Issue {
 		for _, iss := range s.Predicate.validate() {
 			iss.Path = fmt.Sprintf("effect.sides[%d].%s", i, iss.Path)
 			issues = append(issues, iss)
-		}
-	}
-	return issues
-}
-
-func (r Rule) validateExtract() []Issue {
-	var issues []Issue
-	if r.Effect.Source == "" {
-		issues = append(issues, Issue{RuleID: ExtractSourceRequired, Path: "effect",
-			Message: "extract effect requires source (GJSON path to array/object)", Severity: SeverityError})
-	}
-	if r.Effect.Child == nil {
-		issues = append(issues, Issue{RuleID: ExtractChildRequired, Path: "effect",
-			Message: "extract effect requires child (event_type + schema_id)", Severity: SeverityError})
-	} else {
-		if r.Effect.Child.EventType == "" {
-			issues = append(issues, Issue{RuleID: ExtractChildRequired, Path: "effect.child",
-				Message: "extract child.event_type is required", Severity: SeverityError})
-		}
-		if r.Effect.Child.SchemaID == "" {
-			issues = append(issues, Issue{RuleID: ExtractChildRequired, Path: "effect.child",
-				Message: "extract child.schema_id is required", Severity: SeverityError})
 		}
 	}
 	return issues

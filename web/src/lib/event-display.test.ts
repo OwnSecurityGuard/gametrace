@@ -21,7 +21,6 @@ describe("classifyPayload", () => {
       flow_id: "f1",
       correlation_id: "c1",
       causation_id: "e0",
-      parent_id: "e-1",
       relation: "x",
     } as Record<string, unknown>;
 
@@ -37,7 +36,6 @@ describe("classifyPayload", () => {
       "flow_id",
       "correlation_id",
       "causation_id",
-      "parent_id",
       "relation",
     ]) {
       expect(analysis).toHaveProperty(k);

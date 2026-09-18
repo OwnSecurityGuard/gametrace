@@ -13,7 +13,6 @@ import {
   ChevronRight,
   ChevronDown,
   ChevronsLeft,
-  ChevronRight as TreeChevron,
   Table2,
   Search,
   SearchX,
@@ -21,7 +20,6 @@ import {
   RotateCw,
   ArrowRight,
   Link2,
-  GitFork,
   Copy,
   ChevronUp,
   Box,
@@ -540,52 +538,6 @@ function PairPanel({
   );
 }
 
-/** 父子层级面板：展示 extract 规则产出的子事件（ParentID 指向本事件），可跳转定位。 */
-function ChildPanel({
-  children,
-  onJumpToChild,
-}: {
-  children: DecodedEvent[];
-  onJumpToChild: (id: string) => void;
-}) {
-  if (children.length === 0) return null;
-
-  return (
-    <div className="mb-3 rounded-md border border-border bg-background px-3 py-2">
-      <div className="mb-1.5 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
-        <GitFork className="h-3.5 w-3.5" />
-        父子层级
-        <span className="text-[10px] font-normal text-muted-foreground/70">
-          {children.length} 个子事件
-        </span>
-      </div>
-      <ul className="space-y-1">
-        {children.map((child) => {
-          const cMeta = extractMeta(child.data, child.meta);
-          return (
-            <li key={child.id} className="flex items-center gap-2">
-              <span className="text-[10px] text-muted-foreground/50">
-                ├─{" "}
-              </span>
-              <button
-                type="button"
-                onClick={() => onJumpToChild(child.id)}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs hover:bg-muted transition-colors"
-                title={`跳转到子事件 ${cMeta.msgName || child.id}`}
-              >
-                <TreeChevron className="h-3 w-3 text-muted-foreground" />
-                <span className="font-mono font-semibold">{cMeta.msgName || "(unknown)"}</span>
-                <span className="text-muted-foreground">({child.protocol})</span>
-                <span className="font-mono text-muted-foreground">{formatTimestamp(child.timestamp)}</span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
-
 /**
  * 配对并排视图：展开 pair 关系时左请求 / 右响应，左右并列展示双方原始 JSON payload。
  * 仅当当前事件处于某个配对组时使用；否则回退到单事件展示。
@@ -700,21 +652,17 @@ function RenderTable({ rows }: { rows: { k: string; v: React.ReactNode }[] }) {
   );
 }
 
-/** 「GameTrace 分析」：实体、状态变更、correlation、配对、父子聚合区。 */
+/** 「GameTrace 分析」：实体、状态变更、correlation、配对聚合区。 */
 function AnalysisPanel({
   event,
   partners,
-  children,
   analysis,
   onJumpToPartner,
-  onJumpToChild,
 }: {
   event: DecodedEvent;
   partners: DecodedEvent[];
-  children: DecodedEvent[];
   analysis: Record<string, unknown>;
   onJumpToPartner: (id: string) => void;
-  onJumpToChild: (id: string) => void;
 }) {
   const sc = Array.isArray(analysis._state_changes) ? analysis._state_changes : [];
   const entityRows: { k: string; v: React.ReactNode }[] = [];
@@ -727,7 +675,6 @@ function AnalysisPanel({
   if (event.correlation_id) correlationRows.push({ k: "correlation_id", v: event.correlation_id });
   if (analysis.flow_id != null) correlationRows.push({ k: "flow_id", v: String(analysis.flow_id) });
   if (event.causation_id) correlationRows.push({ k: "causation_id", v: event.causation_id });
-  if (event.parent_id) correlationRows.push({ k: "parent_id", v: event.parent_id });
 
   return (
     <div className="space-y-2">
@@ -736,7 +683,6 @@ function AnalysisPanel({
         partners={partners}
         onJumpToPartner={onJumpToPartner}
       />
-      <ChildPanel children={children} onJumpToChild={onJumpToChild} />
 
       {entityRows.length > 0 && (
         <SectionCard icon={<Box className="h-3.5 w-3.5" />} title="实体">
@@ -915,18 +861,14 @@ function ExpandedHeader({
 function ExpandedRow({
   event,
   partners,
-  children,
   colSpan,
   onJumpToPartner,
-  onJumpToChild,
   onCollapse,
 }: {
   event: DecodedEvent;
   partners: DecodedEvent[];
-  children: DecodedEvent[];
   colSpan: number;
   onJumpToPartner: (id: string) => void;
-  onJumpToChild: (id: string) => void;
   onCollapse: () => void;
 }) {
   const meta = useMemo(() => extractMeta(event.data, event.meta), [event.data, event.meta]);
@@ -987,10 +929,8 @@ function ExpandedRow({
             <AnalysisPanel
               event={event}
               partners={partners}
-              children={children}
               analysis={classes.analysis}
               onJumpToPartner={onJumpToPartner}
-              onJumpToChild={onJumpToChild}
             />
           </div>
         )}
@@ -1004,23 +944,19 @@ function ExpandedRow({
 const EventRow = memo(function EventRow({
   event,
   partners,
-  children,
   isExpanded,
   isHighlighted,
   onToggle,
   onJumpToPartner,
-  onJumpToChild,
   onCollapse,
   onOpenStateChange,
 }: {
   event: DecodedEvent;
   partners: DecodedEvent[];
-  children: DecodedEvent[];
   isExpanded: boolean;
   isHighlighted: boolean;
   onToggle: (id: string) => void;
   onJumpToPartner: (id: string) => void;
-  onJumpToChild: (id: string) => void;
   onCollapse: (id: string) => void;
   onOpenStateChange: (event: DecodedEvent) => void;
 }) {
@@ -1049,22 +985,11 @@ const EventRow = memo(function EventRow({
           {formatTimestamp(event.timestamp)}
         </TableCell>
 
-        {/* 消息名：方向文字 + 名称 + 语义标签 + 子事件/配对角标 */}
+        {/* 消息名：方向文字 + 名称 + 语义标签 + 配对角标 */}
         <TableCell className="min-w-[220px] max-w-[340px] py-2">
           <div className="flex items-center gap-1.5 min-w-0">
-            {event.parent_id && (
-              <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60" title={`父事件 ${event.parent_id}`}>
-                ⊢
-              </span>
-            )}
             <DirectionChip direction={meta.direction} />
             <MessageCell msgName={meta.msgName} semantic={meta.semantic} />
-            {children.length > 0 && (
-              <span className="ml-0.5 shrink-0 inline-flex items-center gap-0.5 text-muted-foreground/70" title={`${children.length} 个 extract 子事件`}>
-                <GitFork className="h-3 w-3" />
-                <span className="text-[10px]">{children.length}</span>
-              </span>
-            )}
             {partners.length > 0 && !isExpanded && (
               <span className="ml-0.5 shrink-0 inline-flex items-center text-muted-foreground/70" title="已配对请求/响应">
                 <Link2 className="h-3 w-3" />
@@ -1111,10 +1036,8 @@ const EventRow = memo(function EventRow({
         <ExpandedRow
           event={event}
           partners={partners}
-          children={children}
           colSpan={colSpan}
           onJumpToPartner={onJumpToPartner}
-          onJumpToChild={onJumpToChild}
           onCollapse={() => onCollapse(event.id)}
         />
       )}
@@ -1201,21 +1124,7 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
     return m;
   }, [filteredEvents]);
 
-  /**
-   * 父子索引：父事件 id → 当前页内的提取子事件（parent_id 指回父事件，extract 规则写入）。
-   */
-  const childrenMap = useMemo(() => {
-    const m = new Map<string, DecodedEvent[]>();
-    for (const ev of filteredEvents) {
-      if (!ev.parent_id) continue;
-      const arr = m.get(ev.parent_id);
-      if (arr) arr.push(ev);
-      else m.set(ev.parent_id, [ev]);
-    }
-    return m;
-  }, [filteredEvents]);
-
-  /** 展开并滚动定位到某事件（配对伙伴 / 子事件跳转）。 */
+  /** 展开并滚动定位到某事件（配对伙伴跳转）。 */
   function handleJumpTo(id: string) {
     setExpandedIds((prev) => new Set(prev).add(id));
     setHighlightId(id);
@@ -1362,12 +1271,10 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
               key={event.id}
               event={event}
               partners={partnersMap.get(event.id) ?? []}
-              children={childrenMap.get(event.id) ?? []}
               isExpanded={expandedIds.has(event.id)}
               isHighlighted={highlightId === event.id}
               onToggle={handleToggleExpand}
               onJumpToPartner={handleJumpTo}
-              onJumpToChild={handleJumpTo}
               onCollapse={handleCollapse}
               onOpenStateChange={(ev) => setScEvent(ev)}
             />

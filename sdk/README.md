@@ -41,7 +41,7 @@ go get github.com/OwnSecurityGuard/gametrace/sdk@latest
 |---|---|
 | `sdk` 根包 | `RunRegisterLoop` / `RunRegisterLoopWithOptions`（注册/心跳/重试/隧道/认证）、manifest 读写校验、`DecodeFuncV2` |
 | `contract/` | 线上契约 SSOT（`contract.yaml`）+ 分层 `PluginChecker`（semantic 规则） |
-| `rule/` | Protocol Semantic Rule：GJSON 取值 + Predicate + Effect（pair/extract/annotate/name） |
+| `rule/` | Protocol Semantic Rule：GJSON 取值 + Predicate + Effect（pair/annotate/name） |
 | `framing/` | `ExtractL7`（按 link_type 剥链路层）、`Reassembler`（TCP 逐流重组）、FlowKey |
 | `event/` | `Draft`（Type/Value/Meta/Analysis 四段）、`Value`（MsgPack 编解码）、Split/Merge |
 | `proto/` | 插件 ↔ 宿主 gRPC 契约（`plugin.proto` 为 SSOT，仅本仓库生成一份） |

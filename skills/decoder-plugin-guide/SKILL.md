@@ -350,11 +350,11 @@ semantic_rules:
       key: msg_type
 ```
 
-- `semantic_rules` 是接入平台语义能力的入口，effect 闭集 4 类：`name`（消息名→`meta.msg_name`）、`annotate`（角色标签→`meta.semantic`）、`pair`（请求/响应配对→`correlation_id`+`causation_id`）、`extract`（父事件拆子事件→子事件 `parent_id` 指父）。接入要点见下节。
+- `semantic_rules` 是接入平台语义能力的入口，effect 闭集 3 类：`name`（消息名→`meta.msg_name`）、`annotate`（角色标签→`meta.semantic`）、`pair`（请求/响应配对→`correlation_id`+`causation_id`）。接入要点见下节。
 - `hints` 帮助平台匹配：传输层、压缩、定界方式、端口。
 - 注册前宿主会校验 manifest；规则校验失败会在宿主日志输出（`semantic rules:` 前缀），注意查看。
 
-#### 5.1 语义规则接入（semantic_rules）——复用平台的配对/父子能力
+#### 5.1 语义规则接入（semantic_rules）——复用平台的配对/命名/标注能力
 
 规则 = Predicate(`when`) + Effect，**决定事件怎么被解释/关联，权重高于解码器硬编码**。effect 是一个闭集，插件只需声明，执行由平台完成。
 
@@ -366,7 +366,6 @@ semantic_rules:
 | `name` | 从 payload 提取消息名 | `meta.msg_name` | `key` |
 | `annotate` | 打角色标签：request/response/notification/error | `meta.semantic` | `semantic` |
 | `pair` | 请求-响应配对（同一个“来回”） | `correlation_id`（双方相同）+ `causation_id`（响应方→请求方） | `sides`（恰好 2 个，每侧自带 `key`） |
-| `extract` | 父事件拆出子事件（**父子关系**） | 子事件继承父连接等来源，`parent_id` 指父、继承父 `correlation_id` | `source` + `child`（`child.event_type` 与 `child.schema_id` **两者都必填**，缺一报 `gt.semantic.extract-child-required`） |
 
 **① `name` —— 消息名**（替代解码器写死）：
 
@@ -399,19 +398,32 @@ pair 恰好 2 个 `sides`，每侧自带 `key`（该侧配对键 GJSON path，�
       - { path: _meta.msg_name, op: eq, value: pong, key: ts }
 ```
 
-**④ `extract` —— 父子关系（一个网络消息承载多个逻辑子事件）**：
-一个帧的 payload 里含数组/对象，每个元素是一个独立的逻辑子事件（如世界快照下的多个实体状态）。`source` 指向该数组（每元素一子事件）或对象（单子事件）；`child` 声明子事件的事件类型（event_type）。拆出的子事件**继承父的连接等来源字段，`parent_id` 指向父事件**，并继承父的 `correlation_id`；前端按父子层级折叠展示。
+**附：「一个包产出多条事件」不走规则**
 
-```yaml
-- id: foo.extract_ents
-  when: [ { path: msg_type, op: eq, value: snapshot } ]
-  effect:
-    type: extract
-    source: ents                                        # 数组/对象路径：真实报文中存在的快照子结构
-    child:
-      event_type: entity_snapshot
-      schema_id: foo.entity_snapshot.v1                 # 必填（与 event_type 同级，漏了注册期报错）
+DecodeV2 的解码响应本身就是事件切片（`r.Events []*Event`），"一个网络消息承载多个逻辑成分"
+是解码器的原生能力，不需要任何 semantic rule。在解码器里拆开直接返回即可：
+
+```go
+// 世界快照 → 每条实体状态一个事件（各自带完整 Meta 与 Analysis）
+events := make([]*event.Event, 0, len(snapshot.Ents))
+for _, ent := range snapshot.Ents {
+    ev := event.NewEvent(req.SessionID, "entity_snapshot", srcID, ent.Value(), ctx)
+    ev.Meta = event.ValueObject(map[string]event.Value{
+        "msg_name":  event.ValueString("EntityState"),
+        "direction": event.ValueString("server_to_client"),
+    })
+    // 需要状态投影就挂 _state_changes（走 Analysis 通道）
+    ev.Analysis = event.ValueObject(map[string]event.Value{
+        "_state_changes": ent.StateChanges(),
+    })
+    events = append(events, ev)
+}
+// DecodeV2 的响应 Events 是切片，把这些事件一并返回即可。
 ```
+
+**为什么不要用规则声明来做这件事**：平台曾有过一个 `extract` 效果（声明 `source` 拆子事件、
+子事件挂 `parent_id`），已于 2026-09-18 整体删除。它拆出来的子事件不过语义规则、不参与状态
+投影、`schema_id` 也没有落点——解码器路径同时具备这三件能力，规则路径三样全缺。
 
 > 方向从哪来：规则里判定请求/响应侧用的是 `_meta.direction`，它由**解码器**写进 Meta 通道
 > （`Meta["direction"] = "client_to_server" | "server_to_client"`），平台把 Meta 并入求值视图的
@@ -422,9 +434,9 @@ pair 恰好 2 个 `sides`，每侧自带 `key`（该侧配对键 GJSON path，�
 - 规则 `id`：点分小写段 `[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*`，全局唯一，如 `foo.pair_ts`。
 - 语义标签闭集：`request/response/notification/error`，勿臆造。
 
-**何时用哪个**：跨消息的“一问一答”→ `pair`；**同消息内“一拆多”**（快照→多实体、批量→逐条）→ `extract`；二者可组合（子事件仍可被 `pair` 配对）。**优先声明规则而非解码器硬编码**去表达这类语义，便于复用平台的配对/前端联动能力。
+**何时用哪个**：跨消息的“一问一答”→ `pair`；消息名 → `name`；角色标签 → `annotate`。**优先声明规则而非解码器硬编码**去表达这类语义，便于复用平台的配对/前端联动能力。同消息内“一拆多”（快照→多实体、批量→逐条）**不属于规则层**——见上「附」。
 
-**验证**：注册后 `get_session_status`/宿主日志看规则加载；`list_decoded_data` 抽查 `meta.msg_name`、`meta.semantic`、`trace.correlation_id/causation_id`，以及 `extract` 子事件的 `parent_id` 是否指向父事件。
+**验证**：注册后 `get_session_status`/宿主日志看规则加载；`list_decoded_data` 抽查 `meta.msg_name`、`meta.semantic`、`trace.correlation_id/causation_id`。
 
 #### 5.2 运行期执行事实（写规则前必读）
 
@@ -442,9 +454,8 @@ pair 恰好 2 个 `sides`，每侧自带 `key`（该侧配对键 GJSON path，�
 | F6 | pair 待配对池是 `semanticEngine.pending`（每个抓包任务一个），键 = `ConnID + \x00 + RuleID + \x00 + 配对键`；`MatchPair` 只比「同规则 + 键相等 + Side 不同」 | 配对键只需**连接内唯一**；无 `ConnID` 的事件（无五元组）退化为全局池 |
 | F7 | 待配对 TTL **30s**，且事件 flush 落库后配对不回写（宿主注释已标为已知限制） | 异步/长轮询/匹配队列这类响应不能声明 pair |
 | F8 | `evalPair` 短路：命中 side i 就取 side i 的 key，key 缺失**直接 no-hit，不再试另一侧** | pair 两侧谓词必须互斥，两侧 key 都必须存在 |
-| F9 | extract 的 `source` 指向标量 / `null` → **静默产出 0 个子事件** | `exists` 通过不代表能拆；必须是数组或对象 |
-| F10 | annotate 同一标签去重后写入 `meta.semantic` 数组 | 不要为同一 semantic 声明多条规则 |
-| F11 | `CorrelationKey` 是**业务会话/操作**标识；pair 命中时 `Trace.CorrelationID` 被更紧的「一问一答」分组键（请求方事件 ID）覆盖，原值转存 `Meta.corr_key` | 别把连接身份（五元组 / `flow_id` / `FlowKey.Canonical()`）填进 `CorrelationKey`——它会被 pair 结果吃掉，且连接身份宿主已经自己派生 |
+| F9 | annotate 同一标签去重后写入 `meta.semantic` 数组 | 不要为同一 semantic 声明多条规则 |
+| F10 | `CorrelationKey` 是**业务会话/操作**标识；pair 命中时 `Trace.CorrelationID` 被更紧的「一问一答」分组键（请求方事件 ID）覆盖，原值转存 `Meta.corr_key` | 别把连接身份（五元组 / `flow_id` / `FlowKey.Canonical()`）填进 `CorrelationKey`——它会被 pair 结果吃掉，且连接身份宿主已经自己派生 |
 
 求值顺序：**全部 `name` 规则（按声明顺序，首个命中注入 `_meta.msg_name`）→ 其余规则**。因此凡用 `_meta.msg_name` 分支的 annotate/pair，前提是 name 规则确实命中；name 未命中时后续分支全部落空。
 
@@ -479,7 +490,7 @@ pair 恰好 2 个 `sides`，每侧自带 `key`（该侧配对键 GJSON path，�
 | **G1 证据门** | 说得出出处（官方客户端/服务端源码 > 真实抓包报文 > 协议文档），注释能写清"哪个消息、哪个字段、哪一侧" | 注释里写不出依据来源 |
 | **G2 路径门** | `when.path` / `effect.key` / `effect.source` 在**真实解码产物**上存在，且类型确定（数字/字符串/数组/对象） | path 拼错、字段只在部分消息存在、`source` 是标量 |
 | **G3 取值门** | `when.value` 与配对键取值在真实报文里**出现过**，且字面量 kind 与 payload 一致（F4） | 规则永不命中（死规则） |
-| **G4 效果门** | 该 effect 在本协议真能成立：pair 键连接内唯一 + 30s 内往返；extract 的 source 是数组/对象；annotate 方向可判定 | 结构合法但运行期落空或错配 |
+| **G4 效果门** | 该 effect 在本协议真能成立：pair 键连接内唯一 + 30s 内往返；annotate 方向可判定；name 的 key 在真实报文里存在 | 结构合法但运行期落空或错配 |
 
 排序约束：先 `name` → 再 `annotate` → 最后 `pair`。pair 风险最高（错配会直接污染前端左右并排展示），证据要求最严。
 
@@ -516,13 +527,8 @@ pair 恰好 2 个 `sides`，每侧自带 `key`（该侧配对键 GJSON path，�
       - { path: _meta.direction, op: eq, value: server_to_client, key: request_id }
 ```
 
-**`extract`**（门槛最高，默认不主动写）—— 判据：
-1. `source` 在真实报文里是**数组或对象**，不是标量、也不是"看起来像列表的字符串"（F9）；
-2. 父-子确实是"一拆多"（一个网络消息承载多个逻辑子事件），不是两种平级消息；
-3. `child` 同时给 `event_type` 与 `schema_id`（两者必填）；
-4. 回放后子事件数 ≥1（见 §5.5）。
-
-反例：`source` 指向字符串字段；`child` 漏 `schema_id`；把两种平级消息误当父子（搅乱前端层级）。
+**`extract`**：该效果已删除，不再有这条门。同消息"一拆多"直接在解码器里返回多条事件
+（见 §5.1「附」），不走规则层。
 
 #### 5.5 覆盖率回放（诊断产出，人工判定）
 
@@ -653,7 +659,6 @@ go test -count=1 ./...   # 必须 -count=1：go test 缓存会掩盖问题
 - [ ] `when` 没有用 `neq` 表达"字段不存在"（F3）；`value` 字面量类型与 payload 一致（F4）
 - [ ] `name` 规则至多一条生效，多条时确认过声明顺序（F5）
 - [ ] `pair` 配对键**连接内唯一**（F6，per-connection seq 可用）且已抓包核对；两侧谓词互斥（F8）；往返 30s 内（F7）；推送/广播已被 `when` 拦截
-- [ ] `extract` 的 `child` 同时给了 `event_type` 与 `schema_id`；`source` 确认是数组/对象而非标量（F9）
 - [ ] 双向都发的消息 `annotate` 已留空（不标错方向/角色）；标错比不标更糟
 - [ ] 已跑覆盖率回放并产出覆盖率表交用户判定，0 命中规则已删除或写明原因（§5.5）
 - [ ] 测试覆盖：跨段重组、多连接、5-tuple 复用、manifest 一致性（UDP 插件加：分包独立、无握手）

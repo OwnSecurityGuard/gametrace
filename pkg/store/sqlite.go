@@ -98,7 +98,6 @@ CREATE TABLE IF NOT EXISTS events (
     causation_id TEXT,
     correlation_id TEXT,
     origin_id TEXT,
-    parent_id TEXT,
     context BLOB NOT NULL,
     payload BLOB NOT NULL,
     created_at INTEGER NOT NULL,
@@ -175,13 +174,13 @@ CREATE TABLE IF NOT EXISTS decode_error_groups (
 	// 迁移：为已存在的 events 表添加 scenario_id / replay_id 列（Scenario/Replay 前向兼容）
 	_, _ = s.db.Exec("ALTER TABLE events ADD COLUMN scenario_id TEXT")
 	_, _ = s.db.Exec("ALTER TABLE events ADD COLUMN replay_id TEXT")
-	// 迁移：为已存在的 events 表添加 parent_id 列（extract 子事件父链接）
-	_, _ = s.db.Exec("ALTER TABLE events ADD COLUMN parent_id TEXT")
-
 	// 迁移：物理删除 schema 子系统残留列（旧库含 schema_id / projection_json；
 	// 新库无此列时 DROP COLUMN 报错被忽略）。
 	_, _ = s.db.Exec("ALTER TABLE events DROP COLUMN schema_id")
 	_, _ = s.db.Exec("ALTER TABLE event_index DROP COLUMN projection_json")
+	// 迁移：物理删除 parent_id 列（extract 效果已删除，父子关系不再存在；
+	// 旧库含此列，新库无此列时报错被忽略）。
+	_, _ = s.db.Exec("ALTER TABLE events DROP COLUMN parent_id")
 
 	// 索引：支持高效查询
 	indexes := []string{

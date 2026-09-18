@@ -32,8 +32,6 @@ const (
 	CombinatorMixed          = "gt.semantic.combinator-mixed"
 	PairKeyRequired          = "gt.semantic.pair-key-required"
 	PairSidesLimit           = "gt.semantic.pair-sides-limit"
-	ExtractSourceRequired    = "gt.semantic.extract-source-required"
-	ExtractChildRequired     = "gt.semantic.extract-child-required"
 	AnnotateSemanticRequired = "gt.semantic.annotate-semantic-required"
 	AnnotateSemanticUnknown  = "gt.semantic.annotate-semantic-unknown"
 	NameKeyRequired          = "gt.semantic.name-key-required"

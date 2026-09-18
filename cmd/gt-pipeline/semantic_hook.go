@@ -6,12 +6,16 @@ package main
 // GameTrace 自身不定义任何规则（第一层自有引擎 pkg/protocol、pkg/analyze 已删除）。
 //
 // 三种效果：
-//   annotate: 给事件打语义标签（request/response/notification/error）→ payload._meta.semantic
+//   annotate: 给事件打语义标签（request/response/notification/error）→ Meta.semantic
 //   pair:     按键配对请求与响应 → Trace.CorrelationID / CausationID
-//   extract:  从数组/对象字段拆出子事件 → 子事件 Identity.ParentID 指向父事件
+//   name:     从 payload 提取消息名 → Meta.msg_name
 //
-// 状态：gt-plugin-sdk v0.7.0 已发布，随迁移入 cmd/gt-pipeline/ 并在
-// capture_task.go 接线（annotate/pair/extract 三种效果的宿主侧执行）。
+// 状态：gt-plugin-sdk v0.8 已发布，随迁移入 cmd/gt-pipeline/ 并在
+// capture_task.go 接线（annotate/pair/name 三种效果的宿主侧执行）。
+//
+// 历史：曾有一个 extract 效果（一拆多产出子事件），已于 2026-09-18 删除——
+// 拆多事件本就是 DecodeV2 响应的原生能力（r.Events 是切片），走解码器比走
+// 规则声明更完整（子事件有 Meta、能过规则、能带状态变更）。
 
 import (
 	"log/slog"
@@ -119,15 +123,15 @@ func (e *semanticEngine) getRules() []rule.Rule {
 	return e.rules
 }
 
-// enrichSemantics 执行语义规则，返回需要额外写入的子事件（extract 产出，已带 ParentID）。
+// enrichSemantics 执行语义规则，结果就地写入 ev（annotate 标签、pair 关联、name 消息名）。
 // 插件未声明规则时是廉价的空返回。
-func (e *semanticEngine) enrichSemantics(ev *event.Event) []*event.Event {
+func (e *semanticEngine) enrichSemantics(ev *event.Event) {
 	rules := e.getRules()
 	if len(rules) == 0 || ev == nil {
 		if ev != nil {
 			e.logger.Debug("semantic: no rules to evaluate", "event_id", ev.Identity.ID, "event_type", ev.Identity.Type)
 		}
-		return nil
+		return
 	}
 
 	// 规则求值视图：payload 合并 _meta。新模型下 Meta 独立传输（不在 payload），
@@ -136,12 +140,12 @@ func (e *semanticEngine) enrichSemantics(ev *event.Event) []*event.Event {
 	sdkVal, err := toSDKValue(evalVal)
 	if err != nil {
 		e.logger.Debug("semantic: convert payload", "event_id", ev.Identity.ID, "error", err)
-		return nil
+		return
 	}
 	res, err := rule.Evaluate(rules, sdkVal)
 	if err != nil {
 		e.logger.Warn("semantic: evaluate", "event_id", ev.Identity.ID, "error", err)
-		return nil
+		return
 	}
 	// 诊断：观测 Evaluate 是否产出 name/semantic，以及写入后 meta 是否含 msg_name。
 	e.logger.Info("semantic eval",
@@ -158,14 +162,12 @@ func (e *semanticEngine) enrichSemantics(ev *event.Event) []*event.Event {
 	e.applyMsgNames(ev, res.Names)
 	e.applySemantics(ev, res.Semantics)
 	e.applyPairs(ev, res.Pairs)
-	children := e.buildChildren(ev, res.Children)
 
 	if mn, ok := ev.Meta.Get("msg_name"); ok {
 		e.logger.Info("semantic msg_name set", "event_id", ev.Identity.ID, "msg_name", mn.String())
 	} else {
 		e.logger.Info("semantic msg_name absent", "event_id", ev.Identity.ID)
 	}
-	return children
 }
 
 // withMetaObject 把独立的 Meta（新模型）并进求值视图的 _meta 键。
@@ -351,38 +353,6 @@ func (e *semanticEngine) evictExpired(now time.Time) {
 	}
 }
 
-// buildChildren 把 extract 产出的子事件转成 GameTrace 事件，
-// 继承父事件的 Session/Source/Context，ParentID 指向父事件。
-func (e *semanticEngine) buildChildren(parent *event.Event, children []rule.Child) []*event.Event {
-	if len(children) == 0 {
-		return nil
-	}
-	out := make([]*event.Event, 0, len(children))
-	for _, c := range children {
-		val, err := toGTValue(c.Value)
-		if err != nil {
-			e.logger.Warn("semantic: convert child value", "rule", c.RuleID, "error", err)
-			continue
-		}
-		child := &event.Event{
-			Identity: event.NewIdentity(
-				parent.Identity.SessionID,
-				event.EventType(c.EventType),
-				parent.Identity.Source,
-			),
-			Trace: event.TraceContext{
-				CorrelationID: parent.Trace.CorrelationID,
-				OriginID:      parent.Identity.ID,
-			},
-			Context: parent.Context,
-			Payload: event.Payload{Value: val},
-		}
-		child.Identity.ParentID = parent.Identity.ID
-		out = append(out, child)
-	}
-	return out
-}
-
 // toSDKValue 把 GameTrace 的 Value 转成 SDK 的 Value。
 // 两者结构同构但类型不同，走 JSON 互转是最稳的桥（不依赖内部字段布局）。
 func toSDKValue(v event.Value) (sdkevent.Value, error) {
@@ -393,11 +363,3 @@ func toSDKValue(v event.Value) (sdkevent.Value, error) {
 	return sdkevent.ValueFromJSON(raw)
 }
 
-// toGTValue 把 SDK 的 Value 转回 GameTrace 的 Value。
-func toGTValue(v sdkevent.Value) (event.Value, error) {
-	raw, err := v.MarshalJSON()
-	if err != nil {
-		return event.Value{}, err
-	}
-	return event.ValueFromJSON(raw)
-}

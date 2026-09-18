@@ -38,7 +38,7 @@ func (pc *PluginChecker) Check(m *sdk.Manifest) *Report {
 
 // CheckEvent 对单条解码事件跑语义规则运行期检查：
 // 规则评估失败即契约违规（payload 无法转 JSON 等情况）。
-// annotate / pair / extract 的命中是平台执行事实，不在 verify 层判定对错。
+// annotate / pair 的命中是平台执行事实，不在 verify 层判定对错。
 func (pc *PluginChecker) CheckEvent(m *sdk.Manifest, d *event.Draft) *Report {
 	r := &Report{}
 	if len(m.SemanticRules) > 0 {

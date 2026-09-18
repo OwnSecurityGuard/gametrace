@@ -13,7 +13,7 @@ import (
 func (s *SQLiteStore) QueryEventsInRange(ctx context.Context, sessionID string, from, to time.Time, limit int) ([]*event.Event, error) {
 	query := `
 		SELECT id, session_id, type, source, timestamp,
-		       causation_id, correlation_id, origin_id, parent_id, context, payload` + s.eventSelectSuffix() + `
+		       causation_id, correlation_id, origin_id, context, payload` + s.eventSelectSuffix() + `
 		FROM events
 		WHERE session_id = ?
 	`
