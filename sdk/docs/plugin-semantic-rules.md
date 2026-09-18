@@ -1,7 +1,8 @@
 # Protocol Semantic Rule（协议语义规则）
 
 > spec_version 5 新增（contract.components.semantic = 1）；v0.8.2 增补 `name` 效果。
-> v0.8.3 起 Effect 闭集为 **pair / annotate / name** —— `extract` 效果已删除，理由见 §9。
+> Effect 闭集为 **pair / annotate / name** —— `extract` 效果已从 SDK 删除
+> （含它的最后一个发布版本为 v0.9.0），理由与替代做法见 §9。
 > 设计定调：**插件定义协议语义，平台执行语义规则。**
 
 ## 1. 定位与边界
@@ -203,7 +204,7 @@ Notification (annotate)
 
 完整可运行示例见 `contract/checker_semantic_test.go` 与 `rule/rule_test.go`。
 
-## 9. 已删除：extract 效果（v0.8.3）
+## 9. 已删除：extract 效果
 
 早期版本有过第四个效果 `extract`：声明 `source`（GJSON path）把数组/对象字段拆成
 子事件，宿主挂 `Identity.ParentID` 指回父事件。它已整体删除，包括
