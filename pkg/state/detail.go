@@ -359,6 +359,10 @@ func buildChangeFromEvent(row store.StateChangeRow, events map[string]*event.Eve
 		Version:     row.Version,
 		Metadata:    rawJSON(row.Metadata),
 		Source:      ref,
+		// 富化标记必须一起带出来：落了库却在这里丢掉，链视图会把所有变更都渲染成
+		//「首见」，与状态变更页的口径自相矛盾。
+		BeforeResolved: row.BeforeResolved,
+		SrcSeq:         row.Seq,
 	}, nil
 }
 

@@ -133,8 +133,12 @@ type MessageRef struct {
 
 // Change 是一条富化后的字段变更：state_changes 的一行 + 来源消息 + 序号/相对时间。
 type Change struct {
-	ID          string          `json:"id"`
-	Seq         int             `json:"seq"`
+	ID string `json:"id"`
+	// Seq 是本视图内的展示序号（按当前排序从 1 开始），不是持久化的次序。
+	Seq int `json:"seq"`
+	// SrcSeq 是这条变更在来源消息声明数组里的位次（1 基，与 Seq 同基）。同一纳秒内的
+	// 多条变化靠它保持「谁先谁后」与插件上报一致，不随视图排序变化。
+	SrcSeq      int             `json:"src_seq"`
 	EventID     string          `json:"event_id"`
 	SessionID   string          `json:"session_id,omitempty"`
 	FlowID      string          `json:"flow_id,omitempty"`
@@ -150,6 +154,9 @@ type Change struct {
 	Version     int64           `json:"version,omitempty"`
 	Metadata    json.RawMessage `json:"metadata,omitempty"`
 	Source      MessageRef      `json:"source"`
+	// BeforeResolved 表示 before 是平台持有的旧值。false 意味着这条变更之前平台没见过
+	// 该 path（首见/首次同步），消费方据此区分「首次建基线」与「真的从 null 变过来」。
+	BeforeResolved bool `json:"before_resolved"`
 }
 
 // EntityGroup 是一个实体的变更聚合。
@@ -368,6 +375,8 @@ func Run(ctx context.Context, src DataSource, q Query) (*ResultSet, error) {
 			Version:     r.Version,
 			Metadata:    rawJSON(r.Metadata),
 			Source:      src,
+			BeforeResolved: r.BeforeResolved,
+			SrcSeq:      r.Seq,
 		})
 	}
 	if len(changes) == 0 {
@@ -375,8 +384,16 @@ func Run(ctx context.Context, src DataSource, q Query) (*ResultSet, error) {
 	}
 
 	// 时间原点：无锚点时退化为首条变更时间，保证 T+0ms 有明确含义。
-	sort.Slice(changes, func(i, j int) bool {
+	// 同一纳秒内的多条变化先按来源事件、再按事件内上报次序（SrcSeq）排 —— 主键是
+	// uuid，只按 id 排等于随机序，既不可复现也不对应插件上报顺序。
+	sort.SliceStable(changes, func(i, j int) bool {
 		if changes[i].Timestamp.Equal(changes[j].Timestamp) {
+			if changes[i].EventID != changes[j].EventID {
+				return changes[i].EventID < changes[j].EventID
+			}
+			if changes[i].SrcSeq != changes[j].SrcSeq {
+				return changes[i].SrcSeq < changes[j].SrcSeq
+			}
 			return changes[i].ID < changes[j].ID
 		}
 		return changes[i].Timestamp.Before(changes[j].Timestamp)

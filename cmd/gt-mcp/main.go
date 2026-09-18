@@ -97,9 +97,11 @@ const pluginEventTypeRegisterFailed = "register_failed"
 
 // captureReader 组合 EventReader + ProjectionReader，供 gt-mcp 查询事件和投影数据。
 // gt-mcp 只读，通过此接口访问 capture.sqlite，便于未来替换存储后端。
+// DecodeErrorReader 也在内：把「解码失败 N 次」还原成具体原因（见 query_decode_errors）。
 type captureReader interface {
 	store.EventReader
 	store.ProjectionReader
+	store.DecodeErrorReader
 }
 
 type mcpCapture struct {
@@ -2674,6 +2676,7 @@ func main() {
 
 	// 状态变更分析：三视图共用的聚合查询 + 完整协议链/历史详情。
 	registerStateTools(s, capture)
+	registerDecodeErrorTools(s, capture)
 
 	// 行为（behavior）与因果链（causation chain）工具。
 	s.AddTool(mcp.NewTool("begin_capture_run",
@@ -2710,14 +2713,14 @@ func main() {
 		), capture.handleListRawPackets)
 
 		s.AddTool(mcp.NewTool("decode_raw_packets",
-			mcp.WithDescription("[PLUGIN DEBUG ONLY] Decode raw packets of an offline session using a specified plugin. Results are written into the session's events table; query them afterwards via list_decoded_data. Only stopped sessions can be decoded. Requires --enable-raw-debug."),
+			mcp.WithDescription("[PLUGIN DEBUG ONLY] Decode raw packets of an offline session using a specified plugin. Results are written into the session's events table and state_changes projection; query them afterwards via list_decoded_data. Re-decoding is a deterministic recompute: the state baseline is rebuilt in packet order, so before/after (including before_resolved) come out the same as a live-capture pass over the same packets. Only stopped sessions can be decoded. Requires --enable-raw-debug."),
 			mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID to decode (must be stopped)")),
 			mcp.WithString("plugin", mcp.Required(), mcp.Description("Plugin name for decoding, e.g. http or tcp")),
 			mcp.WithString("protocol", mcp.Description("Optional: only decode packets with this protocol, e.g. tcp")),
 			mcp.WithString("src", mcp.Description("Optional: only decode packets whose source matches (substring)")),
 			mcp.WithString("dst", mcp.Description("Optional: only decode packets whose destination matches (substring)")),
 			mcp.WithNumber("limit", mcp.Description("Optional: max number of raw packets to decode, 0 means all")),
-			mcp.WithBoolean("clear_existing", mcp.Description("Optional: clear events, state_changes and event_index before writing new results, default true")),
+			mcp.WithBoolean("clear_existing", mcp.Description("Optional: clear events, state_changes and event_index before writing new results, default true. With false the results are appended, so re-decoding the same packets yields duplicate events and state changes")),
 		), capture.handleDecodeRawPackets)
 	}
 

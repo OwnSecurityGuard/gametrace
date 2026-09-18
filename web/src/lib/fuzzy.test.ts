@@ -84,6 +84,7 @@ describe("eventMatchesDirection", () => {
 const change: Change = {
   id: "c1",
   seq: 1,
+  src_seq: 0,
   event_id: "evt-123",
   timestamp: "2023-01-01T00:00:00Z",
   offset_ms: 100,

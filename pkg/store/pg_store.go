@@ -543,74 +543,35 @@ func (s *PGStore) WriteMetrics(ctx context.Context, metrics []event.Metric) erro
 	return tx.Commit()
 }
 
-// WriteStateChanges 从 Event 批量写入 StateChange（PG 版）。
-func (s *PGStore) WriteStateChanges(ctx context.Context, sessionID string, events []*event.Event) error {
-	if len(events) == 0 {
-		return nil
-	}
-	var enriched []EnrichedStateChange
-	for _, ev := range events {
-		flowID := extractFlowIDFromEvent(ev)
-		for _, sc := range ev.ExtractStateChanges() {
-			enriched = append(enriched, EnrichedStateChange{
-				StateChange:    sc,
-				EventID:        ev.Identity.ID,
-				FlowID:         flowID,
-				Timestamp:      ev.Identity.Timestamp,
-				BeforeResolved: false,
-				AfterResolved:  false,
-				EntityVersion:  sc.Version,
-			})
-		}
-	}
-	return s.WriteEnrichedStateChanges(ctx, sessionID, enriched)
-}
-
 // WriteEnrichedStateChanges 写入经过语义基线解析的 StateChange（PG 版）。
+//
+// 行构造与校验走与其他后端共享的 buildStateChangeRows：两个方言之间只允许存在
+// 占位符写法的差异，否则「只给一个后端加列」这类漏改不会报错，只会静默写零值。
 func (s *PGStore) WriteEnrichedStateChanges(ctx context.Context, sessionID string, changes []EnrichedStateChange) error {
 	if len(changes) == 0 {
 		return nil
 	}
+	rows, skipped := buildStateChangeRows(sessionID, changes)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO state_changes(id, event_id, session_id, flow_id, timestamp, subject_type, subject_id, op, path, before_value, after_value, version, before_resolved, after_resolved, metadata)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`)
+		INSERT INTO state_changes(`+stateChangeInsertColumns+`)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`)
 	if err != nil {
 		return fmt.Errorf("prepare stmt: %w", err)
 	}
 	defer stmt.Close()
 
-	count, skipped := 0, 0
-	for _, esc := range changes {
-		if err := esc.Validate(); err != nil {
-			slog.Warn("skip invalid enriched state change", "event_id", esc.EventID, "error", err)
-			skipped++
-			continue
-		}
-		beforeJSON, _ := json.Marshal(esc.Before.ToAny())
-		afterJSON, _ := json.Marshal(esc.After.ToAny())
-		metaJSON, _ := json.Marshal(esc.Metadata.ToAny())
-
-		var flowID sql.NullString
-		if esc.FlowID != "" {
-			flowID = sql.NullString{String: esc.FlowID, Valid: true}
-		}
-		if _, err := stmt.ExecContext(ctx,
-			uuid.NewString(), string(esc.EventID), sessionID, flowID, esc.Timestamp.UnixNano(),
-			esc.SubjectType, esc.SubjectID, esc.Op, esc.Path,
-			string(beforeJSON), string(afterJSON), esc.Version, esc.BeforeResolved, esc.AfterResolved,
-			string(metaJSON),
-		); err != nil {
+	for _, row := range rows {
+		if _, err := stmt.ExecContext(ctx, row...); err != nil {
 			return fmt.Errorf("insert state change: %w", err)
 		}
-		count++
 	}
-	if count > 0 || skipped > 0 {
-		slog.Debug("wrote enriched state changes", "session_id", sessionID, "count", count, "skipped", skipped)
+	if len(rows) > 0 || skipped > 0 {
+		slog.Debug("wrote enriched state changes", "session_id", sessionID, "count", len(rows), "skipped", skipped)
 	}
 	return tx.Commit()
 }
@@ -654,7 +615,7 @@ func (s *PGStore) QueryStateChanges(ctx context.Context, q StateChangeQuery) ([]
 	if sid == "" {
 		sid = s.sessionID
 	}
-	query := `SELECT id, event_id, session_id, flow_id, timestamp, subject_type, subject_id, op, path, before_value, after_value, version, metadata
+	query := `SELECT id, event_id, session_id, flow_id, timestamp, subject_type, subject_id, op, path, before_value, after_value, version, before_resolved, after_resolved, seq, metadata
 	FROM state_changes WHERE session_id = ` + a.next(sid)
 	if q.FlowID != "" {
 		query += ` AND flow_id = ` + a.next(q.FlowID)
@@ -683,8 +644,8 @@ func (s *PGStore) QueryStateChanges(ctx context.Context, q StateChangeQuery) ([]
 	if !q.To.IsZero() {
 		query += ` AND timestamp <= ` + a.next(q.To.UnixNano())
 	}
-	// id 兜底排序：同一纳秒写入的多条变更也要有稳定顺序（序号/分页依赖它）。
-	query += ` ORDER BY timestamp ASC, id ASC` + a.limitOffset(q.Limit, q.Offset)
+	// seq 兜底排序：同一纳秒写入的多条变更按插件上报次序稳定排列（分页依赖它）。
+	query += ` ORDER BY timestamp ASC, seq ASC, id ASC` + a.limitOffset(q.Limit, q.Offset)
 	rows, err := s.db.QueryContext(ctx, query, a.slice()...)
 	if err != nil {
 		return nil, fmt.Errorf("query state changes: %w", err)
@@ -695,10 +656,15 @@ func (s *PGStore) QueryStateChanges(ctx context.Context, q StateChangeQuery) ([]
 		var r StateChangeRow
 		var tsNano int64
 		var flowID, beforeValue, afterValue, metadata sql.NullString
-		if err := rows.Scan(&r.ID, &r.EventID, &r.SessionID, &flowID, &tsNano, &r.SubjectType, &r.SubjectID, &r.Op, &r.Path, &beforeValue, &afterValue, &r.Version, &metadata); err != nil {
+		// version 列可空，直接扫进 int64 会在 NULL 上炸（见 SQLite 侧同一处理）。
+		var version sql.NullInt64
+		if err := rows.Scan(&r.ID, &r.EventID, &r.SessionID, &flowID, &tsNano, &r.SubjectType, &r.SubjectID, &r.Op, &r.Path, &beforeValue, &afterValue, &version, &r.BeforeResolved, &r.AfterResolved, &r.Seq, &metadata); err != nil {
 			return nil, err
 		}
 		r.Timestamp = time.Unix(0, tsNano)
+		if version.Valid {
+			r.Version = version.Int64
+		}
 		if flowID.Valid {
 			r.FlowID = flowID.String
 		}

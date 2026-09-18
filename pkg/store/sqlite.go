@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS state_changes (
     version INTEGER,
     before_resolved BOOLEAN NOT NULL DEFAULT 0,
     after_resolved BOOLEAN NOT NULL DEFAULT 0,
+    seq INTEGER NOT NULL DEFAULT 0,
     metadata TEXT
 );
 CREATE TABLE IF NOT EXISTS event_index (
@@ -131,6 +132,22 @@ CREATE TABLE IF NOT EXISTS event_index (
     direction TEXT,
     conn_id TEXT,
     correlation_id TEXT
+);
+-- 解码失败分组：按归一化错误模板聚合，使会话结束后仍能回答"为什么解不开"。
+-- 行数受 ErrorCollector 的种类上限约束（每组一行，与失败次数无关）。
+CREATE TABLE IF NOT EXISTS decode_error_groups (
+    session_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    template TEXT NOT NULL,
+    sample TEXT,
+    sample_raw_id TEXT,
+    sample_src TEXT,
+    sample_dst TEXT,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    first_seen INTEGER NOT NULL DEFAULT 0,
+    last_seen INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, fingerprint)
 );`
 	if _, err := s.db.Exec(schemaText); err != nil {
 		return err
@@ -151,6 +168,9 @@ CREATE TABLE IF NOT EXISTS event_index (
 	// 迁移：为已存在的 state_changes 表添加 before_resolved / after_resolved 列
 	_, _ = s.db.Exec("ALTER TABLE state_changes ADD COLUMN before_resolved BOOLEAN NOT NULL DEFAULT 0")
 	_, _ = s.db.Exec("ALTER TABLE state_changes ADD COLUMN after_resolved BOOLEAN NOT NULL DEFAULT 0")
+	// 迁移：seq 列（事件内的上报次序）。老库补列后既有行统一为 0，排序退化为
+	// timestamp,id —— 与迁移前一致，不会打乱历史数据。
+	_, _ = s.db.Exec("ALTER TABLE state_changes ADD COLUMN seq INTEGER NOT NULL DEFAULT 0")
 
 	// 迁移：为已存在的 events 表添加 scenario_id / replay_id 列（Scenario/Replay 前向兼容）
 	_, _ = s.db.Exec("ALTER TABLE events ADD COLUMN scenario_id TEXT")

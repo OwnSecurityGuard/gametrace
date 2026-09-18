@@ -42,6 +42,8 @@ export interface Change {
   id: string;
   /** 全局顺序号（按发生时间排）。 */
   seq: number;
+  /** 来源消息声明数组里的位次（1 基，与 seq 同基）：同一纳秒内的多条变化按它保持上报次序。 */
+  src_seq: number;
   event_id: string;
   session_id?: string;
   flow_id?: string;
@@ -57,6 +59,11 @@ export interface Change {
   version?: number;
   metadata?: unknown;
   source: MessageRef;
+  /**
+   * before 是否来自平台持有的旧值。false = 平台在这条变更之前没见过该 path
+   * （首见/首次同步），不能当成「从 null 变过来」的业务动作。
+   */
+  before_resolved?: boolean;
 }
 
 /** 某操作/事件对某实体造成的影响。 */

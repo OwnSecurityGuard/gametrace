@@ -7,7 +7,7 @@
 // list_connections / list_decoded_data）。
 // 第三件事（状态）由 lib/session-phase 翻译成人话阶段：running/stopped 只说明
 // 进程在不在，用户要的是「现在到哪一步、我该不该动手」。
-import { Cable, Table2, AlertTriangle, ArrowRight } from "lucide-react";
+import { Cable, Table2, ArrowRight } from "lucide-react";
 import { useSessionStatus, useSessions, useConnections, useDecodedData } from "@/hooks/use-mcp";
 import { RAW_DEBUG_ENABLED } from "@/lib/env";
 import { describeSessionPhase } from "@/lib/session-phase";
@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { PhaseBadge, SessionPhaseTracker } from "@/components/session-phase-tracker";
+import { DecodeErrorPanel } from "@/components/decode-error-panel";
 
 /** 概览页可跳转的分析视图（与 App 的 ViewTab 对齐的子集）。 */
 export type OverviewTargetTab = "decoded" | "raw";
@@ -169,14 +170,10 @@ export function SessionOverviewPage({ sessionId, onNavigate }: SessionOverviewPa
           <SessionPhaseTracker input={phaseInput} />
         </section>
 
-        {/* 解码错误横幅：阶段追踪器在 decoding / analyzable 两态已自带该提示，
-            这里只对其他阶段补充，避免同一件事说两遍。 */}
-        {decodeErrors > 0 && phase.phase !== "decoding" && phase.phase !== "analyzable" && (
-          <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/50 px-3 py-2.5 text-sm text-muted-foreground">
-            <AlertTriangle className="h-4 w-4 shrink-0" />
-            本次会话有 {fmtNum(decodeErrors)} 条解码失败（可能是非目标协议流量或插件不匹配）。
-          </div>
-        )}
+        {/* 解码失败原因：阶段追踪器只说「有失败」，这里回答「失败的是什么、为什么」。
+            错误已在后端按归一化模板聚合，所以无论失败多少次，种类数都是有限的。
+            任何阶段都显示——排查时最需要它的时刻，恰恰是失败还在增加的时候。 */}
+        <DecodeErrorPanel sessionId={sessionId} total={decodeErrors} />
 
         {/* 统计卡片 */}
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">

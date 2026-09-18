@@ -64,7 +64,6 @@ type EventPager interface {
 // 聚合逻辑在 Pipeline 内，Store 只负责存取。
 type ProjectionWriter interface {
 	WriteMetrics(ctx context.Context, metrics []event.Metric) error
-	WriteStateChanges(ctx context.Context, sessionID string, events []*event.Event) error
 	WriteEnrichedStateChanges(ctx context.Context, sessionID string, changes []EnrichedStateChange) error
 }
 
@@ -72,6 +71,17 @@ type ProjectionWriter interface {
 type ProjectionReader interface {
 	QueryMetrics(ctx context.Context, q MetricQuery) ([]MetricRow, error)
 	QueryStateChanges(ctx context.Context, q StateChangeQuery) ([]StateChangeRow, error)
+}
+
+// DecodeErrorWriter 落地解码失败分组（按错误模板指纹聚合，见 pkg/decode/errorcol.go）。
+// 抓包侧在会话结束时写入，使「为什么解不开」在会话停止后仍可查。
+type DecodeErrorWriter interface {
+	ReplaceDecodeErrorGroups(ctx context.Context, sessionID string, groups []DecodeErrorRow) error
+}
+
+// DecodeErrorReader 查询解码失败分组，用于把计数还原成原因。
+type DecodeErrorReader interface {
+	QueryDecodeErrorGroups(ctx context.Context, sessionID string) ([]DecodeErrorRow, error)
 }
 
 // ===== 第 3 层：控制元数据 =====
@@ -207,7 +217,16 @@ type StateChangeRow struct {
 	Before      string // JSON 字符串
 	After       string // JSON 字符串
 	Version     int64
-	Metadata    string // JSON 字符串
+	// BeforeResolved / AfterResolved 表示 before/after 是否来自真实基线。
+	// BeforeResolved=false 且 Before 为空 = 首见（这条变更之前平台没见过该 path），
+	// 消费方据此把「首次同步」与「真的从 null 变过来」区分开。
+	BeforeResolved bool
+	AfterResolved  bool
+	// Seq 是这条变更在来源消息声明数组里的位次（1 基；0 = 未设置，仅见于迁移前的老行
+	// 或非管线写入）。主键是 uuid，同一纳秒内的多条变化若只按 id 排就是随机序；
+	// seq 让排序与插件上报次序一致，分页才稳定。
+	Seq      int
+	Metadata string // JSON 字符串
 }
 
 // EnrichedStateChange 是带基线解析标记的 StateChange。
@@ -227,6 +246,8 @@ type EnrichedStateChange struct {
 	AfterResolved bool `json:"after_resolved"`
 	// EntityVersion 是变更后的实体版本。
 	EntityVersion int64 `json:"entity_version"`
+	// Seq 是这条变更在来源消息声明数组里的位次（1 基，0 = 未设置），见 StateChangeRow.Seq。
+	Seq int `json:"seq"`
 }
 
 // ===== 控制元数据类型 =====
@@ -297,6 +318,8 @@ type Store interface {
 	ProjectionReader
 	ConnectionQuerier
 	Clearer
+	DecodeErrorWriter
+	DecodeErrorReader
 }
 
 // 编译期断言：SQLiteStore 实现完整 Store 接口。

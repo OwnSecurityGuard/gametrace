@@ -13,6 +13,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Dialog } from "@/components/ui/dialog";
 import { OpBadge, HighlightedJson } from "@/lib/event-display";
 import { changeMatchesQuery, changeMatchesDirection, changeMatchesConnection, type DirectionFilter } from "@/lib/fuzzy";
+import { beforeKind } from "@/lib/state-change-display";
 import { cn } from "@/lib/utils";
 import type { ConnectionSummary } from "@/types/connection";
 import {
@@ -99,11 +100,6 @@ function compactJson(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-/** 前值展示：全量下发的帧本来就没有前值，渲染成 ∅ 会被读成「数据丢了」。 */
-function fromText(value: unknown): string {
-  return value === undefined || value === null ? "无前值" : compactJson(value);
 }
 
 /** 逗号/空格分隔的输入 → 数组。 */
@@ -1175,9 +1171,7 @@ function EntityRow({
             {preview.map((c) => (
               <span key={c.id} className="inline-flex items-center gap-1">
                 <span className="text-muted-foreground">{c.path}</span>
-                <span className="text-muted-foreground/70 line-through" title="变更前">
-                  {fromText(c.before)}
-                </span>
+                <BeforeText change={c} className="text-[10px]" />
                 <ArrowRight className="h-2.5 w-2.5 shrink-0 text-muted-foreground/50" />
                 <span className="font-medium text-foreground" title="变更后">
                   {compactJson(c.after)}
@@ -1264,6 +1258,36 @@ function OperationHitRow({
   );
 }
 
+/** before 的展示：真实旧值 / 首见 / 插件声明的参考值三态，判定见 beforeKind。 */
+function BeforeText({ change, className }: { change: Change; className?: string }) {
+  const kind = beforeKind(change);
+  if (kind === "resolved") {
+    return (
+      <span className={cn("truncate text-muted-foreground/70 line-through", className)} title={compactJson(change.before)}>
+        {compactJson(change.before)}
+      </span>
+    );
+  }
+  if (kind === "first-seen") {
+    return (
+      <span
+        className={cn("shrink-0 text-muted-foreground/60", className)}
+        title="平台此前未见过该字段：这是首次同步，不是一次真实变化"
+      >
+        首见
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cn("truncate text-muted-foreground/50 underline decoration-dashed underline-offset-2", className)}
+      title={`插件声明的前值（平台未验证）：${compactJson(change.before)}`}
+    >
+      {compactJson(change.before)}
+    </span>
+  );
+}
+
 /** 单条字段变化：序号、相对时间、来源消息、字段路径、before → after。 */
 function ChangeRow({
   change,
@@ -1276,7 +1300,12 @@ function ChangeRow({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2 rounded px-1.5 py-1 hover:bg-muted/40">
-      <span className="w-8 shrink-0 font-mono text-[10px] text-muted-foreground/60">#{change.seq}</span>
+      <span
+        className="w-8 shrink-0 font-mono text-[10px] text-muted-foreground/60"
+        title={`本视图第 ${change.seq} 条 · 来源消息内第 ${change.src_seq} 条`}
+      >
+        #{change.seq}
+      </span>
       <TimeLabel offsetMs={change.offset_ms} iso={change.timestamp} mode={timeMode} className="w-20 shrink-0" />
       <button
         type="button"
@@ -1290,9 +1319,7 @@ function ChangeRow({
       <span className="font-mono text-[11px] text-foreground">{change.path}</span>
       <OpBadge op={change.op} />
       <span className="flex min-w-0 items-center gap-1 font-mono text-[11px]">
-        <span className="truncate text-muted-foreground/70 line-through" title={compactJson(change.before)}>
-          {compactJson(change.before)}
-        </span>
+        <BeforeText change={change} />
         <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground/60" />
         <span className="truncate font-medium" title={compactJson(change.after)}>
           {compactJson(change.after)}

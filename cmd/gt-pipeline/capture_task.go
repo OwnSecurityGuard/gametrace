@@ -77,8 +77,18 @@ type captureTask struct {
 	// 统计快照（atomic.Value，无锁读取）
 	statsSnap atomic.Value // taskStats
 
-	// 资源（session 级，run 退出时关闭）
+	// sqliteStore store.Store 是本会话的事件存储（session 级，run 退出时关闭）。
 	sqliteStore store.Store
+	// baselines 是进程级共享的实体基线管理器（由 pipelineService 注入）。
+	// 共享而非每会话一份，是为了让「重抓同一客户端」延续上一轮的终值；
+	// 隔离边界由 scope 决定，见 pipelineService.SetBaselineScope。
+	// 为 nil 时 run 会退回本会话专属的一份（单测直接构造 captureTask 的场景）。
+	baselines *state.BaselineManager
+	// errs 按错误模板指纹聚合本会话的解码失败（见 pkg/decode/errorcol.go）。
+	// 跨 dispatcher 重建持续累计，run 退出时落库 —— 会话停止后仍要能回答
+	// "为什么解不开"，只在内存里活着的原因等于没有原因。
+	// 为 nil 时 run 会自建一份（单测直接构造 captureTask 的场景）。
+	errs *decode.ErrorCollector
 	// source 不放 struct——是 run 的 local variable
 
 	// finalize 回调：run 退出时通知 pipelineService（写 ControlStore + removeTask）
@@ -150,6 +160,30 @@ func retainOnFailure[T any](buf []T, max int, dropped *atomic.Int64) []T {
 	return buf[:max]
 }
 
+// dropUnbacked 丢弃事件缓冲里已不存在的事件所产生的投影条目。
+//
+// 事件缓冲在持续写失败时会截尾丢最旧（retainOnFailure），投影若跟着留下，重试时就
+// 写成了一批 event_id 在 events 表里查不到的孤儿行 —— 前端按 event_id 下钻会断链。
+// 投影必须按事件粒度对齐：事件没了，它的投影就没资格落库。
+func dropUnbacked(changes []store.EnrichedStateChange, events []*event.Event) []store.EnrichedStateChange {
+	keep := make(map[event.EventID]struct{}, len(events))
+	for _, ev := range events {
+		if ev != nil {
+			keep[ev.Identity.ID] = struct{}{}
+		}
+	}
+	out := changes[:0]
+	for _, sc := range changes {
+		if _, ok := keep[sc.EventID]; ok {
+			out = append(out, sc)
+		}
+	}
+	for i := len(out); i < len(changes); i++ {
+		changes[i] = store.EnrichedStateChange{} // 释放引用，便于 GC
+	}
+	return out
+}
+
 // Start CAS Created→Running，只允许一次。重复调用返回 ErrAlreadyStarted。
 // 非幂等：成功后启动 run goroutine。
 func (t *captureTask) Start() error {
@@ -196,6 +230,11 @@ func (t *captureTask) Snapshot() taskStats {
 func (t *captureTask) run() {
 	defer close(t.done) // 最后执行，确保 finalize 已完成
 
+	if t.errs == nil {
+		// 单测直接构造 captureTask 时没有注入；生产由 pipelineService 统一建。
+		t.errs = decode.NewErrorCollector()
+	}
+
 	// 声明 flush 闭包捕获的局部变量（source 是 local variable，不放 struct）
 	var (
 		source      capture.Source
@@ -211,8 +250,8 @@ func (t *captureTask) run() {
 		// noopSeen 是已上报过的 no-op 抑制条数，用于只打增量、不每轮重复。
 		noopSeen int64
 
-		// decodeErrs 由 decode worker goroutine 并发递增，用原子计数。
-		decodeErrs atomic.Int64
+		// lastErrPersist 是上次把解码失败分组落库的时间（运行中节流用）。
+		lastErrPersist time.Time
 
 		// pq 是待解码溢出队列（无解码器 / decodeCh 满时暂存），由主循环独占。
 		pq *pendingQueue
@@ -241,32 +280,40 @@ func (t *captureTask) run() {
 		if len(events) > 0 {
 			if err := t.sqliteStore.AppendEvents(fctx, events); err != nil {
 				// 同上：事件写失败不清空（清空会导致解码结果永久丢失）。
-				// enrichedSCs 也必须一起保留，否则重试时会与 events 错位。
 				t.logger.Error("write events failed, retaining buffer for retry", "error", err, "buffered", len(events))
+				before := len(events)
 				events = retainOnFailure(events, eventBufMax, &eventOverflow)
+				if len(events) != before {
+					// 事件被截尾丢弃，其投影必须一起丢：否则下一轮重试会把投影写进去，
+					// 产出 event_id 在 events 表里不存在的孤儿行（前端下钻断链）。
+					enrichedSCs = dropUnbacked(enrichedSCs, events)
+				}
 			} else {
 				t.logger.Debug("flushed decoded events", "count", len(events))
 				eventCount += int64(len(events))
-				// 事件写入成功后，再写入语义增强后的状态变更投影
-				if len(enrichedSCs) > 0 {
-					if err := t.sqliteStore.WriteEnrichedStateChanges(fctx, t.sessionID, enrichedSCs); err != nil {
-						// 同上：投影写失败也要保留重试，不能清空。
-						t.logger.Error("write enriched state changes failed, retaining buffer for retry",
-							"error", err, "buffered", len(enrichedSCs))
-						enrichedSCs = retainOnFailure(enrichedSCs, stateChangeMax, &stateChangeOverflow)
-					} else {
-						// 无实际变化的变更被基线抑制丢弃（同值回吐），只打增量避免每轮刷屏。
-						if baseline != nil {
-							if n := baseline.NoopSuppressed(); n > noopSeen {
-								t.logger.Debug("state changes suppressed as no-op",
-									"suppressed", n-noopSeen, "total", n)
-								noopSeen = n
-							}
-						}
-						enrichedSCs = enrichedSCs[:0]
+				events = events[:0]
+			}
+		}
+		// 投影独立于事件缓冲：写失败要保留重试，而重试不能要求「恰好又有新事件」——
+		// 旧写法把投影写嵌在事件成功分支里，事件清空后 len(events)==0 会让整块被跳过，
+		// 被保留的投影在停机时永远等不到重试（静默丢失）。
+		// 事件还没落库时绝不写投影，那是孤儿行的唯一来源。
+		if len(enrichedSCs) > 0 && len(events) == 0 {
+			if err := t.sqliteStore.WriteEnrichedStateChanges(fctx, t.sessionID, enrichedSCs); err != nil {
+				// 同上：投影写失败也要保留重试，不能清空。
+				t.logger.Error("write enriched state changes failed, retaining buffer for retry",
+					"error", err, "buffered", len(enrichedSCs))
+				enrichedSCs = retainOnFailure(enrichedSCs, stateChangeMax, &stateChangeOverflow)
+			} else {
+				// 无实际变化的变更被基线抑制丢弃（同值回吐），只打增量避免每轮刷屏。
+				if baseline != nil {
+					if n := baseline.NoopSuppressed(); n > noopSeen {
+						t.logger.Debug("state changes suppressed as no-op",
+							"suppressed", n-noopSeen, "total", n)
+						noopSeen = n
 					}
 				}
-				events = events[:0]
+				enrichedSCs = enrichedSCs[:0]
 			}
 		}
 		if len(metrics) > 0 {
@@ -285,7 +332,7 @@ func (t *captureTask) run() {
 			RawCount:     rawCount,
 			EventCount:   eventCount,
 			MetricCount:  metricCount,
-			DecodeErrors: decodeErrs.Load(),
+			DecodeErrors: t.errs.Total(),
 			// 写缓冲达到上限被迫丢最旧的数量（持续写失败的唯一可见证据）。
 			OverflowDrops: rawOverflow.Load() + eventOverflow.Load() +
 				stateChangeOverflow.Load() + metricOverflow.Load(),
@@ -308,6 +355,13 @@ func (t *captureTask) run() {
 			}
 		}
 		t.statsSnap.Store(snap)
+
+		// 运行中也要能回答"为什么解不开"：用户看到失败计数时通常还没停会话，
+		// 只在停止时落库等于要等到抓完。节流避免每轮 flush 都写一次库。
+		if t.errs.Kinds() > 0 && time.Since(lastErrPersist) >= decodeErrorPersistInterval {
+			persistDecodeErrors(context.Background(), t.sqliteStore, t.sessionID, t.errs, t.logger)
+			lastErrPersist = time.Now()
+		}
 	}
 
 	// finalize defer — 在 close(done) 之前执行
@@ -315,6 +369,10 @@ func (t *captureTask) run() {
 		fctx, fcancel := context.WithTimeout(context.Background(), 10*time.Second)
 		flush(fctx, true)
 		fcancel()
+
+		// 解码失败分组落库：必须在会话库关闭之前。这样会话停止后，「为什么解不开」
+		// 仍能从库里查出来，而不是随进程内存一起消失。
+		persistDecodeErrors(context.Background(), t.sqliteStore, t.sessionID, t.errs, t.logger)
 
 		t.state.Store(int32(capture.StateClosed))
 
@@ -458,7 +516,8 @@ func (t *captureTask) run() {
 			window = window[1:]
 			if err != nil {
 				t.logger.Debug("decode failed", "error", err)
-				decodeErrs.Add(1)
+				// 传输层失败也要能定位到包，否则前端又只剩一个数字。
+				t.errs.Add(decode.ErrKindTransport, f.PacketID(), f.Src(), f.Dst(), err.Error())
 				signalReresolve()
 				return
 			}
@@ -476,7 +535,7 @@ func (t *captureTask) run() {
 			f, err := d.Submit(pkt)
 			if err != nil {
 				t.logger.Debug("decode submit failed", "error", err)
-				decodeErrs.Add(1)
+				t.errs.Add(decode.ErrKindTransport, pkt.ID, pkt.Src.String(), pkt.Dst.String(), err.Error())
 				signalReresolve()
 				continue
 			}
@@ -548,7 +607,8 @@ func (t *captureTask) run() {
 			if d := disp.Swap(nil); d != nil {
 				_ = d.Close()
 			}
-			d, err := decode.NewDispatcher(found, t.sessionID, t.logger, decode.WithServerPort(t.port))
+			d, err := decode.NewDispatcher(found, t.sessionID, t.logger,
+				decode.WithServerPort(t.port), decode.WithErrorCollector(t.errs))
 			if err != nil {
 				t.logger.Warn("open dispatcher stream failed, decode disabled", "error", err, "plugin", t.getPlugin())
 				decoderClient = nil
@@ -570,7 +630,12 @@ func (t *captureTask) run() {
 			}
 		}
 	}
-	baseline = state.NewBaselineManager(nil)
+	baseline = t.baselines
+	if baseline == nil {
+		// 未经 pipelineService 构造的 task（单测直接 new）：退化成会话独占的一份，
+		// 行为与共享实例在 ScopeSession 下完全一致。
+		baseline = state.NewBaselineManager(nil)
+	}
 
 	// 语义规则执行器：规则来自插件 manifest.semantic_rules，随解码器载入；
 	// 热切换解码器时重新载入（见 hot-reload 分支）。

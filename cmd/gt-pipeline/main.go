@@ -28,6 +28,7 @@ import (
 	"gametrace/pkg/logging"
 	"gametrace/pkg/plugin"
 	"gametrace/pkg/probe"
+	"gametrace/pkg/state"
 	"gametrace/pkg/store"
 	"gametrace/pkg/version"
 
@@ -59,6 +60,9 @@ func main() {
 	// 优先级：flag 显式 > 环境变量 GT_DB_* > 默认 sqlite。
 	dbDriver := flag.String("db-driver", "", "storage driver: sqlite (default) | postgres")
 	dbDSN := flag.String("db-dsn", "", "postgres DSN (required when -db-driver=postgres); env GT_DB_DSN")
+	// 实体基线隔离边界：session（默认，含重放/重解码在内都从零开始记）| peer
+	//（同一客户端对同一服务端的实体基线跨抓包会话延续，重抓时不再整份标成首见）。
+	baselineScope := flag.String("baseline-scope", "", "entity baseline isolation: session (default) | peer; env GT_BASELINE_SCOPE")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("gt-pipeline " + version.String())
@@ -104,6 +108,15 @@ func main() {
 	}
 	if store.IsPostgres(*dbDriver) && *dbDSN == "" {
 		slog.Error("storage driver=postgres requires -db-dsn (or GT_DB_DSN)")
+		os.Exit(1)
+	}
+
+	// 基线隔离边界解析（flag 显式 > 环境变量 GT_BASELINE_SCOPE > 默认 session）。
+	if !flagSet["baseline-scope"] && *baselineScope == "" {
+		*baselineScope = os.Getenv("GT_BASELINE_SCOPE")
+	}
+	if *baselineScope != "" && *baselineScope != "session" && *baselineScope != "peer" {
+		slog.Error("invalid -baseline-scope (want session|peer)", "value", *baselineScope)
 		os.Exit(1)
 	}
 
@@ -215,6 +228,7 @@ func main() {
 	}()
 
 	engine := newPipelineService(absWorkDir, controlStore, registry, *registryAddr, *dbDriver, *dbDSN)
+	engine.SetBaselineScope(state.ParseScope(*baselineScope))
 	// 代理抓包租约：gt-singbox-agent 不再随 pipeline 常驻拉起，
 	// 由 CreateProxyLease 按用户/设备租约独立启动（见 proxy_lease.go）。
 	engine.agentBin = *agentBin

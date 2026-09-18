@@ -17,6 +17,7 @@ import (
 	"gametrace/pkg/logging"
 	"gametrace/pkg/plugin"
 	"gametrace/pkg/probe"
+	"gametrace/pkg/state"
 	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 	"gametrace/pkg/store"
 )
@@ -46,6 +47,10 @@ type pipelineService struct {
 	//（是否连上 / 最近一次收到数据的时间），让 UI 能区分「已连接但没流量」
 	// 与「没连上」——这两个状态的处置建议完全不同。
 	agentLiveness *agent.IngestServer
+	// baselines 是进程级共享的实体基线管理器：同一进程内多个抓包会话共用一份，
+	// 使「重抓同一客户端」能接着上一轮的终值算 before，而不是把整份数据视图
+	// 重新标成首见。隔离边界由 Scope 决定（默认 session，见 SetBaselineScope）。
+	baselines *state.BaselineManager
 	// probeMgr 非 nil 时启用探针管理面：会话结束联动探针停抓（OnSessionClosed）。
 	probeMgr *probe.Manager
 
@@ -80,6 +85,7 @@ func newPipelineService(workDir string, controlStore store.ControlStoreBackend, 
 		registryAddr: registryAddr,
 		dbDriver:     dbDriver,
 		dbDSN:        dbDSN,
+		baselines:    state.NewBaselineManager(nil),
 		tasks:        make(map[string]*captureTask),
 		leases:       make(map[string]*proxyLease),
 		agentPorts:   newPortRange(proxyLeaseAgentPortBase, proxyLeaseAgentPortMax),
@@ -125,6 +131,17 @@ func (s *pipelineService) SetAgentLiveness(srv *agent.IngestServer) { s.agentLiv
 
 // SetProbeManager 注入探针管理面（main.go 在启用 -agent-ingest-addr 时调用）。
 func (s *pipelineService) SetProbeManager(m *probe.Manager) { s.probeMgr = m }
+
+// SetBaselineScope 设置实体基线的隔离边界（默认 state.ScopeSession）。
+// 必须在任何 StartSession 之前调用。
+//
+// ScopePeer 会让「同一客户端对同一服务端」的实体基线跨抓包会话延续：
+// 重抓时整份数据视图不再退化成「首见」，只有真的变化才产生变更记录。
+// 代价是重放同一批流量（pcap 回放）会被判成「值没变」而整批抑制，所以默认不开。
+func (s *pipelineService) SetBaselineScope(sc state.Scope) {
+	s.baselines = state.NewBaselineManager(nil, state.WithScope(sc))
+	s.logger.Info("baseline scope configured", "scope", sc.String())
+}
 
 // addTask 注册 task 到 map（写锁）。
 func (s *pipelineService) addTask(t *captureTask) {
@@ -253,6 +270,7 @@ func (s *pipelineService) StartSession(ctx context.Context, req capturecontrol.S
 		cancel:       cancel,
 		done:         make(chan struct{}),
 		sqliteStore:  st,
+		baselines:    s.baselines,
 		onFinalize:   s.finalizeTask,
 	}
 
@@ -402,6 +420,11 @@ func (s *pipelineService) finalizeTask(task *captureTask) {
 	// 探针停止抓包归档收尾（探针进程常驻）。probeMgr 未启用时为 no-op。
 	if s.probeMgr != nil {
 		s.probeMgr.OnSessionClosed(task.sessionID)
+	}
+	// 基线回收：基线段进程级共享后，会话结束必须交出自己那一份，
+	// 否则进程内基线只会单调增长（ScopePeer 下作用域是对端，这里天然 no-op）。
+	if n := s.baselines.ForgetScope(task.sessionID); n > 0 {
+		s.logger.Debug("released session baselines", "session_id", task.sessionID, "entities", n)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"gametrace/pkg/capture"
+	"gametrace/pkg/event"
 	"gametrace/pkg/internalipc"
 	"gametrace/pkg/plugin"
 	"gametrace/pkg/store"
@@ -163,3 +164,35 @@ func TestCaptureTask_SnapshotEmpty(t *testing.T) {
 
 // 确保未使用的 import 不会导致编译错误
 var _ = internalipc.ErrAlreadyStarted
+
+// TestDropUnbackedRemovesOrphanProjections 覆盖写缓冲截尾时的对齐规则：
+// events 缓冲丢了哪些事件，投影就必须丢掉哪些条目，否则重试写库会产出
+// event_id 在 events 表里不存在的孤儿行（前端按 event_id 下钻会断链）。
+func TestDropUnbackedRemovesOrphanProjections(t *testing.T) {
+	ev := func(id string) *event.Event {
+		return &event.Event{Identity: event.Identity{ID: event.EventID(id)}}
+	}
+	sc := func(eventID, path string) store.EnrichedStateChange {
+		return store.EnrichedStateChange{
+			StateChange: event.StateChange{SubjectType: "Player", SubjectID: "1", Op: "set", Path: path},
+			EventID:     event.EventID(eventID),
+		}
+	}
+	// 事件缓冲已截尾到只剩 e2（最旧的 e1 被丢），投影里还有 e1 与一个已消失事件的条目。
+	events := []*event.Event{ev("e2")}
+	changes := []store.EnrichedStateChange{
+		sc("e1", "hp"),
+		sc("e2", "exp"),
+		sc("e3", "level"),
+	}
+
+	got := dropUnbacked(changes, events)
+	if len(got) != 1 || got[0].EventID != "e2" {
+		t.Fatalf("对齐后 = %+v, want 只剩 e2", got)
+	}
+
+	// 无事件时投影必须清空：一个都不能落库。
+	if n := len(dropUnbacked(changes, nil)); n != 0 {
+		t.Errorf("事件为空时投影应清空，got %d 条", n)
+	}
+}

@@ -14,6 +14,7 @@ import type {
   SortBy,
 } from "@/types/state-change";
 import type { ListRawPacketsResult } from "@/types/raw-packet";
+import type { QueryDecodeErrorsResult } from "@/types/decode-error";
 import type { ListPluginsResult, DecodeRawPacketsResult } from "@/types/decode";
 import type {
   ListRegisteredPluginsResult,
@@ -155,6 +156,25 @@ export function useStateChanges(
     placeholderData: keepPreviousData, // 换锚点/过滤时不闪骨架屏
     // 抓包实时写入；时间视图依赖新鲜数据观察密度。
     refetchInterval: options.refetchInterval ?? (sessionId ? 3000 : false),
+  });
+}
+
+/**
+ * 查询解码失败的原因（按归一化错误模板聚合，见后端 pkg/decode/errorcol.go）。
+ *
+ * enabled 由调用方传入：只有确实失败过（decode_errors > 0）才值得查，
+ * 否则每个会话都会多打一次必然为空的查询。
+ */
+export function useDecodeErrors(sessionId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["decodeErrors", sessionId],
+    queryFn: () =>
+      mcpClient.callTool<QueryDecodeErrorsResult>("query_decode_errors", {
+        session_id: sessionId ?? undefined,
+      }),
+    enabled: !!sessionId && enabled,
+    // 会话运行中失败分组也会周期落库，轮询才能持续看到新出现的原因。
+    refetchInterval: sessionId && enabled ? 5000 : false,
   });
 }
 

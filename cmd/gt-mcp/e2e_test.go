@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gametrace/pkg/event"
+	"gametrace/pkg/state"
 	"gametrace/pkg/store"
 
 	mcp "github.com/mark3labs/mcp-go/mcp"
@@ -275,9 +276,19 @@ func TestE2E_RunWindowAndTrace(t *testing.T) {
 	if err := st.AppendEvents(ctx, events); err != nil {
 		t.Fatalf("WriteEvents: %v", err)
 	}
-	// 寫入實體快照投影，供 trace_protocol_flow 計算 entity_diffs
-	if err := st.WriteStateChanges(ctx, sessionID, events); err != nil {
-		t.Fatalf("WriteStateChanges: %v", err)
+	// 写入状态变更投影：走与生产一致的路径（基线富化后再落库），
+	// 而不是已经删掉的「不算 before 直接写」的旁路入口。
+	bm := state.NewBaselineManager(nil)
+	var scs []store.EnrichedStateChange
+	for _, ev := range events {
+		got, err := bm.Apply(ev, sessionID)
+		if err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		scs = append(scs, got...)
+	}
+	if err := st.WriteEnrichedStateChanges(ctx, sessionID, scs); err != nil {
+		t.Fatalf("WriteEnrichedStateChanges: %v", err)
 	}
 	t.Logf("wrote %d events", len(events))
 

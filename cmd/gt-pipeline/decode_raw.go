@@ -167,32 +167,53 @@ func (s *pipelineService) DecodeRawPackets(ctx context.Context, req capturecontr
 	}
 
 	// 6. 创建 dispatcher（使用真实 sessionID，并携带服务端端口提示以辅助方向推断）
-	dispatcher, err := decode.NewDispatcher(client, req.SessionID, logger, decode.WithServerPort(meta.Port))
+	// 失败分组采集：插件主动报的"这条我解不了"与链路层失败都进这里。
+	// 无论本轮成功还是中途返回都要落库（整体替换语义，写空即代表"本轮没有失败"），
+	// 否则上一轮的分组会被误当成这一轮的结果。
+	errCol := decode.NewErrorCollector()
+	defer func() {
+		persistDecodeErrors(context.Background(), st, req.SessionID, errCol, logger)
+	}()
+	dispatcher, err := decode.NewDispatcher(client, req.SessionID, logger,
+		decode.WithServerPort(meta.Port), decode.WithErrorCollector(errCol))
 	if err != nil {
 		return capturecontrol.DecodeRawPacketsResult{}, fmt.Errorf("new dispatcher: %w", err)
 	}
 	defer dispatcher.Close()
 
 	// 7. 分批读取 raw packets 并解码，结果写回 events 表与 state_changes 投影表。
-	var totalRaw, decoded, decodeErrors int64
+	// 失败次数统一取 errCol.Total()（含插件主动报错），不再单独维护计数 —— 两个
+	// 计数并存会出现「失败 5 次」配「500 条原因」这种自相矛盾的展示。
+	var totalRaw, decoded int64
 	var pending []*event.Event
 	var enrichedSCs []store.EnrichedStateChange
 	var sinceFlush int
+	// 重解码刻意用「本次调用独占、ScopeSession」的基线，不复用 pipelineService 的共享实例：
+	// 本次会把同一批 raw 包从头重跑一遍，如果起点带着上一轮（或实时抓包那一轮）的终态，
+	// 首见赋值会被 noop 抑制、场景中间值会被判成「从终态退回去」，凭空造出反向假变化。
+	// 2026-09-18 实测：seed 旧投影方案 526 条 → 230 条且出现 level 4→1；不干预则是
+	// 确定性重算，与实时那一轮逐条相同。护栏见 decode_raw_seed_test.go。
 	baseline := state.NewBaselineManager(nil)
 	flush := func() error {
-		if len(pending) == 0 {
+		if len(pending) == 0 && len(enrichedSCs) == 0 {
 			return nil
 		}
-		if err := st.AppendEvents(ctx, pending); err != nil {
-			return fmt.Errorf("append events: %w", err)
+		// 先落事件：投影行引用的 event_id 必须已经存在，否则就是孤儿行。
+		if len(pending) > 0 {
+			if err := st.AppendEvents(ctx, pending); err != nil {
+				return fmt.Errorf("append events: %w", err)
+			}
+			pending = nil
 		}
+		// 投影单独重试：上一轮写失败时事件已经落库、pending 为空，
+		// 若把投影写挂在 pending 上，这批投影就再也等不到重试。
 		if len(enrichedSCs) > 0 {
 			if err := st.WriteEnrichedStateChanges(ctx, req.SessionID, enrichedSCs); err != nil {
-				logger.Warn("write enriched state changes", "error", err)
+				// 保留缓冲下轮重试；旧写法在这里也会清空，等于一次磁盘抖动就永久丢一批投影。
+				return fmt.Errorf("write enriched state changes: %w", err)
 			}
 			enrichedSCs = enrichedSCs[:0]
 		}
-		pending = nil
 		sinceFlush = 0
 		return nil
 	}
@@ -206,7 +227,8 @@ func (s *pipelineService) DecodeRawPackets(ctx context.Context, req capturecontr
 	}, func(r rawDecodeResult) {
 		totalRaw++
 		if r.Err != nil {
-			decodeErrors++
+			// 链路层失败（超时/流断/包无法还原）也要带上下文进分组，否则又是只有一个数字。
+			errCol.Add(decode.ErrKindTransport, r.RawID, r.Src, r.Dst, r.Err.Error())
 			logger.Debug("decode failed", "id", r.RawID, "src", r.Src, "dst", r.Dst, "error", r.Err)
 			return
 		}
@@ -239,19 +261,19 @@ func (s *pipelineService) DecodeRawPackets(ctx context.Context, req capturecontr
 	})
 	if loopErr != nil {
 		_ = flush()
-		return capturecontrol.DecodeRawPacketsResult{TotalRaw: totalRaw, Decoded: decoded, DecodeErrors: decodeErrors}, loopErr
+		return capturecontrol.DecodeRawPacketsResult{TotalRaw: totalRaw, Decoded: decoded, DecodeErrors: errCol.Total()}, loopErr
 	}
 	if err := flush(); err != nil {
-		return capturecontrol.DecodeRawPacketsResult{TotalRaw: totalRaw, Decoded: decoded, DecodeErrors: decodeErrors}, err
+		return capturecontrol.DecodeRawPacketsResult{TotalRaw: totalRaw, Decoded: decoded, DecodeErrors: errCol.Total()}, err
 	}
 
 	logger.Info("decode_raw completed",
-		"total_raw", totalRaw, "decoded", decoded, "decode_errors", decodeErrors,
+		"total_raw", totalRaw, "decoded", decoded, "decode_errors", errCol.Total(),
 		"duration_sec", time.Since(start).Seconds())
 	return capturecontrol.DecodeRawPacketsResult{
 		TotalRaw:     totalRaw,
 		Decoded:      decoded,
-		DecodeErrors: decodeErrors,
+		DecodeErrors: errCol.Total(),
 	}, nil
 }
 
@@ -307,14 +329,16 @@ func (s *pipelineService) TestPlugin(ctx context.Context, req capturecontrol.Tes
 	defer st.Close()
 
 	// 创建 dispatcher（不写库，仅解码采样）
-	dispatcher, err := decode.NewDispatcher(client, req.SessionID, logger, decode.WithServerPort(meta.Port))
+	errCol := decode.NewErrorCollector()
+	dispatcher, err := decode.NewDispatcher(client, req.SessionID, logger,
+		decode.WithServerPort(meta.Port), decode.WithErrorCollector(errCol))
 	if err != nil {
 		return capturecontrol.TestPluginResult{}, fmt.Errorf("new dispatcher: %w", err)
 	}
 	defer dispatcher.Close()
 
 	res := capturecontrol.TestPluginResult{TypeHistogram: map[string]int64{}}
-	var totalRaw, decoded, decodeErrors int64
+	var totalRaw, decoded int64
 	start := time.Now()
 	loopErr := forEachRawDecoded(ctx, st, dispatcher, decodeRawOptions{
 		Protocol: req.Protocol,
@@ -324,15 +348,9 @@ func (s *pipelineService) TestPlugin(ctx context.Context, req capturecontrol.Tes
 	}, func(r rawDecodeResult) {
 		totalRaw++
 		if r.Err != nil {
-			decodeErrors++
-			if len(res.ErrorSamples) < int(sampleLimit) {
-				res.ErrorSamples = append(res.ErrorSamples, capturecontrol.TestErrorLite{
-					RawPacketID: r.RawID,
-					Src:         r.Src,
-					Dst:         r.Dst,
-					Error:       r.Err.Error(),
-				})
-			}
+			// 只登记不采样：样本统一在末尾按指纹取（见下），否则 sampleLimit 会被
+			// 最先出现的那一种错误占满 —— 恰好是用户最需要区分同类错误的时候。
+			errCol.Add(decode.ErrKindTransport, r.RawID, r.Src, r.Dst, r.Err.Error())
 			return
 		}
 		for _, ev := range r.Events {
@@ -343,13 +361,18 @@ func (s *pipelineService) TestPlugin(ctx context.Context, req capturecontrol.Tes
 			}
 		}
 	})
-	res.TotalRaw, res.Decoded, res.DecodeErrors = totalRaw, decoded, decodeErrors
+	res.TotalRaw, res.Decoded = totalRaw, decoded
+	res.DecodeErrors = errCol.Total()
+	// 错误样本按指纹去重（每组一条，次数多的在前），包含插件主动报错 —— 这类错误
+	// 过去连日志都是一行带过，现在能在「解码错误样例」里看到原文。
+	res.ErrorSamples = errorSamplesFromGroups(errCol, int(sampleLimit))
 	if loopErr != nil {
 		return res, loopErr
 	}
 
 	logger.Info("test_plugin completed",
-		"total_raw", totalRaw, "decoded", decoded, "decode_errors", decodeErrors,
+		"total_raw", totalRaw, "decoded", decoded, "decode_errors", res.DecodeErrors,
+		"error_kinds", errCol.Kinds(),
 		"sample_events", len(res.SampleEvents), "duration_sec", time.Since(start).Seconds())
 	return res, nil
 }

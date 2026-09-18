@@ -5,6 +5,13 @@ import (
 	"hash/fnv"
 )
 
+// Direction 的取值词汇表。方向字符串会被写进 EventContext、并被前端与
+// pkg/state 的方向过滤读取，因此取值只能由这里定义（原先两处各自写字面量）。
+const (
+	directionClientToServer = "client_to_server"
+	directionServerToClient = "server_to_client"
+)
+
 // FlowIDFromEndpoints 返回方向无关的 flow 标识（纯五元组 hash，不混入 session_id）。
 // (src=A, dst=B) 与 (src=B, dst=A) 返回相同值，便于 request/response 配对。
 // 决策：不混入 session_id，查询时 WHERE session_id=? AND flow_id=? 区分。
@@ -40,9 +47,9 @@ func InferDirectionFromJSON(jsonBytes []byte) string {
 	typeStr, _ := wrapper.Data["type"].(string)
 	switch typeStr {
 	case "request":
-		return "client_to_server"
+		return directionClientToServer
 	case "response":
-		return "server_to_client"
+		return directionServerToClient
 	}
 	return ""
 }

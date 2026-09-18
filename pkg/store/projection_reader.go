@@ -45,7 +45,7 @@ func (s *SQLiteStore) QueryMetrics(ctx context.Context, q MetricQuery) ([]Metric
 
 // QueryStateChanges 查询 state_changes 表。
 func (s *SQLiteStore) QueryStateChanges(ctx context.Context, q StateChangeQuery) ([]StateChangeRow, error) {
-	query := `SELECT id, event_id, session_id, flow_id, timestamp, subject_type, subject_id, op, path, before_value, after_value, version, metadata
+	query := `SELECT id, event_id, session_id, flow_id, timestamp, subject_type, subject_id, op, path, before_value, after_value, version, before_resolved, after_resolved, seq, metadata
 FROM state_changes WHERE 1=1`
 	var args []any
 	if q.SessionID != "" {
@@ -88,8 +88,8 @@ FROM state_changes WHERE 1=1`
 		query += " AND timestamp<=?"
 		args = append(args, q.To.UnixNano())
 	}
-	// id 兜底排序：同一纳秒写入的多条变更也要有稳定顺序（序号/分页依赖它）。
-	query += " ORDER BY timestamp ASC, id ASC"
+	// seq 兜底排序：同一纳秒写入的多条变更按插件上报次序稳定排列（分页依赖它）。
+	query += " ORDER BY timestamp ASC, seq ASC, id ASC"
 	query, args = applyLimitOffset(query, args, q.Limit, q.Offset)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -102,10 +102,15 @@ FROM state_changes WHERE 1=1`
 		var tsNano int64
 		var flowID sql.NullString
 		var beforeValue, afterValue, metadata sql.NullString
-		if err := rows.Scan(&r.ID, &r.EventID, &r.SessionID, &flowID, &tsNano, &r.SubjectType, &r.SubjectID, &r.Op, &r.Path, &beforeValue, &afterValue, &r.Version, &metadata); err != nil {
+		// version 列可空（老库/外部写入方可能不填），直接扫进 int64 会在 NULL 上炸。
+		var version sql.NullInt64
+		if err := rows.Scan(&r.ID, &r.EventID, &r.SessionID, &flowID, &tsNano, &r.SubjectType, &r.SubjectID, &r.Op, &r.Path, &beforeValue, &afterValue, &version, &r.BeforeResolved, &r.AfterResolved, &r.Seq, &metadata); err != nil {
 			return nil, err
 		}
 		r.Timestamp = time.Unix(0, tsNano)
+		if version.Valid {
+			r.Version = version.Int64
+		}
 		if flowID.Valid {
 			r.FlowID = flowID.String
 		}

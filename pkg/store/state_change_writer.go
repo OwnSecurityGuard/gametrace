@@ -6,56 +6,25 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	"gametrace/pkg/event"
-
 	"github.com/google/uuid"
 )
 
-// WriteStateChanges 从 Event 批量写入 StateChange 到 state_changes 表。
-// 此方法不经过语义基线解析，before_resolved / after_resolved 均写入 false。
-func (s *SQLiteStore) WriteStateChanges(ctx context.Context, sessionID string, events []*event.Event) error {
-	if len(events) == 0 {
-		return nil
-	}
-	var enriched []EnrichedStateChange
-	for _, ev := range events {
-		flowID := extractFlowIDFromEvent(ev)
-		for _, sc := range ev.ExtractStateChanges() {
-			enriched = append(enriched, EnrichedStateChange{
-				StateChange:    sc,
-				EventID:        ev.Identity.ID,
-				FlowID:         flowID,
-				Timestamp:      ev.Identity.Timestamp,
-				BeforeResolved: false,
-				AfterResolved:  false,
-				EntityVersion:  sc.Version,
-			})
-		}
-	}
-	return s.WriteEnrichedStateChanges(ctx, sessionID, enriched)
-}
+// state_changes 的写入在 SQLite / Postgres 两份实现之间只应存在「占位符方言」的差异。
+// 列清单、校验、编码、非法条目跳过策略全部收敛到 stateChangeInsertColumns 与
+// buildStateChangeRows —— 之前两份复制粘贴的实现改一处必漏另一处（seq 列的加入就是
+// 一次这样的机会：漏改一侧会让该后端的 seq 永久为 0，而不报任何错）。
 
-// WriteEnrichedStateChanges 写入经过语义基线解析的 StateChange。
-func (s *SQLiteStore) WriteEnrichedStateChanges(ctx context.Context, sessionID string, changes []EnrichedStateChange) error {
-	if len(changes) == 0 {
-		return nil
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO state_changes(id, event_id, session_id, flow_id, timestamp, subject_type, subject_id, op, path, before_value, after_value, version, before_resolved, after_resolved, metadata)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-	`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
+// stateChangeInsertColumns 是 INSERT 的列清单，顺序与 buildStateChangeRows 返回的值一一对应。
+const stateChangeInsertColumns = `id, event_id, session_id, flow_id, timestamp, subject_type, subject_id, op, path, before_value, after_value, version, before_resolved, after_resolved, seq, metadata`
 
-	count := 0
-	skipped := 0
+// stateChangeInsertArity 是上面的列数，两个方言各自的占位符串按它书写。
+const stateChangeInsertArity = 16
+
+// buildStateChangeRows 把一批变更校验并编码为待插入的行值（[]any，长度与列清单一致）。
+//
+// 非法条目逐条跳过并计入 skipped：一条脏数据不能带走整批（调用方拿不到任何行会更糟）。
+func buildStateChangeRows(sessionID string, changes []EnrichedStateChange) (rows [][]any, skipped int) {
+	rows = make([][]any, 0, len(changes))
 	for _, esc := range changes {
 		if err := esc.Validate(); err != nil {
 			slog.Warn("skip invalid enriched state change", "event_id", esc.EventID, "error", err)
@@ -70,8 +39,7 @@ func (s *SQLiteStore) WriteEnrichedStateChanges(ctx context.Context, sessionID s
 		if esc.FlowID != "" {
 			flowID = sql.NullString{String: esc.FlowID, Valid: true}
 		}
-
-		if _, err := stmt.ExecContext(ctx,
+		rows = append(rows, []any{
 			uuid.NewString(),
 			string(esc.EventID),
 			sessionID,
@@ -86,45 +54,40 @@ func (s *SQLiteStore) WriteEnrichedStateChanges(ctx context.Context, sessionID s
 			esc.Version,
 			esc.BeforeResolved,
 			esc.AfterResolved,
+			esc.Seq,
 			string(metaJSON),
-		); err != nil {
-			return err
-		}
-		count++
+		})
 	}
-	if count > 0 || skipped > 0 {
-		slog.Debug("wrote enriched state changes", "count", count, "skipped", skipped)
-	}
-	return tx.Commit()
+	return rows, skipped
 }
 
-// extractFlowIDFromEvent 从 Event 提取 flow_id：优先 Context，其次 _meta，最后顶层 payload。
-func extractFlowIDFromEvent(ev *event.Event) string {
-	if ev == nil {
-		return ""
+// WriteEnrichedStateChanges 写入经过语义基线解析的 StateChange。
+func (s *SQLiteStore) WriteEnrichedStateChanges(ctx context.Context, sessionID string, changes []EnrichedStateChange) error {
+	if len(changes) == 0 {
+		return nil
 	}
-	if ev.Context.FlowID != "" {
-		return ev.Context.FlowID
+	rows, skipped := buildStateChangeRows(sessionID, changes)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
 	}
-	obj, ok := ev.Payload.Value.AsObject()
-	if !ok {
-		return ""
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO state_changes(`+stateChangeInsertColumns+`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	`)
+	if err != nil {
+		return err
 	}
-	// _meta.flow_id
-	if meta, ok := obj["_meta"]; ok {
-		if metaObj, ok := meta.AsObject(); ok {
-			if v, ok := metaObj["flow_id"]; ok {
-				if s, ok := v.AsString(); ok {
-					return s
-				}
-			}
+	defer stmt.Close()
+
+	for _, row := range rows {
+		if _, err := stmt.ExecContext(ctx, row...); err != nil {
+			return err
 		}
 	}
-	// 顶层 flow_id
-	if v, ok := obj["flow_id"]; ok {
-		if s, ok := v.AsString(); ok {
-			return s
-		}
+	if len(rows) > 0 || skipped > 0 {
+		slog.Debug("wrote enriched state changes", "count", len(rows), "skipped", skipped)
 	}
-	return ""
+	return tx.Commit()
 }

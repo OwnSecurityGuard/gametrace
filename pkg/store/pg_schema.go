@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS state_changes (
     version       BIGINT,
     before_resolved BOOLEAN NOT NULL DEFAULT FALSE,
     after_resolved   BOOLEAN NOT NULL DEFAULT FALSE,
+    seq           BIGINT NOT NULL DEFAULT 0,
     metadata      TEXT
 );
 CREATE TABLE IF NOT EXISTS event_index (
@@ -81,6 +82,22 @@ CREATE TABLE IF NOT EXISTS aggregated_metrics (
     group_json TEXT,
     value      DOUBLE PRECISION,
     PRIMARY KEY (session_id, name, "window", group_json)
+);
+-- 解码失败分组：按归一化错误模板聚合，使会话结束后仍能回答"为什么解不开"。
+-- 行数受 ErrorCollector 的种类上限约束（每组一行，与失败次数无关）。
+CREATE TABLE IF NOT EXISTS decode_error_groups (
+    session_id    TEXT NOT NULL,
+    fingerprint   TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    template      TEXT NOT NULL,
+    sample        TEXT,
+    sample_raw_id TEXT,
+    sample_src    TEXT,
+    sample_dst    TEXT,
+    error_count   BIGINT NOT NULL DEFAULT 0,
+    first_seen    BIGINT NOT NULL DEFAULT 0,
+    last_seen     BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (session_id, fingerprint)
 );`
 
 // pgEventIndexes 事件表索引（CREATE INDEX IF NOT EXISTS 在 PG 同样幂等）。
@@ -193,6 +210,12 @@ func InitPGEventSchema(ctx context.Context, db *sql.DB) error {
 	}
 	if _, err := db.ExecContext(ctx, pgEventIndexes); err != nil {
 		return fmt.Errorf("init pg event indexes: %w", err)
+	}
+	// 迁移：state_changes.seq（事件内的上报次序）。CREATE TABLE IF NOT EXISTS 不会
+	// 为既有老库补列，必须显式 ADD COLUMN IF NOT EXISTS。
+	if _, err := db.ExecContext(ctx,
+		`ALTER TABLE state_changes ADD COLUMN IF NOT EXISTS seq BIGINT NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("add state_changes.seq: %w", err)
 	}
 	// 迁移：物理删除 schema 子系统残留列（持久化旧库含 schema_id / projection_json）。
 	if _, err := db.ExecContext(ctx, `ALTER TABLE events DROP COLUMN IF EXISTS schema_id`); err != nil {

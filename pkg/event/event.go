@@ -165,6 +165,11 @@ type EventContext struct {
 	// Source 是抓包来源名称（mobile / pcap-live / pcap-file / fake），
 	// 供前端区分"代理抓包"与普通网卡抓包（Capture Context 展示）。
 	Source string `msgpack:"source,omitempty"`
+	// PeerKey 是连接的「稳定对端标识」：客户端 IP + 服务端地址（不含客户端临时端口）。
+	// FlowID 含临时端口，重连一次就换一个值，不能当实体身份用；PeerKey 用于需要
+	// 跨会话/跨重连延续的投影（实体基线），见 pkg/state 的 Scope。
+	// 无法判断方向（缺服务端端口提示）时为空串。
+	PeerKey string `msgpack:"peer_key,omitempty"`
 }
 
 // MarshalMsgpack 将 EventContext 编码为 MsgPack 字节。
@@ -176,6 +181,7 @@ func (c EventContext) MarshalMsgpack() ([]byte, error) {
 		"direction":       c.Direction,
 		"conn_id":         c.ConnID,
 		"source":          c.Source,
+		"peer_key":        c.PeerKey,
 	})
 	return v.MarshalMsgpack()
 }
@@ -216,6 +222,11 @@ func UnmarshalContextMsgpack(data []byte) (EventContext, error) {
 		if f, ok := obj["source"]; ok {
 			if s, ok := f.AsString(); ok {
 				ctx.Source = s
+			}
+		}
+		if f, ok := obj["peer_key"]; ok {
+			if s, ok := f.AsString(); ok {
+				ctx.PeerKey = s
 			}
 		}
 	}

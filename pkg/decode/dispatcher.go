@@ -21,6 +21,7 @@ type pendingInput struct {
 	req     *pb.DecodeRequest
 	connID  string
 	source  string
+	peerKey string
 	results []*pb.DecodeResponseV2
 	future  *Future
 }
@@ -28,10 +29,17 @@ type pendingInput struct {
 // Future 是一次异步解码的完成句柄，由 Dispatcher.Submit 返回。
 // Wait 阻塞直到解码完成/出错/ctx 取消；结果事件保持与提交顺序无关，
 // 调用方按自身需要的顺序 Wait 即可实现保序消费。
+//
+// Future 自带包上下文（packetID/src/dst）：Wait 返回错误时调用方要能说清
+// 「是哪个包解不开」，否则传输层失败又只剩一个数字（见 errorcol.go）。
 type Future struct {
 	done   chan struct{}
 	events []*event.Event
 	err    error
+
+	packetID string
+	src      string
+	dst      string
 }
 
 // resolve 由 recvLoop 调用，恰好一次。
@@ -39,6 +47,13 @@ func (f *Future) resolve(events []*event.Event, err error) {
 	f.events, f.err = events, err
 	close(f.done)
 }
+
+// PacketID 返回该次解码对应的 raw packet 标识（用于失败归因）。
+func (f *Future) PacketID() string { return f.packetID }
+
+// Src / Dst 返回该次解码的地址对（用于失败归因）。
+func (f *Future) Src() string { return f.src }
+func (f *Future) Dst() string { return f.dst }
 
 // Wait 阻塞直到解码完成、出错或 ctx 取消。
 func (f *Future) Wait(ctx context.Context) ([]*event.Event, error) {
@@ -113,6 +128,9 @@ type Dispatcher struct {
 	causationIdx *causationIndex
 
 	serverPort int // 服务端端口提示，用于方向推断（如游戏服 8989）
+
+	// errs 聚合解码失败（插件主动报错 + 传输层错误），供上层落库/展示。
+	errs *ErrorCollector
 }
 
 // DispatcherOption 配置 Dispatcher 的可选参数。
@@ -123,6 +141,21 @@ func WithServerPort(port int) DispatcherOption {
 	return func(d *Dispatcher) {
 		d.serverPort = port
 	}
+}
+
+// WithErrorCollector 注入外部错误聚合器。调用方（抓包/离线重解码/插件测试）
+// 需要读失败原因时传入自己的实例，可跨 dispatcher 重建持续累计。
+func WithErrorCollector(c *ErrorCollector) DispatcherOption {
+	return func(d *Dispatcher) {
+		if c != nil {
+			d.errs = c
+		}
+	}
+}
+
+// Errors 返回失败聚合器（永不为 nil），调用方据此读取失败分组。
+func (d *Dispatcher) Errors() *ErrorCollector {
+	return d.errs
 }
 
 // NewDispatcher 创建解码分发器。logger 用于记录 _fields 校验警告等业务降级信息。
@@ -146,6 +179,7 @@ func NewDispatcher(client pb.DecoderClient, sessionID string, logger *slog.Logge
 		streamDone:   make(chan struct{}),
 		pending:      make(map[string]*pendingInput),
 		causationIdx: newCausationIndex(1024),
+		errs:         NewErrorCollector(),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -192,6 +226,7 @@ func (d *Dispatcher) Submit(pkt event.Packet) (*Future, error) {
 	// 透传到每个解码事件的 EventContext，供 Connections 页面与 Capture Context 使用。
 	connID, _ := pkt.Metadata["conn_id"].(string)
 	source, _ := pkt.Metadata[capture.MetaSource].(string)
+	peerKey := peerKeyFromPacket(pkt, d.serverPort)
 
 	req := &pb.DecodeRequest{
 		SessionId:    d.sessionID,
@@ -207,7 +242,12 @@ func (d *Dispatcher) Submit(pkt event.Packet) (*Future, error) {
 		TimestampNs:  pkt.Timestamp.UnixNano(),
 	}
 
-	f := &Future{done: make(chan struct{})}
+	f := &Future{
+		done:     make(chan struct{}),
+		packetID: packetID,
+		src:      pkt.Src.String(),
+		dst:      pkt.Dst.String(),
+	}
 	d.mu.Lock()
 	if d.closed {
 		d.mu.Unlock()
@@ -217,7 +257,7 @@ func (d *Dispatcher) Submit(pkt event.Packet) (*Future, error) {
 		d.mu.Unlock()
 		return nil, fmt.Errorf("send decode v2 request: %w", err)
 	}
-	d.pending[inputID] = &pendingInput{req: req, connID: connID, source: source, future: f}
+	d.pending[inputID] = &pendingInput{req: req, connID: connID, source: source, peerKey: peerKey, future: f}
 	d.mu.Unlock()
 	return f, nil
 }
@@ -255,7 +295,7 @@ func (d *Dispatcher) recvLoop() {
 		d.mu.Unlock()
 
 		if resp.Done {
-			p.future.resolve(d.convertResultsToEvents(p.req, p.results, p.connID, p.source), nil)
+			p.future.resolve(d.convertResultsToEvents(p.req, p.results, p.connID, p.source, p.peerKey), nil)
 		}
 	}
 }
@@ -272,16 +312,21 @@ func (d *Dispatcher) failAllPending(err error) {
 }
 
 // convertResultsToEvents 将解码结果批量转换为 Event，处理 schema 校验和因果关系。
-func (d *Dispatcher) convertResultsToEvents(req *pb.DecodeRequest, results []*pb.DecodeResponseV2, connID, source string) []*event.Event {
+func (d *Dispatcher) convertResultsToEvents(req *pb.DecodeRequest, results []*pb.DecodeResponseV2, connID, source, peerKey string) []*event.Event {
 	var events []*event.Event
 	for i, r := range results {
 		if r.Error != "" {
+			// 插件说"这条我解不了"——这是最需要让用户看见的失败原因。
+			// 过去只打日志就 continue，前端因此只看得到一个计数（甚至没有计数）。
+			d.errs.Add(ErrKindPlugin, req.PacketId, req.Src, req.Dst, r.Error)
 			d.logger.Warn("decode v2 result error", "input_id", req.InputId, "error", r.Error)
 			continue
 		}
 
 		payloadValue, err := event.UnmarshalValueMsgpack(r.PayloadMsgpack)
 		if err != nil {
+			// 插件产出了平台解不开的载荷：同样算解码失败，同样要能看见原因。
+			d.errs.Add(ErrKindPlugin, req.PacketId, req.Src, req.Dst, "unmarshal msgpack payload: "+err.Error())
 			d.logger.Warn("unmarshal msgpack payload", "error", err)
 			continue
 		}
@@ -317,6 +362,7 @@ func (d *Dispatcher) convertResultsToEvents(req *pb.DecodeRequest, results []*pb
 			Direction:      req.Direction,
 			ConnID:         connID,
 			Source:         source,
+			PeerKey:        peerKey,
 		}
 		if dirOverride, ok := extractDirectionOverride(metaValue, payloadValue); ok {
 			ctx.Direction = dirOverride
@@ -372,21 +418,40 @@ func (d *Dispatcher) Close() error {
 
 // inferDirection 根据 src/dst 端口推断通信方向。
 // serverPort 为已知服务端端口提示（如游戏服 8989），命中时优先据此判断方向。
+// peerKeyFromPacket 返回该包的「稳定对端标识」：客户端 IP + 服务端地址（含端口）。
+//
+// 为什么不直接用 FlowID：FlowID 是含客户端临时端口的五元组 hash，同一个客户端重连一次、
+// 或重开一次抓包会话，就换一个值。拿它当实体身份，等于每次重连都从零开始记实体状态
+//（实测一次会话里 70% 的变更因此退化成「首见」）。对端标识只保留客户端 IP 与稳定的
+// 服务端地址，同一客户端对同一服务端的多次连接共享同一身份。
+//
+// 方向无法判断（没给服务端端口提示、且两端都是高位端口）时返回空串：
+// 此时宁可退回会话内隔离，也不能把两个不同客户端当成同一个。
+func peerKeyFromPacket(pkt event.Packet, serverPort int) string {
+	switch inferDirection(pkt.Src.Port(), pkt.Dst.Port(), serverPort) {
+	case directionClientToServer:
+		return pkt.Src.Addr().String() + "|" + pkt.Dst.String()
+	case directionServerToClient:
+		return pkt.Dst.Addr().String() + "|" + pkt.Src.String()
+	}
+	return ""
+}
+
 func inferDirection(srcPort, dstPort uint16, serverPort int) string {
 	if serverPort > 0 {
 		sp := uint16(serverPort)
 		if dstPort == sp && srcPort != sp {
-			return "client_to_server"
+			return directionClientToServer
 		}
 		if srcPort == sp && dstPort != sp {
-			return "server_to_client"
+			return directionServerToClient
 		}
 	}
 	if dstPort < 1024 && srcPort >= 1024 {
-		return "client_to_server"
+		return directionClientToServer
 	}
 	if srcPort < 1024 && dstPort >= 1024 {
-		return "server_to_client"
+		return directionServerToClient
 	}
 	return "unknown"
 }

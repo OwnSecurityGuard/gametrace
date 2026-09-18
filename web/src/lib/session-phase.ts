@@ -330,8 +330,8 @@ export function describeSessionPhase(input: PhaseInput): SessionPhaseView {
             ? {
                 title: "部分数据无法解析。",
                 steps: [
-                  "可能是非目标协议流量混入，或解析插件与协议版本不匹配",
-                  "到「协议数据」页看失败样本，确认插件是否选对",
+                  "下方「解码失败」按原因分类列出了具体错误（同类错误已归并）",
+                  "最常见的原因是非目标协议流量混入，或解析插件与协议版本不匹配",
                 ],
               }
             : undefined,
@@ -353,8 +353,8 @@ export function describeSessionPhase(input: PhaseInput): SessionPhaseView {
             ? {
                 title: "本次有解码失败数据。",
                 steps: [
-                  `${errors.toLocaleString()} 条解码失败，可能是非目标协议流量或插件不匹配`,
-                  "到「协议数据」页核对样本，必要时换插件重新抓",
+                  `${errors.toLocaleString()} 条解码失败，下方按原因分类列出（含首条错误原文）`,
+                  "确认解析插件与协议版本匹配，必要时换插件重新抓",
                 ],
               }
             : undefined,

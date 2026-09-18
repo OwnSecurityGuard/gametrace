@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -234,7 +235,7 @@ func TestWriteStateChanges(t *testing.T) {
 		event.NewEvent("test-session", "tcp", "test", payload, event.EventContext{FlowID: flowID}),
 	}
 
-	if err := s.WriteStateChanges(ctx, "test-session", events); err != nil {
+	if err := writeStateChangesFromEvents(t, s, "test-session", events); err != nil {
 		t.Fatalf("WriteStateChanges: %v", err)
 	}
 
@@ -325,7 +326,7 @@ func TestWriteStateChanges_SkipsInvalid(t *testing.T) {
 		event.NewEvent("test-session", "tcp", "test", payload, event.EventContext{FlowID: flowID}),
 	}
 
-	if err := s.WriteStateChanges(ctx, "test-session", events); err != nil {
+	if err := writeStateChangesFromEvents(t, s, "test-session", events); err != nil {
 		t.Fatalf("WriteStateChanges: %v", err)
 	}
 
@@ -365,5 +366,196 @@ func TestSchemaMigration_Idempotent(t *testing.T) {
 		"SELECT name FROM sqlite_master WHERE type='table' AND name='state_changes'").Scan(&name)
 	if err != nil {
 		t.Errorf("state_changes table not found after migration: %v", err)
+	}
+}
+
+// TestQueryStateChangesResolvedFlags 验证 before_resolved / after_resolved 写库后能读回来。
+// 这两个标记是「首见」与「真的从 null 变过来」的唯一区分依据，消费方（前端/MCP）依赖它，
+// 所以查询侧必须把它们一起取出来。
+func TestQueryStateChangesResolvedFlags(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "test.db")
+	s, err := NewSQLiteStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	ts := time.Unix(1700000000, 0)
+	changes := []EnrichedStateChange{
+		{
+			StateChange: event.StateChange{
+				SubjectType: "Player", SubjectID: "1", Op: "set", Path: "hp",
+				Before: event.ValueInt(100), After: event.ValueInt(80),
+			},
+			EventID: "ev1", FlowID: "f1", Timestamp: ts,
+			BeforeResolved: true, AfterResolved: true,
+		},
+		{
+			// 首见：没有基线，before 未解析。
+			StateChange: event.StateChange{
+				SubjectType: "Player", SubjectID: "1", Op: "set", Path: "exp",
+				After: event.ValueInt(5),
+			},
+			EventID: "ev1", FlowID: "f1", Timestamp: ts,
+		},
+	}
+	if err := s.WriteEnrichedStateChanges(ctx, "sess", changes); err != nil {
+		t.Fatalf("WriteEnrichedStateChanges: %v", err)
+	}
+
+	rows, err := s.QueryStateChanges(ctx, StateChangeQuery{SessionID: "sess"})
+	if err != nil {
+		t.Fatalf("QueryStateChanges: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("行数 = %d, want 2", len(rows))
+	}
+	for _, r := range rows {
+		switch r.Path {
+		case "hp":
+			if !r.BeforeResolved || !r.AfterResolved {
+				t.Errorf("hp: resolved = (%v,%v), want (true,true)", r.BeforeResolved, r.AfterResolved)
+			}
+		case "exp":
+			if r.BeforeResolved || r.AfterResolved {
+				t.Errorf("exp 是首见，resolved 应为 false: (%v,%v)", r.BeforeResolved, r.AfterResolved)
+			}
+		default:
+			t.Errorf("unexpected path %q", r.Path)
+		}
+	}
+}
+
+// writeStateChangesFromEvents 把事件里声明的 _state_changes 手工落成投影行。
+//
+// 生产路径是 pkg/state 的基线富化 → WriteEnrichedStateChanges；这里只验证 Store 层的
+// 行校验与写入（非法条目跳过、列值正确），所以不绕道基线，直接构造投影条目。
+func writeStateChangesFromEvents(t *testing.T, s *SQLiteStore, sessionID string, events []*event.Event) error {
+	t.Helper()
+	var changes []EnrichedStateChange
+	for _, ev := range events {
+		for _, sc := range ev.ExtractStateChanges() {
+			changes = append(changes, EnrichedStateChange{
+				StateChange: sc,
+				EventID:     ev.Identity.ID,
+				FlowID:      ev.Context.FlowID,
+				Timestamp:   ev.Identity.Timestamp,
+			})
+		}
+	}
+	return s.WriteEnrichedStateChanges(context.Background(), sessionID, changes)
+}
+
+// TestQueryStateChangesOrdersBySeq 验证同一纳秒内的多条变化按 seq（插件上报次序）返回。
+//
+// 主键是 uuid，只按 id 排序等于随机序 —— 分页会重复/漏行，展示顺序也与上报不符。
+// 这里刻意让 id 顺序与 seq 顺序相反：只有真的用 seq 排序才能得到 c,b,a。
+func TestQueryStateChangesOrdersBySeq(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "test.db")
+	s, err := NewSQLiteStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	ts := time.Unix(1700000000, 0).UnixNano()
+	for _, r := range []struct {
+		id   string
+		path string
+		seq  int
+	}{{"zzz", "c", 0}, {"mmm", "b", 1}, {"aaa", "a", 2}} {
+		if _, err := s.db.ExecContext(ctx, `
+			INSERT INTO state_changes(id, event_id, session_id, timestamp, subject_type, subject_id, op, path, after_value, before_resolved, after_resolved, seq)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			r.id, "ev1", "sess", ts, "Player", "1", "set", r.path, "1", 0, 1, r.seq); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	rows, err := s.QueryStateChanges(ctx, StateChangeQuery{SessionID: "sess"})
+	if err != nil {
+		t.Fatalf("QueryStateChanges: %v", err)
+	}
+	var gotPaths []string
+	for _, r := range rows {
+		gotPaths = append(gotPaths, r.Path)
+	}
+	if want := []string{"c", "b", "a"}; !reflect.DeepEqual(gotPaths, want) {
+		t.Errorf("返回顺序 = %v, want %v（应按 seq，而不是 uuid）", gotPaths, want)
+	}
+
+	// 写入侧也要带上 seq。
+	got, err := s.QueryStateChanges(ctx, StateChangeQuery{SessionID: "sess", Path: "a"})
+	if err != nil {
+		t.Fatalf("QueryStateChanges: %v", err)
+	}
+	if len(got) != 1 || got[0].Seq != 2 {
+		t.Errorf("seq 读回 = %+v, want 2", got)
+	}
+}
+
+// TestWriteEnrichedStateChangesPersistsSeq 验证写入侧的 seq 真的落到列上（而不是恒 0）。
+func TestWriteEnrichedStateChangesPersistsSeq(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "test.db")
+	s, err := NewSQLiteStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	changes := []EnrichedStateChange{
+		{
+			StateChange: event.StateChange{
+				SubjectType: "Player", SubjectID: "1", Op: "set", Path: "hp",
+				After: event.ValueInt(80),
+			},
+			EventID: "ev1", Timestamp: time.Unix(1700000000, 0), Seq: 5,
+		},
+	}
+	if err := s.WriteEnrichedStateChanges(ctx, "sess", changes); err != nil {
+		t.Fatalf("WriteEnrichedStateChanges: %v", err)
+	}
+	rows, err := s.QueryStateChanges(ctx, StateChangeQuery{SessionID: "sess"})
+	if err != nil {
+		t.Fatalf("QueryStateChanges: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Seq != 5 {
+		t.Fatalf("落库的 seq = %+v, want 5", rows)
+	}
+}
+
+// TestEventContextPeerKeyRoundTrip 验证 EventContext.PeerKey 能穿过存储层往返。
+//
+// 实体基线用 PeerKey 跨会话延续（见 pkg/state 的 Scope），这依赖 context 的 msgpack
+// 编解码与落库读取都不丢字段；漏了任何一环，基线就会静默退回会话维度而没人发现。
+func TestEventContextPeerKeyRoundTrip(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "test.db")
+	s, err := NewSQLiteStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	const peer = "10.0.0.1|10.0.0.2:9250"
+	ev := event.NewEvent("test-session", "tcp", "test",
+		event.ValueObject(map[string]event.Value{"msg_name": event.ValueString("Login")}),
+		event.EventContext{FlowID: "f1", PeerKey: peer})
+	if err := s.AppendEvents(ctx, []*event.Event{ev}); err != nil {
+		t.Fatalf("AppendEvents: %v", err)
+	}
+
+	got, err := s.QueryEvents(ctx, "test-session", 10, 0)
+	if err != nil {
+		t.Fatalf("QueryEvents: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("事件数 = %d, want 1", len(got))
+	}
+	if got[0].Context.PeerKey != peer {
+		t.Errorf("PeerKey = %q, want %q", got[0].Context.PeerKey, peer)
 	}
 }
