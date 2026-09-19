@@ -29,7 +29,7 @@ capture frame → framing.ExtractL7 → framing.Reassembler → HTTP 消息解�
 本示例位于 SDK 模块内部，直接构建：
 
 ```bash
-cd gt-plugin-sdk
+cd sdk
 go build -o http-stream-decoder.exe ./examples/http-stream-decoder
 ```
 

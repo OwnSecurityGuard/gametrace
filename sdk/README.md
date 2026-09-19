@@ -1,4 +1,4 @@
-# gt-plugin-sdk
+# GameTrace Plugin SDK (`gametrace/sdk`)
 
 GameTrace（Game Traffic Analysis）解码插件的官方 Go SDK。插件是一个独立进程：
 启动 gRPC `Decoder.DecodeV2` 服务、读取 `plugin.yaml` 清单、向 GameTrace 宿主注册，
@@ -25,7 +25,14 @@ func decode(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error {
 ## 快速开始
 
 ```bash
-go get github.com/OwnSecurityGuard/gametrace/sdk@latest
+# 发布 tag 带 sdk/ 前缀（module 位于 monorepo 子目录），最新版见「版本」一节
+go get github.com/OwnSecurityGuard/gametrace/sdk@v0.9.0
+```
+
+在 gametrace 仓库内开发时改用 replace 指向仓库内源码，避免依赖网络：
+
+```bash
+go mod edit -replace github.com/OwnSecurityGuard/gametrace/sdk=./sdk
 ```
 
 1. 从 [examples/http-stream-decoder](examples/http-stream-decoder/) 复制骨架
@@ -62,7 +69,7 @@ type: decoder
 `protocol` 必填、`type` 固定 `decoder`；宿主在注册期按自身大版本（当前 `gt.decoder/v2`）
 复核 `api_version`。
 
-可选声明段（v0.8.2 现状）：
+可选声明段（v0.9.0 现状）：
 
 ```yaml
 protocol_version: "1.1"
@@ -166,13 +173,19 @@ Docker Desktop（Mac/Windows）下也可用 `host.docker.internal` 作为容器�
 - [docs/case-study-godot-tiny-mmo.md](docs/case-study-godot-tiny-mmo.md) — Godot 小游戏解码案例
 - [examples/http-stream-decoder/README.md](examples/http-stream-decoder/README.md) — 参考插件说明
 
-宿主（pipeline/MCP 工具链）侧文档见主项目 `E:\gametrace` 的
-`pkg/plugin/skills/gametrace-plugin-development.md`（MCP `get_plugin_dev_guide` 可获取）。
+宿主（pipeline/MCP 工具链）侧开发指南见本仓库根目录的
+[docs/gt-plugin-development.md](../docs/gt-plugin-development.md)（MCP `get_plugin_dev_guide` 可获取）。
 
 ## 版本
 
 当前 **v0.9.0**。沿革：
 
+- **v0.9.0** — **Protocol Semantic Rule 的 effect 闭集收敛为 `pair` / `annotate` / `name`**：
+  原第四个效果 `extract`（声明 `source` 把数组/对象字段拆成子事件、宿主挂 `parent_id`）已整体删除。
+  它拆出的子事件不过语义规则（无 `meta`）、不参与状态投影（`Analysis` 恒空）、`schema_id` 随
+  schema 子系统移除后无处安放；而 `DecodeV2` 响应的 `r.Events` 本就是切片，解码器直接发多条
+  事件能同时拿到这三样，是能力更完整的同一条路。连带移除 `events.parent_id` 列与前端父子视图。
+  另：SDK 源码迁入 gametrace monorepo 的 `sdk/`（module 路径不变），发布 tag 为 `sdk/vX.Y.Z`。
 - **v0.8.2** — Protocol Semantic Rule 新增 `name` 效果：消息名从 payload 经 GJSON 提取，
   写入 `meta.msg_name`；`name` 规则先于其余规则求值，其结果注入 `_meta.msg_name`
   供后续谓词判定，规则声明优先于解码器硬编码。

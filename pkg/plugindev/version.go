@@ -1,15 +1,17 @@
 package plugindev
 
-// SDKVersion 是脚手架固定引用的 gt-plugin-sdk 版本。
+// SDKVersion 是脚手架固定引用的 github.com/OwnSecurityGuard/gametrace/sdk 版本。
 //
 // 这是「开发指南（SDK Agents.md）/ 脚手架 / SDK」三者同版本发布的单一事实来源：
 //   - go.mod.tmpl 通过 {{.SDKVersion}} 渲染 require 版本；
 //   - create_plugin 把它作为 sdk_version 字段返回给调用方；
 //   - 升级 SDK 时，必须同步修改本常量、SDK 自身版本与 Agents.md 中引用的版本，三者保持一致。
 //
-// 当前值对应 SDK 模块 tag v0.9.0（语义契约 P1–P2：schema/state 已移除，
-// 三段产物 Payload/Meta/Analysis 强制分离）。SDK 源码位于仓库内 ./sdk（本地真源），
-// 对外发布路径仍为 github.com/OwnSecurityGuard/gametrace/sdk。
+// 当前值对应 SDK 模块 tag sdk/v0.9.0（语义契约 P1–P2：schema/state 已移除，
+// 三段产物 Payload/Meta/Analysis 强制分离；Protocol Semantic Rule 的 effect 闭集为
+// pair / annotate / name）。SDK 源码位于仓库内 ./sdk（唯一真源），
+// 对外发布路径为 github.com/OwnSecurityGuard/gametrace/sdk —— 因 module 在子目录，
+// 发布 tag 必须带 sdk/ 前缀，仅凭 make sdk-publish 打出的裸 tag 无法被 go get 解析。
 const SDKVersion = "v0.9.0"
 
 // FramingAvailable 标记当前 SDKVersion 是否包含 framing 包。

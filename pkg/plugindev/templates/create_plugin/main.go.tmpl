@@ -88,9 +88,9 @@ func done(stream pb.Decoder_DecodeV2Server, req *pb.DecodeRequest) error {
 
 // decodePacket 是核心解码函数，签名匹配 sdk.DecodeFuncV2。
 //
-// 注意：当前固定引用的 gt-plugin-sdk 版本【不包含】framing 包
-// （create_plugin 返回 framing_available=false）。因此这里不提供 link_type
-// 剥离与 TCP 重组工具。对 pcap 类源，DecodeRequest.payload 仍是完整链路层帧——
+// 注意：当前固定引用的 github.com/OwnSecurityGuard/gametrace/sdk 版本
+// 【不包含】framing 包（create_plugin 返回 framing_available=false）。因此这里不提供
+// link_type 剥离与 TCP 重组工具。对 pcap 类源，DecodeRequest.payload 仍是完整链路层帧——
 // 请改用含 framing 的 SDK 版本（framing.ExtractL7 / framing.NewReassembler），
 // 或在此自行实现链路层剥离与字节流重组，再解析业务字段。
 func decodePacket(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error {

@@ -119,10 +119,16 @@ build: build-mcp build-pipeline build-plugin-dev build-agent
 # ============================================================================
 # SDK 维护与对外发布（SDK 已并入本 monorepo 的 ./sdk）
 #
-# ./sdk 是 SDK 源码的真源（module：github.com/OwnSecurityGuard/gametrace/sdk，
-# 保留独立 go.mod；根 go.mod 以 replace => ./sdk 消费）。对外发布时把 ./sdk
-# 同步到已退役的只读发布镜像 gt-plugin-sdk 仓库并打 tag，外部插件照旧
-# go get github.com/OwnSecurityGuard/gametrace/sdk@v0.x 拉取。
+# ./sdk 是 SDK 源码的唯一真源（module：github.com/OwnSecurityGuard/gametrace/sdk，
+# 保留独立 go.mod；根 go.mod 以 replace => ./sdk 消费）。
+#
+# 对外发布靠【本仓库】的 sdk/vX.Y.Z tag：module 位于子目录，Go 解析
+# github.com/OwnSecurityGuard/gametrace/sdk@vX.Y.Z 时查的是本仓库里名为
+# sdk/vX.Y.Z 的 tag。裸 vX.Y.Z（无 sdk/ 前缀）无法被 go get 解析。
+#
+# 历史坑：旧版 sdk-publish 打的是裸 tag（git tag -f v0.9.0）并推给镜像仓库，
+# 于是 SDK 从未真正可 go get —— 远程长期只有 sdk/v0.1.1，而文档一直声称
+# 外部插件 go get ...@v0.9.0 可用。
 # ============================================================================
 .PHONY: sdk-test sdk-publish
 SDK_VERSION ?= v0.9.0
@@ -132,14 +138,19 @@ SDK_UPSTREAM ?= git@github.com:OwnSecurityGuard/gt-plugin-sdk.git
 sdk-test:
 	cd sdk && go test ./... && go build ./...
 
-# 对外发布 SDK：测试通过后，把 ./sdk 以 git subtree 推送到发布镜像仓库的 main
-# 分支，并打上 SDK_VERSION tag（覆盖 force，便于同步演进）。
-# 用法：make sdk-publish SDK_VERSION=v0.9.0  （首次需先 git remote add 或用环境变量）
+# 对外发布 SDK：
+#   1. 在本仓库打 sdk/$(SDK_VERSION) 并推 origin —— 只有这一步才让
+#      go get github.com/OwnSecurityGuard/gametrace/sdk@$(SDK_VERSION) 真正可用。
+#   2. （历史遗留）把 ./sdk 子树推给已退役只读镜像 gt-plugin-sdk 作归档。
+#      该镜像不能作为 go get 通道：镜像内 go.mod 声明的 module 是
+#      gametrace/sdk，与镜像仓库路径 gt-plugin-sdk 不匹配，Go 不会查它。
+#      外部获取一律走上一步的本仓库 tag。
+# 用法：make sdk-publish SDK_VERSION=v0.9.0
 sdk-publish: sdk-test
+	git tag -f sdk/$(SDK_VERSION)
+	git push origin sdk/$(SDK_VERSION)
 	@test -n "$(SDK_UPSTREAM)" || { echo "SDK_UPSTREAM is empty"; exit 1; }
 	git subtree push --prefix sdk $(SDK_UPSTREAM) main --squash || git subtree push --prefix sdk $(SDK_UPSTREAM) main
-	git tag -f $(SDK_VERSION)
-	git push $(SDK_UPSTREAM) $(SDK_VERSION) || true
 
 build-examples:
 	go build -tags $(TAGS) -o bin/http-server.exe ./examples/http/server

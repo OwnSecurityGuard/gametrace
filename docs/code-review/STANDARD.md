@@ -84,7 +84,7 @@
 | 3.2 | **探针身份持久化** | 改 `cmd/gt-agent/config.go`、`suppliedConfig.adopt` | 本次下发的身份/回连目标是否覆盖 `probe.json` 旧值并作废旧凭证；`%AppData%\gt-agent\probe.json` 不被重下清除 | 🔴 |
 | 3.3 | **跨 NAT 回连地址** | 改下发/回连逻辑 | 是否仍按请求 Host 回推；`GT_PUBLIC_HOST/REGISTRY_PORT/INGEST_PORT` 是否可被外部配置覆盖 | 🟡 |
 | 3.4 | **docker compose 注册端口 19091** | 改插件启动/SDK 接线 | 宿主手动跑插件是否显式 `GT_REGISTRY_ADDR=127.0.0.1:19091`；容器内是否用 `pipeline:9091` | 🟡 |
-| 3.5 | **SDK 双模块共存** | 引入/升级 SDK | 同一二进制是否同时 import `gta-plugin-sdk` 与 `gt-plugin-sdk`（proto 撞名 → panic） | 🔴 |
+| 3.5 | **SDK 单真源** | 引入/升级 SDK、改 go.mod replace | 是否只依赖仓库内 `./sdk`（module `github.com/OwnSecurityGuard/gametrace/sdk`）；replace 是否误指向已退役的 `gt-plugin-sdk` / `gta-plugin-sdk` 本地 checkout —— 那会引入第二份 SDK 定义，症状是 `cannot use decodePacket as sdk.DecodeFuncV2` 型编译失败（旧名时代是 proto 撞名 panic） | 🔴 |
 | 3.6 | **协议 major 版本匹配** | 改 manifest / 注册 | plugin manifest `api_version` major 与 manager 要求一致，否则注册被拒 | 🔴 |
 | 3.7 | **资源权限默认 creator-only** | 新增资源/接口 | 未显式共享时，新资源是否仅创建者可见；是否提前建了不必要的 project_id/角色表 | 🟡 |
 | 3.8 | **DecodeV2 响应契约** | 写/改解码插件 | 是否先 `Send(Done:false 载荷)` 再 `Send(Done:true 终止)`；把 payload 塞进 `Done:true` 会导致 events 恒为 0 | 🔴 |

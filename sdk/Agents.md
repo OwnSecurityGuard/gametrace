@@ -1,6 +1,6 @@
 # Agents.md
 
-> AI/Agent development guide for `gt-plugin-sdk`.
+> AI/Agent development guide for `github.com/OwnSecurityGuard/gametrace/sdk`.
 >
 > This file is the operational contract for an AI agent that needs to create or modify a GameTrace decoder plugin. It describes the **current SDK (v0.9.0) and the capture-to-plugin input contract**. It must not contain machine/environment-specific GameTrace pipeline runbooks.
 
@@ -49,13 +49,10 @@ sdk root
 ├── tunnel.go               # RegisterOptions (Tunnel/AuthToken), reverse tunnel mux
 ├── contract/               # wire contract SSOT + checkers
 │   ├── contract.yaml       # spec_version 6, gt.decoder/v2
-│   ├── specs/schema.yaml   # SSOT for the builtin semantic vocabulary
+│   ├── types.go / contract.go  # contract model
 │   ├── plugin_checker.go   # PluginChecker.Check (declaration) / CheckEvent (per-event)
-│   ├── schema_index.go     # ManifestSchemaIndex: wire id -> Schema
 │   └── report.go           # Violation / Report (machine-readable)
-├── schema/                 # schema declaration layer (restored v0.7.0, validated since v0.7.1)
-├── state/                  # state declaration layer: Subject, Change, path resolution
-├── rule/                   # Protocol Semantic Rule: Predicate (GJSON) + Effect
+├── rule/                   # Protocol Semantic Rule: Predicate (GJSON) + Effect (pair/annotate/name)
 ├── framing/                # ExtractL7, Reassembler, FlowKey, Segment, TCPFlags
 ├── proto/
 │   ├── plugin.proto        # SSOT for the gRPC contract
@@ -67,6 +64,12 @@ sdk root
     ├── value*.go           # tagged-union Value, JSON + MsgPack encoding
     └── adapter.go          # Split/MergeReservedKeys, ExtractStateChanges
 ```
+
+> **Removed layers.** The `schema/` declaration layer and the `state/` declaration layer no
+> longer exist in this SDK (nor does `contract/schema_index.go` or `contract/specs/`).
+> `_state_changes` survives only as a **reserved analysis key** projected by the host into the
+> `state_changes` table — declare it through `event.Draft.Analysis`, do not look for a
+> declaration layer or a `schema_id`.
 
 ## 4. Minimal plugin architecture
 
@@ -222,10 +225,12 @@ meta:
 
 `hints` may carry `port:NN` entries; the platform dispatcher uses them for routing.
 
-### 7.2 The two contract layers
+### 7.2 The contract block and the semantic layer
 
-A manifest may carry two independent declaration blocks. They are complementary, not
-alternative: **schemas describe data shape, semantic_rules describe protocol semantics.**
+Two independent, complementary declaration blocks: the `contract` block pins the wire-contract
+version, and `semantic_rules` describes protocol semantics. There is **no `schemas` block** —
+that declaration layer was removed; the SDK's only declarative semantics layer is
+`semantic_rules`.
 
 ```yaml
 contract:
@@ -525,10 +530,13 @@ or `ToAny()` when conversion to native Go values is actually required.
 ### Float folding trap
 
 `ValueFromMap` / `ValueFromAny` fold integral `float64` values into `Int`: `float64(0)`,
-`float64(1)` become `Int`. A field declared `float64` in `schemas` then mismatches its wire
-kind and the host reports a schema violation — invisible to the compiler and to unit tests.
-Coordinates and orientations hit this constantly (they are often integral). Work around it
-with a float marker type and a custom converter instead of `event.ValueFromMap`.
+`float64(1)` become `Int`. This is invisible to the compiler and to unit tests, and it changes
+the kind the platform sees relative to what the wire actually carried. Coordinates and
+orientations hit this constantly (they are often integral). Work around it with a float marker
+type and a custom converter instead of `event.ValueFromMap`.
+
+(The former consequence — a mismatch against a `float64` field declared in the `schemas` block —
+no longer applies, since that declaration layer was removed.)
 
 ## 12. Event payload encoding
 
@@ -554,10 +562,12 @@ Conceptually:
 
 ```text
 Event
-├── Identity  (ID, SessionID, Type, SchemaID, Source, Timestamp)
+├── Identity  (ID, SessionID, Type, Source, Timestamp)
 ├── Trace     (CausationID, CorrelationID, OriginID)
 ├── Context   (FlowID, RawPacketID, MessageOrdinal, Direction)
-└── Payload   (SchemaID, Value)
+├── Payload   (Value — business data)
+├── Meta      (Value — platform/rule-attached: direction, msg_name, role, is_push, semantic)
+└── Analysis  (Value — _state_changes, entity; the only input to state projection)
 ```
 
 - **CausationID**: direct event that caused this event;
@@ -684,7 +694,7 @@ manifest declaration" in one shot:
 ```go
 m, _ := sdk.ParseManifest(data)                  // data = plugin.yaml source
 checker := contract.NewPluginChecker()
-checker.Check(m)                                 // declaration: schema + semantic layers
+checker.Check(m)                                 // declaration: manifest + rule validation
 checker.CheckEvent(m, draft)                     // runtime: rules evaluate
 ```
 
@@ -735,7 +745,7 @@ decoding:
 - the real application protocol or message framing;
 - whether a payload fixture is request or response direction;
 - the meaning of a game-specific opcode/field;
-- the required event types/schema IDs when no project convention exists;
+- the required event type names when no project convention exists;
 - a protocol encryption/compression layer that cannot be resolved from available evidence;
 - a required correlation rule that cannot be inferred safely.
 

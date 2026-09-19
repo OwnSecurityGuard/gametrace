@@ -239,9 +239,9 @@ Members connect from their own machines with a single `gt-agent` binary that pus
 
 ## Plugin SDK
 
-Plugins depend only on [gt-plugin-sdk](https://github.com/OwnSecurityGuard/gametrace/sdk) — a separate repo, zero coupling to gametrace internals. A plugin is **one Go binary + one `plugin.yaml` manifest**:
+Plugins depend only on [`github.com/OwnSecurityGuard/gametrace/sdk`](sdk/) — an independent Go module that lives in this monorepo under `sdk/`, zero coupling to gametrace internals. A plugin is **one Go binary + one `plugin.yaml` manifest**:
 
-- the manifest declares the contract — capabilities, schemas, and state subjects (`plugins/godot-gateway/plugin.yaml` is a complete example)
+- the manifest declares the plugin's identity and contract — `api_version`, `protocol`, `transports`, and `semantic_rules` ([sdk/examples/http-stream-decoder/plugin.yaml](sdk/examples/http-stream-decoder/plugin.yaml) is a complete example)
 - the host validates that contract at registration *and* per event at decode time
 - `activate_plugin` launches the binary and injects `GT_REGISTRY_ADDR` for you
 

@@ -38,7 +38,7 @@ semantic_rules:
       type: annotate
       semantic: error
 meta:
-  author: gt-plugin-sdk
+  author: gametrace-sdk
   description: >-
     Reference HTTP decoder plugin demonstrating the full intended pipeline
     (ExtractL7 -> Reassembler -> HTTP message parse -> event) with a

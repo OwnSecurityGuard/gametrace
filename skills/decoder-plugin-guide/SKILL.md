@@ -1,6 +1,6 @@
 ---
 name: "decoder-plugin-guide"
-description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gt-plugin-sdk）接入 GameTrace 平台：协议分析、插件骨架、TCP 重组与握手处理、plugin.yaml、测试与验证。semantic_rules 的选取标准、约束、校验机制与验收标准见 §5.2–§5.6。当用户要为新协议编写解码插件、接入自定义游戏协议、解析网络协议为业务事件，或要编写/审查/修正 semantic_rules 时调用。"
+description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gametrace/sdk）接入 GameTrace 平台：协议分析、插件骨架、TCP 重组与握手处理、plugin.yaml、测试与验证。semantic_rules 的选取标准、约束、校验机制与验收标准见 §5.2–§5.6。当用户要为新协议编写解码插件、接入自定义游戏协议、解析网络协议为业务事件，或要编写/审查/修正 semantic_rules 时调用。"
 ---
 
 # GameTrace 解码插件开发指南
@@ -9,7 +9,7 @@ description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gt-
 
 指导用户把任意 TCP/UDP 网络协议接入 GameTrace 平台。解码插件把抓包帧转成结构化业务事件，宿主（gt-pipeline）负责 TCP 重组以外的平台职责：语义规则执行、事件配对、状态分析、前端展示。
 
-- 语言：Go 1.26+（与宿主 gt-pipeline 的 go.mod 对齐，低于此版本可能出现兼容问题）
+- 语言：Go 1.25.5+（对齐 SDK 模块 `sdk/go.mod` 的 go 指令；宿主 gt-pipeline 自身用 1.26.8，与插件作者无关，插件是独立进程/独立 module）
 - SDK：`github.com/OwnSecurityGuard/gametrace/sdk` v0.9.0
 - API 版本：`api_version: gt.decoder/v2`
 - 插件形态：独立可执行文件，通过 Register RPC 向 registry 注册
@@ -110,7 +110,7 @@ func loadDotEnv(path string) {
 
 ```
 plugins/<protocol>-decoder/
-├── go.mod          # 依赖 gt-plugin-sdk v0.9.0
+├── go.mod          # 依赖 github.com/OwnSecurityGuard/gametrace/sdk v0.9.0
 ├── main.go         # 入口：RunRegisterLoopWithOptions + loadDotEnv(".env")
 ├── decode.go       # 核心：Decode(req) → []*Event
 ├── <fmt>.go        # 负载解析器（解压/解帧/解文本）
@@ -167,7 +167,7 @@ func (d *decoder) decodePacket(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2
 		return stream.Send(&pb.DecodeResponseV2{InputId: req.GetInputId(), Done: true, Error: err.Error()})
 	}
 	for _, e := range events {
-		// v0.9.0 契约：Payload（纯业务）与 Meta（方向等）分开传输，
+		// v0.8.0 契约：Payload（纯业务）与 Meta（方向等）分开传输，
 		// 前端「元信息」独立展示，不再混入业务 payload。
 		mp, mErr := event.ValueFromMap(e.Payload).MarshalMsgpack()
 		if mErr != nil {

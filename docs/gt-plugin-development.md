@@ -64,7 +64,7 @@
 plugins/my-http/
 ├── plugin.yaml          # Manifest 配置文件
 ├── main.go              # 插件入口
-├── go.mod               # 模块定义（仅 require gt-plugin-sdk）
+├── go.mod               # 模块定义（仅 require github.com/OwnSecurityGuard/gametrace/sdk）
 └── README.md            # 说明文档
 ```
 

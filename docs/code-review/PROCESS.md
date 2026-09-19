@@ -135,11 +135,11 @@ linters-settings:
 
 issues:
   exclude-rules:
-    # 生成代码 / SDK 第三方跳过
+    # 生成代码 / SDK 子模块（独立 module）跳过
     - path: _test\.go
       linters:
         - gocyclo
-    - path: (gt-plugin-sdk|gta-plugin-sdk)/
+    - path: ^sdk/
       linters:
         - all
   max-issues-per-linter: 0
@@ -152,7 +152,7 @@ issues:
 
 ## 附录 B：拉取新 SDK tag（防 sumdb 404）
 
-升级 `gt-plugin-sdk` 到刚发布的新 tag 时，`go mod tidy` 可能报
+升级 `github.com/OwnSecurityGuard/gametrace/sdk` 到刚发布的新 tag 时，`go mod tidy` 可能报
 `goproxy.cn/sumdb/...lookup ...404 temporarily unavailable`（sumdb 尚未收录）。解法：
 
 ```bash

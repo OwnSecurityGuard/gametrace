@@ -16,7 +16,7 @@
 - [ ] **3.2 探针身份持久化**：本次下发覆盖 `probe.json` 旧值并作废旧凭证
 - [ ] **3.3 跨 NAT 回连**：`GT_PUBLIC_*` 可外部配置覆盖，不硬推请求 Host
 - [ ] **3.4 compose 注册端口 19091**：宿主跑插件显式 `GT_REGISTRY_ADDR=127.0.0.1:19091`
-- [ ] **3.5 SDK 双模块不共存**：同一二进制未同时 import `gta-` 与 `gt-plugin-sdk`
+- [ ] **3.5 SDK 单真源**：replace 未指向已退役的 `gt-plugin-sdk` / `gta-plugin-sdk` checkout（否则引入第二份 SDK，编译报 `sdk.DecodeFuncV2` 类型不匹配）
 - [ ] **3.6 协议 major 匹配**：manifest `api_version` major 与 manager 一致
 - [ ] **3.7 权限 creator-only**：新资源默认仅创建者可见，无多余 project_id/角色表
 - [ ] **3.8 DecodeV2 契约**：先 `Send(Done:false 载荷)` 再 `Send(Done:true 终止)`

@@ -10,7 +10,7 @@ package main
 //   pair:     按键配对请求与响应 → Trace.CorrelationID / CausationID
 //   name:     从 payload 提取消息名 → Meta.msg_name
 //
-// 状态：gt-plugin-sdk v0.8 已发布，随迁移入 cmd/gt-pipeline/ 并在
+// 状态：SDK 的语义规则层已就绪，随迁移入 cmd/gt-pipeline/ 并在
 // capture_task.go 接线（annotate/pair/name 三种效果的宿主侧执行）。
 //
 // 历史：曾有一个 extract 效果（一拆多产出子事件），已于 2026-09-18 删除——
