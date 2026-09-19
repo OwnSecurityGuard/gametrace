@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"gametrace/pkg/event"
 )
@@ -18,6 +19,10 @@ type EventPageQuery struct {
 	TypeNot string
 	// ConnEq 是连接过滤下推：非空时仅返回该连接（event_index.conn_id）的解码事件。
 	ConnEq string
+	// From/To 是时间窗口下界/上界（含端点，与 events.timestamp 同为 UnixNano）。
+	// 零值表示不限制该侧。StreamEvents/StreamEventsDesc 和分页全部支持下推。
+	From time.Time
+	To   time.Time
 }
 
 // QueryEventPage 按 timestamp DESC 分页返回事件与 SQL 条件命中总数。
@@ -125,5 +130,58 @@ func eventPageWhere(q EventPageQuery) (string, []any) {
 		where += " AND id IN (SELECT event_id FROM event_index WHERE conn_id = ?)"
 		args = append(args, q.ConnEq)
 	}
+	if !q.From.IsZero() {
+		where += " AND timestamp >= ?"
+		args = append(args, q.From.UnixNano())
+	}
+	if !q.To.IsZero() {
+		where += " AND timestamp <= ?"
+		args = append(args, q.To.UnixNano())
+	}
 	return where, args
+}
+
+// StreamEvents 以时间正序流式遍历满足条件的事件，每累积 batch 条解码后
+// 调用 yield；yield 返回 false 时提前终止。与 StreamEventsDesc 镜像，
+// 但按 (timestamp ASC, id ASC) 稳定排序——相同纳秒时间戳的事件次序确定，
+// 供依赖时间顺序的聚合（协议目录 interval/sample）消费。
+func (s *SQLiteStore) StreamEvents(ctx context.Context, q EventPageQuery, batch int, yield func([]*event.Event) (bool, error)) error {
+	if batch <= 0 {
+		batch = 500
+	}
+	where, args := eventPageWhere(q)
+	streamQuery := `SELECT id, session_id, type, source, timestamp,
+	       causation_id, correlation_id, origin_id, context, payload` + s.eventSelectSuffix() + `
+FROM events ` + where + `
+ORDER BY timestamp ASC, id ASC`
+
+	rows, err := s.db.QueryContext(ctx, streamQuery, args...)
+	if err != nil {
+		return fmt.Errorf("stream events: %w", err)
+	}
+	defer rows.Close()
+
+	buf := make([]*event.Event, 0, batch)
+	for rows.Next() {
+		e, err := scanEvent(rows)
+		if err != nil {
+			return err
+		}
+		buf = append(buf, e)
+		if len(buf) >= batch {
+			if cont, err := yield(buf); !cont || err != nil {
+				return err
+			}
+			buf = make([]*event.Event, 0, batch)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate event stream: %w", err)
+	}
+	if len(buf) > 0 {
+		if _, err := yield(buf); err != nil {
+			return err
+		}
+	}
+	return nil
 }

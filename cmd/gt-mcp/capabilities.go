@@ -42,8 +42,8 @@ func buildCapabilityCatalog() capabilityDoc {
 			},
 			{
 				Name:        "query",
-				Description: "解码事件 / 状态 / 执行链查询",
-				Tools:       []string{"list_decoded_data", "list_state_changes"},
+				Description: "解码事件 / 协议目录 / 状态 / 执行链查询",
+				Tools:       []string{"list_decoded_data", "get_protocol_catalog", "list_state_changes"},
 			},
 			{
 				Name:        "plugin-dev",

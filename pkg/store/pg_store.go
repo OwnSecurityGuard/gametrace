@@ -504,7 +504,53 @@ func (s *PGStore) eventPageWhere(q EventPageQuery) (string, []any) {
 	if q.ConnEq != "" {
 		where += " AND id IN (SELECT event_id FROM event_index WHERE conn_id = " + a.next(q.ConnEq) + ")"
 	}
+	if !q.From.IsZero() {
+		where += " AND timestamp >= " + a.next(q.From.UnixNano())
+	}
+	if !q.To.IsZero() {
+		where += " AND timestamp <= " + a.next(q.To.UnixNano())
+	}
 	return where, a.slice()
+}
+
+// StreamEvents 以时间正序流式遍历事件（PG 版），排序与 SQLite 版一致：
+// (timestamp ASC, id ASC) 稳定排序，供依赖时间顺序的聚合消费。
+func (s *PGStore) StreamEvents(ctx context.Context, q EventPageQuery, batch int, yield func([]*event.Event) (bool, error)) error {
+	if batch <= 0 {
+		batch = 500
+	}
+	where, wargs := s.eventPageWhere(q)
+	streamQuery := `SELECT ` + eventColsPG + s.eventSelectSuffix() + `
+	FROM events ` + where + `
+	ORDER BY timestamp ASC, id ASC`
+	rows, err := s.db.QueryContext(ctx, streamQuery, wargs...)
+	if err != nil {
+		return fmt.Errorf("stream events: %w", err)
+	}
+	defer rows.Close()
+	buf := make([]*event.Event, 0, batch)
+	for rows.Next() {
+		e, err := scanEvent(rows)
+		if err != nil {
+			return err
+		}
+		buf = append(buf, e)
+		if len(buf) >= batch {
+			if cont, err := yield(buf); !cont || err != nil {
+				return err
+			}
+			buf = make([]*event.Event, 0, batch)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate event stream: %w", err)
+	}
+	if len(buf) > 0 {
+		if _, err := yield(buf); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ===== ProjectionWriter =====

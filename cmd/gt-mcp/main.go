@@ -2614,7 +2614,7 @@ func main() {
 	), capture.handleGetAgentDownloadOptions)
 
 	s.AddTool(mcp.NewTool("get_capabilities",
-		mcp.WithDescription("Return a self-describing catalog of all MCP tools grouped by workflow (capture / query / behavior / plugin-dev / plugin-verify / plugin-runtime / raw-debug) plus recommended call chains. Call this FIRST when unsure which tool to use or how tools relate; it replaces reading the README."),
+		mcp.WithDescription("Return a self-describing catalog of all MCP tools grouped by workflow (capture / proxy / query / plugin-dev / plugin-verify / plugin-runtime / plugin-knowledge / raw-debug) plus recommended call chains. Call this FIRST when unsure which tool to use or how tools relate; it replaces reading the README."),
 	), capture.handleGetCapabilities)
 
 	s.AddTool(mcp.NewTool("list_registered_plugins",
@@ -2656,6 +2656,17 @@ func main() {
 		mcp.WithString("semantic", mcp.Description("Optional semantic label to filter by (SDK annotate result): request|response|notification|error. Matches events whose meta.semantic array contains the label.")),
 		mcp.WithString("filter", mcp.Description("Optional expr expression to filter events, e.g. data.entity == \"buff\" && data.hp > 5. Available fields: id, timestamp, session_id, protocol, raw_len, correlation_id, causation_id, data.*, meta.* (msg_name/direction/semantic), analysis.*. Trace fields enable lineage queries: correlation_id == X (one request-response group), causation_id == X (the request that caused this response).")),
 	), capture.handleListDecodedData)
+
+	// 协议级聚合视图：先看「这次抓包有哪些协议」，再下钻 list_decoded_data 看 payload。
+	s.AddTool(mcp.NewTool("get_protocol_catalog",
+		mcp.WithDescription("Protocol-level index of a capture session: which named business protocols were observed (direction+msg_name), per-protocol occurrence count, first/last seen time, inter-event interval stats, observed payload field paths, up to 3 sample event ids, and any existing request/response pairs resolved from causation_id (with response latency stats). Aggregates the FULL filtered range per protocol, then paginates over protocols. Use this BEFORE list_decoded_data to quickly understand the protocol surface without pulling event payloads."),
+		mcp.WithString("session_id", mcp.Description("Optional session ID to query; defaults to current session")),
+		mcp.WithString("start_time", mcp.Description("RFC3339 start of the aggregation window (inclusive); empty = from session start")),
+		mcp.WithString("end_time", mcp.Description("RFC3339 end of the aggregation window (inclusive); empty = up to latest data")),
+		mcp.WithString("direction", mcp.Description("Optional protocol direction filter: client_to_server | server_to_client; empty = all directions")),
+		mcp.WithNumber("limit", mcp.DefaultNumber(100), mcp.Description("Max protocols to return (page unit is protocol, not event; max 500)")),
+		mcp.WithNumber("offset", mcp.DefaultNumber(0), mcp.Description("Protocol page offset")),
+	), capture.handleGetProtocolCatalog)
 
 	// 代理抓包专有：连接/流/帧查询（Connections 页面数据源）。
 	// 与 list_decoded_data 分离：这些工具按 conn_id 聚合，是移动代理抓包的核心入口。

@@ -1,4 +1,4 @@
-﻿package store
+package store
 
 import (
 	"context"
@@ -159,5 +159,110 @@ func TestStreamEventsDesc_BatchingAndEarlyStop(t *testing.T) {
 	}
 	if len(httpIDs) != 2 || httpIDs[0] != "e4" {
 		t.Fatalf("stream typeEq: %v", httpIDs)
+	}
+}
+
+func TestStreamEvents_AscOrderWithStableTieBreak(t *testing.T) {
+	s, base := pageFixture(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	// 正序流式：batch=2 → 3 批，顺序 e1..e6（与 DESC 镜像）。
+	var ids []string
+	batches := 0
+	err := s.StreamEvents(ctx, EventPageQuery{SessionID: "s1"}, 2, func(batch []*event.Event) (bool, error) {
+		batches++
+		for _, e := range batch {
+			ids = append(ids, string(e.Identity.ID))
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batches != 3 || len(ids) != 6 {
+		t.Fatalf("batches=%d ids=%d", batches, len(ids))
+	}
+	if ids[0] != "e1" || ids[5] != "e6" {
+		t.Fatalf("asc order wrong: %v", ids)
+	}
+
+	// 完全相同的纳秒时间戳：按 id ASC 稳定排序（v1 约束：不允许随机次序）。
+	sameTs := base.Truncate(time.Second)
+	evs := []*event.Event{
+		&event.Event{Identity: event.Identity{ID: "z-id", SessionID: "s2", Type: "tcp", Source: "test", Timestamp: sameTs}},
+		&event.Event{Identity: event.Identity{ID: "a-id", SessionID: "s2", Type: "tcp", Source: "test", Timestamp: sameTs}},
+		&event.Event{Identity: event.Identity{ID: "m-id", SessionID: "s2", Type: "tcp", Source: "test", Timestamp: sameTs}},
+	}
+	if err := s.AppendEvents(ctx, evs); err != nil {
+		t.Fatal(err)
+	}
+	var tieIDs []string
+	if err := s.StreamEvents(ctx, EventPageQuery{SessionID: "s2"}, 10, func(batch []*event.Event) (bool, error) {
+		for _, e := range batch {
+			tieIDs = append(tieIDs, string(e.Identity.ID))
+		}
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(tieIDs) != 3 || tieIDs[0] != "a-id" || tieIDs[1] != "m-id" || tieIDs[2] != "z-id" {
+		t.Fatalf("tie-break order wrong: %v", tieIDs)
+	}
+}
+
+func TestEventPageQuery_TimeRangePushdown(t *testing.T) {
+	s, base := pageFixture(t)
+	defer s.Close()
+	ctx := context.Background()
+
+	from := base.Add(2 * time.Millisecond) // e3 起
+	to := base.Add(4 * time.Millisecond)   // 至 e5
+	q := EventPageQuery{SessionID: "s1", From: from, To: to}
+
+	// 正序流式：时间窗口命中 e3, e4, e5。
+	var asc []string
+	if err := s.StreamEvents(ctx, q, 10, func(batch []*event.Event) (bool, error) {
+		for _, e := range batch {
+			asc = append(asc, string(e.Identity.ID))
+		}
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"e3", "e4", "e5"}
+	if got := len(asc); got != len(want) {
+		t.Fatalf("time range asc len=%d want %d", got, len(want))
+	}
+	for i := range want {
+		if asc[i] != want[i] {
+			t.Fatalf("time range asc order %v want %v", asc, want)
+		}
+	}
+
+	// 倒序流式：同一窗口 e5, e4, e3。
+	var desc []string
+	if err := s.StreamEventsDesc(ctx, q, 10, func(batch []*event.Event) (bool, error) {
+		for _, e := range batch {
+			desc = append(desc, string(e.Identity.ID))
+		}
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(desc) != 3 || desc[0] != "e5" || desc[2] != "e3" {
+		t.Fatalf("time range desc order %v", desc)
+	}
+
+	// 分页也支持下推：窗口 [2ms,4ms] 含 e3/e4/e5，倒序第 1 页为 e5, e4。
+	page, total, err := s.QueryEventPage(ctx, EventPageQuery{SessionID: "s1", From: from, To: base.Add(4 * time.Millisecond)}, 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 || len(page) != 2 {
+		t.Fatalf("page total=%d len=%d", total, len(page))
+	}
+	if string(page[0].Identity.ID) != "e5" || string(page[1].Identity.ID) != "e4" {
+		t.Fatalf("page order %v", []string{string(page[0].Identity.ID), string(page[1].Identity.ID)})
 	}
 }

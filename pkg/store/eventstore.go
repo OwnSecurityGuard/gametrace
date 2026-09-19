@@ -56,6 +56,10 @@ type EventPager interface {
 	// StreamEventsDesc 以时间倒序分批流式遍历事件，供应用层表达式过滤
 	//（内存 O(batch)，精确 total 需遍历全部候选行）。
 	StreamEventsDesc(ctx context.Context, q EventPageQuery, batch int, yield func([]*event.Event) (bool, error)) error
+	// StreamEvents 以时间正序（timestamp ASC, id ASC 稳定排序）分批流式遍历事件，
+	// 供依赖时间顺序的聚合（协议目录的 interval/sample、全量重放等）使用。
+	// 与 StreamEventsDesc 同样的内存 O(batch) 语义。
+	StreamEvents(ctx context.Context, q EventPageQuery, batch int, yield func([]*event.Event) (bool, error)) error
 }
 
 // ===== 第 2 层：投影 =====
