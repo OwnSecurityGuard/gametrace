@@ -298,6 +298,8 @@ RUN chown -R gametrace:gametrace /opt/gametrace/agents
 COPY --from=builder /usr/local/go /usr/local/go
 COPY --from=builder /go/pkg/mod /go/pkg/mod
 # 现场编译远程探针的源码根（含 go.mod 与 cmd/gt-agent；只读，编译产物写 GT_AGENT_BIN_DIR）。
+# 顺带携带 skills/（每个 <skills>/<skill>/SKILL.md 一个条目）：gt-mcp 的 get_capabilities
+# 从这里动态扫描 Skill Catalog 暴露给 AI agent（可用 GT_SKILLS_DIR 另指技能目录）。
 COPY --from=builder /src /src
 
 ENV PATH=/usr/local/go/bin:${PATH} \

@@ -1,5 +1,7 @@
 # 普通用户解析器入口 + 启动码接入简化 实现计划
 
+> ⚠️ **功能已移除（历史计划）**：本计划实现的启动码接入链路（`create_access_code` / `list_access_codes`、`GET /access/claim`、gt-agent `--code`/claim、`setup.sh`/`setup.ps1`、前端 access-code-panel）已于 2026-09-19 平台改造中彻底移除，设备接入仅保留「下载探针」一种方式。正文仅作历史计划参考，不反映当前代码状态。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 把「选解析器」从工程师式的下拉改成普通用户的友善卡片（按协议归组：Godot/Unity/HTTP/自定义），并把开发者工具（create_plugin/build_plugin/verify_plugin）收进「更多/高级」开关；同时用「启动码 GT-XXXX」替代繁琐下载表单，让成员在目标机输入一个码即可自动注册设备/取配置/回连抓包。

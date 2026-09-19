@@ -20,6 +20,9 @@ type capabilityDoc struct {
 	Groups      []toolGroup `json:"groups"`
 	TypicalFlow []string    `json:"typical_flow"`
 	Notes       []string    `json:"notes"`
+	// Skills 是 Skill Catalog：扫描 skills/ 目录（每个 SKILL.md 一个条目）得出，
+	// 描述平台的技能方法论与触发场景，供 AI agent 接入初始化时了解。
+	Skills []SkillInfo `json:"skills"`
 }
 
 func buildCapabilityCatalog() capabilityDoc {
@@ -87,5 +90,7 @@ func buildCapabilityCatalog() capabilityDoc {
 }
 
 func (m *mcpCapture) handleGetCapabilities(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return successResult(buildCapabilityCatalog()), nil
+	doc := buildCapabilityCatalog()
+	doc.Skills = loadSkillCatalog()
+	return successResult(doc), nil
 }

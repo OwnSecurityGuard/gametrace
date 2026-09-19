@@ -406,7 +406,7 @@ func (sm *sessionManager) deleteSession(sessionID, owner string) error {
 
 func newMCPCapture(iface, pluginsDir, workDir, pipelineAddr, httpAddr string, mcpServer *server.MCPServer, enableRawDebug bool, dbDriver, dbDSN string) (*mcpCapture, error) {
 	// gRPC client 连接 gt-pipeline。
-	// 默认拨号 :8088（TCP），可通过 -pipeline-addr 覆盖。
+	// 默认拨号 :9888（TCP），可通过 -pipeline-addr 覆盖。
 	// token 模式下 pipeline 的 CaptureControl 挂了 Bearer 拦截器：
 	// 出站拦截器从 ctx 读取代调用方中转的原始 token（auth.WithToken，
 	// 由 HTTP 鉴权中间件注入），附加 authorization metadata，保证跨协议身份一致；
@@ -2376,9 +2376,44 @@ func main() {
 	}
 	slog.Info("using plugins directory", "plugins_dir", resolvedPluginsDir)
 
+	// Skill Catalog → MCP 初始化 instructions + resources：
+	// 1) instructions 概述可用技能工作流（含因应场景），让 client 在 initialize
+	//    阶段就知道什么任务匹配哪个技能；
+	// 2) 每个技能注册为 resource（gametrace://skills/<name>），读取返回 SKILL.md
+	//    原文，供 agent 在任务执行前按需加载方法论内容。
+	skills := loadSkillCatalog()
+	if len(skills) > 0 {
+		slog.Info("skill catalog loaded for MCP instructions/resources", "count", len(skills))
+	}
 	s := server.NewMCPServer("game-traffic-analysis", "1.0.0",
 		server.WithToolCapabilities(true),
+		server.WithResourceCapabilities(false, false),
+		server.WithInstructions(buildSkillInstructions(skills)),
 	)
+	for _, skill := range skills {
+		uri := skillResourceURI(skill.Name)
+		s.AddResource(
+			mcp.Resource{
+				URI:         uri,
+				Name:        skill.Name,
+				Description: skill.Description,
+				MIMEType:    "text/markdown",
+			},
+			func(skill SkillInfo) server.ResourceHandlerFunc {
+				return func(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+					md, err := readSkillMarkdown(skill)
+					if err != nil {
+						return nil, fmt.Errorf("read skill resource %s: %w", skill.URI, err)
+					}
+					return []mcp.ResourceContents{mcp.TextResourceContents{
+						URI:      skill.URI,
+						MIMEType: "text/markdown",
+						Text:     md,
+					}}, nil
+				}
+			}(skill),
+		)
+	}
 
 	// 注意：这里必须传解析后的 absWorkDir，而不是 *workDir 原始值。
 	// *workDir 的 flag 默认值是 "."，直接传给 newMCPCapture 会让数据目录锚在进程
@@ -2611,7 +2646,7 @@ func main() {
 	), capture.handleGetAgentDownloadOptions)
 
 	s.AddTool(mcp.NewTool("get_capabilities",
-		mcp.WithDescription("Return a self-describing catalog of all MCP tools grouped by workflow (capture / proxy / query / plugin-dev / plugin-verify / plugin-runtime / plugin-knowledge / raw-debug) plus recommended call chains. Call this FIRST when unsure which tool to use or how tools relate; it replaces reading the README."),
+		mcp.WithDescription("Return a self-describing catalog of all MCP tools grouped by workflow (capture / proxy / query / plugin-dev / plugin-verify / plugin-runtime / plugin-knowledge / raw-debug) plus recommended call chains and the Skill Catalog scanned from the platform skills/ directory (each skill's name + description + when to use). Call this FIRST when unsure which tool or skill fits, or how tools relate; it replaces reading the README."),
 	), capture.handleGetCapabilities)
 
 	s.AddTool(mcp.NewTool("list_registered_plugins",

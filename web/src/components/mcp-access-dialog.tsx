@@ -54,23 +54,177 @@ export function McpAccessDialog({ open, onClose }: McpAccessDialogProps) {
     [conn.host],
   );
 
-  const tokenLine = token ? `> 访问令牌：\`${token}\`` : "> 访问令牌：未配置（当前为匿名访问，无需令牌）";
-
   const prompt = useMemo(
-    () => `请作为 MCP 客户端，连接到我团队的 GameTrace 抓包平台 MCP 服务器。
+    () => `# GameTrace MCP 接入说明
 
-【接入信息】
-- 传输方式：MCP SSE over HTTP（不是 stdio，需要 HTTP 端点）
-- SSE 端点：${sseUrl}
-- 消息端点：${messageUrl}
-- 认证方式：HTTP 请求头 \`Authorization: Bearer <token>\`
-${tokenLine}
+你是一个需要使用 GameTrace 平台能力的 coding agent。
 
-【要求】
-1. 以上面的 SSE 端点为入口，按 MCP 协议完成握手（Initialize → tools/list）。
-2. 如果你的环境是用配置文件（如 mcp.json）接入 MCP 的，请给我一份包含上述 SSE 端点、消息端点与令牌的配置。
-3. 连接成功后，把可用的工具清单及其用途列给我；之后按需调用这些工具，帮我完成抓包、协议解析、连接/会话数据查看、探针管理等任务。`,
-    [sseUrl, messageUrl, tokenLine],
+当前环境可能尚未接入 GameTrace MCP Server。
+
+你的目标：
+
+1. 完成 MCP Server 接入。
+2. 获取 GameTrace 提供的 MCP tools。
+3. 使用这些 tools 完成游戏抓包分析、协议分析、会话查询、插件管理等任务。
+
+---
+
+# MCP Server 信息
+
+GameTrace MCP Server:
+
+* Transport:
+  MCP SSE over HTTP
+
+* SSE Endpoint:
+
+\`\`\`
+${sseUrl}
+\`\`\`
+
+* Message Endpoint:
+
+\`\`\`
+${messageUrl}
+\`\`\`
+
+* Authentication:
+
+HTTP Header:
+
+\`\`\`
+Authorization: Bearer <token>
+\`\`\`
+
+Token:
+
+\`\`\`
+${token ?? "（未配置，匿名访问，无需令牌）"}
+\`\`\`
+
+---
+
+# 接入要求
+
+如果你的运行环境支持 MCP 配置：
+
+请优先通过 MCP 配置方式接入。
+
+例如：
+
+* mcp.json
+* MCP client configuration
+* IDE MCP settings
+
+不要自行实现 MCP 协议客户端，除非当前环境没有 MCP 配置能力。
+
+---
+
+# 接入验证
+
+完成配置后：
+
+1. 建立 MCP connection。
+2. 完成 MCP initialize handshake。
+3. 获取 tools/list。
+4. 调用 get_capabilities 获取 Skill Catalog（平台 skills/ 目录的技能目录：名称、用途与触发场景；每个技能同时是可读的 MCP resource：gametrace://skills/<name>）。
+5. 确认 GameTrace tools 与技能已加载。
+
+成功后输出：
+
+* MCP connection status
+* available tools list
+* 每个 tool 的用途说明
+* Skill Catalog（每个技能的名称与触发场景）
+
+---
+
+# 使用规则
+
+连接成功后：
+
+优先使用 GameTrace MCP tools 完成任务。
+
+不要：
+
+* 手写 HTTP 请求模拟 MCP 调用
+* 自己实现 MCP SSE client
+* 绕过 MCP 直接访问数据库
+* 根据猜测生成协议数据
+
+---
+
+# GameTrace 能力范围
+
+GameTrace 提供：
+
+## 抓包会话分析
+
+用于：
+
+* 开始 / 停止抓包（start_capture / stop_capture）
+* 查看当前抓包 session（get_session_status / list_live_sessions）
+* 分析历史会话（list_all_sessions）
+* 查看连接和流（list_decoded_data / get_protocol_catalog）
+
+## 协议分析
+
+用于：
+
+* 查看客户端发送协议
+* 查看服务端响应
+* 分析 request/response 关系
+* 查看 decoded payload
+
+推荐流程：
+
+\`\`\`
+get_protocol_catalog
+        ↓
+list_decoded_data
+        ↓
+list_state_changes
+\`\`\`
+
+## 插件管理
+
+用于：
+
+* 开发新协议插件（get_plugin_dev_guide → create_plugin → build_plugin）
+* 验证与激活插件（activate_plugin → verify_plugin）
+* 查看插件状态与解码归因（status_plugin / explain_plugin）
+* 插件注册表查询（list_plugins / get_plugin_manifest）
+
+## Coding 任务
+
+如果用户要求：
+
+* 补充压测脚本
+* 编写协议调用代码
+* 分析玩法流程
+
+执行：
+
+1. 查看已有代码结构。
+2. 使用 GameTrace 获取真实协议数据。
+3. 区分业务协议和背景协议。
+4. 基于已有代码风格修改。
+
+不要直接复制抓包数据生成代码。
+
+---
+
+# 注意
+
+GameTrace 是持续运行的抓包平台。
+
+通常：
+
+* 用户已经完成游戏操作。
+* 最新 session 通常是目标分析对象。
+
+除非用户明确指定，否则不要要求用户重新开始抓包流程。`,
+    [sseUrl, messageUrl, token],
   );
 
   async function copy(field: "sse" | "message" | "token" | "prompt", text: string, empty?: boolean) {
