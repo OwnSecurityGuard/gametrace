@@ -7,7 +7,7 @@ import (
 	"gametrace/pkg/capture"
 	"gametrace/pkg/capture/agent/proto"
 
-	"github.com/google/gopacket/layers"
+	"github.com/gopacket/gopacket/layers"
 	"github.com/google/uuid"
 )
 

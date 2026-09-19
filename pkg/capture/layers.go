@@ -5,8 +5,8 @@ import (
 
 	"gametrace/pkg/event"
 
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
+	"github.com/gopacket/gopacket"
+	"github.com/gopacket/gopacket/layers"
 )
 
 // ParsePacketLayers 从原始链路层数据包中解析出源/目的地址、传输层协议与 TCP 标志位。

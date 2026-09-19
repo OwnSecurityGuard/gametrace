@@ -28,7 +28,7 @@ LDFLAGS := -s -w \
 # ============================================================================
 # 交叉编译矩阵（T14 release 产物）
 #
-# 说明：pcap 采集层是 cgo 依赖（github.com/google/gopacket/pcap），交叉编译
+# 说明：pcap 采集层是 cgo 依赖（github.com/gopacket/gopacket/pcap），交叉编译
 # 无法携带目标平台的 libpcap，因此 release 矩阵统一 CGO_ENABLED=0，且**不带**
 # -tags pcap：
 #   - cmd/gt-agent 与 cmd/gt-pipeline 的实时抓包（gopacket/pcap、pcaplive）

@@ -12,7 +12,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/gopacket/pcap"
+	"github.com/gopacket/gopacket/pcap"
 
 	"gametrace/pkg/capture"
 	"gametrace/pkg/capture/pcaplive"

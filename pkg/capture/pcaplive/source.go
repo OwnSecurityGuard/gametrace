@@ -12,8 +12,8 @@ import (
 	"gametrace/pkg/capture/internal/base"
 	"gametrace/pkg/event"
 
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/pcap"
+	"github.com/gopacket/gopacket"
+	"github.com/gopacket/gopacket/pcap"
 )
 
 func init() {

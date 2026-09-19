@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/gopacket/layers"
+	"github.com/gopacket/gopacket/layers"
 )
 
 // LinkType 是链路层类型，使用 int 以支持标准 DLT 和自定义扩展值。

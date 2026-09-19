@@ -20,7 +20,7 @@ import (
 	"gametrace/pkg/plugin"
 	"gametrace/pkg/state"
 	"gametrace/pkg/store"
-	"github.com/google/gopacket/layers"
+	"github.com/gopacket/gopacket/layers"
 	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
