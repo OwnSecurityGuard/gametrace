@@ -1054,6 +1054,7 @@ func (m *mcpCapture) handleListDecodedData(ctx context.Context, req mcp.CallTool
 	sessionID := req.GetString("session_id", "")
 	filterExpr := req.GetString("filter", "")
 	connID := req.GetString("conn_id", "")
+	semantic := req.GetString("semantic", "")
 	// sessionID 为空时解析为当前会话的实际 ID：分页查询（QueryEventPage /
 	// StreamEventsDesc / capture context）都以 events.session_id 过滤，需要真实值。
 	// 旧实现的空串会过滤出 0 行（"默认当前会话"对事件查询从未真正生效）。
@@ -1067,7 +1068,7 @@ func (m *mcpCapture) handleListDecodedData(ctx context.Context, req mcp.CallTool
 	if err != nil {
 		return errorResult(err), nil
 	}
-	slog.Info("list_decoded_data requested", "limit", limit, "offset", offset, "filter", filterExpr, "db_path", dbPath, "session_id", sessionID)
+	slog.Info("list_decoded_data requested", "limit", limit, "offset", offset, "filter", filterExpr, "semantic", semantic, "db_path", dbPath, "session_id", sessionID)
 	if dbPath == "" {
 		slog.Warn("list_decoded_data rejected: no capture database available")
 		return errorResult(fmt.Errorf("no capture database available; start a capture first")), nil
@@ -1112,7 +1113,8 @@ func (m *mcpCapture) handleListDecodedData(ctx context.Context, req mcp.CallTool
 	// 纯 SQL 分页路径：filter 为空，或 filter 恰好被 type 谓词完全表达。
 	// LIMIT/OFFSET/COUNT 全部下推到 SQL，payload msgpack 仅对页内行解码。
 	// 这是前端 2s 轮询的默认路径，代价 O(page) 而非 O(全量事件)。
-	if program == nil || pd.Pure {
+	// semantic 无法下推（meta 内嵌 payload msgpack BLOB），非空时强制走流式路径。
+	if (program == nil || pd.Pure) && semantic == "" {
 		pageLimit := limit
 		if pageLimit <= 0 {
 			// 保持旧语义：limit<=0 返回空页 + 精确 total。
@@ -1155,13 +1157,21 @@ func (m *mcpCapture) handleListDecodedData(ctx context.Context, req mcp.CallTool
 				}
 			}
 			eventMap := decodedEventMap(ev, captureIdx, rawLenMap)
-			out, err := expr.Run(program, eventMap)
-			if err != nil {
-				slog.Debug("filter eval error", "event_id", ev.Identity.ID, "error", err)
+			// 语义标签过滤（annotate）：匹配 meta.semantic 数组成员；
+			// meta 内嵌 payload msgpack BLOB，无法 SQL 下推，走应用层（与 conn 兜底同级）。
+			if semantic != "" && !eventMapHasSemantic(eventMap, semantic) {
 				continue
 			}
-			if v, ok := out.(bool); !ok || !v {
-				continue
+			// filter 表达式仅在确实提供时求值（semantic-only 请求没有 program）。
+			if program != nil {
+				out, err := expr.Run(program, eventMap)
+				if err != nil {
+					slog.Debug("filter eval error", "event_id", ev.Identity.ID, "error", err)
+					continue
+				}
+				if v, ok := out.(bool); !ok || !v {
+					continue
+				}
 			}
 			totalMatched++
 			if totalMatched > offset && totalMatched <= offset+limit {
@@ -1271,6 +1281,34 @@ func decodedEventMap(ev *event.Event, captureIdx map[string]captureContextJSON, 
 		eventMap["capture"] = cc
 	}
 	return eventMap
+}
+
+// eventMapHasSemantic 报告事件 map 是否携带给定语义标签（annotate 规则闭集成员）。
+// meta.semantic 是字符串数组（缺失或类型不符视为不命中，与「未标注」语义一致）。
+func eventMapHasSemantic(eventMap map[string]any, label string) bool {
+	meta, ok := eventMap["meta"].(map[string]any)
+	if !ok {
+		return false
+	}
+	raw, ok := meta["semantic"]
+	if !ok {
+		return false
+	}
+	switch v := raw.(type) {
+	case []string:
+		for _, s := range v {
+			if s == label {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok && s == label {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // captureContextJSON 是单个事件的捕获上下文（Capture Context），
@@ -2624,6 +2662,7 @@ func main() {
 		mcp.WithNumber("offset", mcp.DefaultNumber(0), mcp.Description("Offset")),
 		mcp.WithString("session_id", mcp.Description("Optional session ID to query; defaults to current session")),
 		mcp.WithString("conn_id", mcp.Description("Optional connection ID to filter by; when set, only events of that capture connection (event_index.conn_id) are returned")),
+		mcp.WithString("semantic", mcp.Description("Optional semantic label to filter by (SDK annotate result): request|response|notification|error. Matches events whose meta.semantic array contains the label.")),
 		mcp.WithString("filter", mcp.Description("Optional expr expression to filter events, e.g. data.entity == \"buff\" && data.hp > 5. Available fields: id, timestamp, session_id, protocol, raw_len, correlation_id, causation_id, data.*, meta.* (msg_name/direction/semantic), analysis.*. Trace fields enable lineage queries: correlation_id == X (one request-response group), causation_id == X (the request that caused this response).")),
 	), capture.handleListDecodedData)
 

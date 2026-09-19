@@ -20,6 +20,7 @@ import {
   eventMatchesDirection,
   eventMatchesConnection,
   type DirectionFilter,
+  type SemanticFilter,
 } from "@/lib/fuzzy";
 
 interface RelationshipViewProps {
@@ -27,6 +28,9 @@ interface RelationshipViewProps {
   query: string;
   /** 消息方向过滤（C→S / S→C，空 = 全部）；与 query 叠加为 AND。 */
   direction: DirectionFilter;
+  /** 语义标签过滤（annotate：request/response/notification/error，空 = 全部）；
+   *  服务端 list_decoded_data 过滤，前端仅透传。 */
+  semantic: SemanticFilter;
   /** 连接过滤（null = 全部连接）；按捕获上下文 conn_id 匹配，与 query/direction 叠加为 AND。 */
   connFilter: ConnectionSummary | null;
 }
@@ -34,10 +38,12 @@ interface RelationshipViewProps {
 // 加载上限：关系视图需要整段事件来建配对组，取一次较大的批次。
 const RELATION_FETCH_LIMIT = 1000;
 
-export function RelationshipView({ sessionId, query, direction, connFilter }: RelationshipViewProps) {
+export function RelationshipView({ sessionId, query, direction, semantic, connFilter }: RelationshipViewProps) {
   const { data, isLoading, isError, error, refetch } = useDecodedData(sessionId, {
     limit: RELATION_FETCH_LIMIT,
     offset: 0,
+    // 语义标签由服务端过滤（meta.semantic 数组成员匹配），前端仅透传。
+    semantic: semantic || undefined,
   });
 
   const events = data?.events ?? [];

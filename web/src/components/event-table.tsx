@@ -51,6 +51,7 @@ import {
   fuzzyTokens,
   haystackIncludes,
   type DirectionFilter,
+  type SemanticFilter,
 } from "@/lib/fuzzy";
 
 interface EventTableProps {
@@ -59,6 +60,9 @@ interface EventTableProps {
   query: string;
   /** 消息方向过滤（C→S / S→C，空 = 全部）；与 query 叠加为 AND。 */
   direction: DirectionFilter;
+  /** 语义标签过滤（annotate：request/response/notification/error，空 = 全部）；
+   *  服务端 list_decoded_data 过滤，保持正常分页与精确 total_matched。 */
+  semantic: SemanticFilter;
   /** 连接过滤（null = 全部连接，由顶部过滤栏切换）；按捕获上下文 conn_id 匹配，与 query/direction 叠加为 AND。 */
   connFilter: ConnectionSummary | null;
 }
@@ -1047,7 +1051,7 @@ const EventRow = memo(function EventRow({
 
 // ─── 主表格组件 ───────────────────────────────────────────────
 
-export function EventTable({ sessionId, query, direction, connFilter }: EventTableProps) {
+export function EventTable({ sessionId, query, direction, semantic, connFilter }: EventTableProps) {
   const [page, setPage] = useState<number>(0);
   const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0]!);
   // 允许多行同时展开：对比请求/响应时不用来回点，这是最常见的阅读动作。
@@ -1059,7 +1063,7 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
   useEffect(() => {
     setPage(0);
     setExpandedIds(new Set());
-  }, [sessionId, query, direction, connFilter]);
+  }, [sessionId, query, direction, semantic, connFilter]);
 
   const offset = page * pageSize;
 
@@ -1081,6 +1085,9 @@ export function EventTable({ sessionId, query, direction, connFilter }: EventTab
     limit: effectiveLimit,
     offset: effectiveOffset,
     connId: connFilter?.conn_id ?? null,
+    // 语义标签由服务端 list_decoded_data 过滤（meta.semantic 数组成员匹配），
+    // 保持正常分页与精确 total_matched，不参与前端内存过滤。
+    semantic: semantic || undefined,
   });
 
   const events = useMemo(() => data?.events ?? [], [data]);

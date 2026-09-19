@@ -14,13 +14,15 @@ import { StateChangeExplorer } from "@/components/state-change-explorer";
 import { RawDataView } from "@/components/raw-data-view";
 import { ConnectionsPage } from "@/components/connections-page";
 import { Network, Table2, GitFork, TableProperties, FileJson2 } from "lucide-react";
-import type { DirectionFilter } from "@/lib/fuzzy";
+import type { DirectionFilter, SemanticFilter } from "@/lib/fuzzy";
 import type { ConnectionSummary } from "@/types/connection";
 
 interface DecodedViewProps {
   sessionId: string | null;
   query: string;
   direction: DirectionFilter;
+  /** 语义标签过滤（annotate：request/response/notification/error）；事件/关系视图服务端过滤。 */
+  semantic: SemanticFilter;
   /** 连接过滤：全部子视图共享，由顶层过滤栏切换。 */
   connFilter: ConnectionSummary | null;
   onConnFilterChange: (conn: ConnectionSummary | null) => void;
@@ -41,6 +43,7 @@ export function DecodedView({
   sessionId,
   query,
   direction,
+  semantic,
   connFilter,
   onConnFilterChange,
 }: DecodedViewProps) {
@@ -87,10 +90,10 @@ export function DecodedView({
         <ConnectionsPage sessionId={sessionId} onSelectConn={handleSelectConn} />
       )}
       {subview === "events" && (
-        <EventTable sessionId={sessionId} query={query} direction={direction} connFilter={connFilter} />
+        <EventTable sessionId={sessionId} query={query} direction={direction} semantic={semantic} connFilter={connFilter} />
       )}
       {subview === "relations" && (
-        <RelationshipView sessionId={sessionId} query={query} direction={direction} connFilter={connFilter} />
+        <RelationshipView sessionId={sessionId} query={query} direction={direction} semantic={semantic} connFilter={connFilter} />
       )}
       {subview === "state" && (
         <StateChangeExplorer sessionId={sessionId} query={query} direction={direction} connFilter={connFilter} />

@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, type KeyboardEvent as ReactKe
 import { SessionSidebar } from "@/components/session-sidebar";
 import { FilterBar } from "@/components/filter-bar";
 import type { ConnectionSummary } from "@/types/connection";
-import type { DirectionFilter } from "@/lib/fuzzy";
+import type { DirectionFilter, SemanticFilter } from "@/lib/fuzzy";
 import { RawPacketTable } from "@/components/raw-packet-table";
 import { PluginPanel } from "@/components/plugin-panel";
 import { RunsPanel } from "@/components/runs-panel";
@@ -74,6 +74,8 @@ export default function App() {
   const [query, setQuery] = useState("");
   // 协议数据页的消息方向过滤（C→S / S→C，空 = 全部）。
   const [direction, setDirection] = useState<DirectionFilter>("");
+  // 协议数据页的语义标签过滤（annotate：request/response/notification/error，空 = 全部）。
+  const [semantic, setSemantic] = useState<SemanticFilter>("");
   // 协议数据页的连接过滤：全部子视图（连接/事件/关系/状态变更/原始数据）共享，
   // 与 direction/query 叠加为 AND；连接列表点击连接时也会写入此值并切到事件。
   const [connFilter, setConnFilter] = useState<ConnectionSummary | null>(null);
@@ -541,6 +543,8 @@ export default function App() {
               onQueryChange={setQuery}
               direction={direction}
               onDirectionChange={setDirection}
+              semantic={semantic}
+              onSemanticChange={setSemantic}
               connFilter={connFilter}
               onConnFilterChange={setConnFilter}
               inputRef={filterInputRef}
@@ -580,6 +584,7 @@ export default function App() {
                 sessionId={selectedSessionId}
                 query={query}
                 direction={direction}
+                semantic={semantic}
                 connFilter={connFilter}
                 onConnFilterChange={setConnFilter}
               />

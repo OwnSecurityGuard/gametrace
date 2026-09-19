@@ -89,7 +89,7 @@ export function useSessions() {
 /** 查询指定 session 的解码数据 */
 export function useDecodedData(
   sessionId: string | null,
-  options: { limit?: number; offset?: number; filter?: string; connId?: string | null },
+  options: { limit?: number; offset?: number; filter?: string; connId?: string | null; semantic?: string },
 ) {
   return useQuery({
     queryKey: ["decodedData", sessionId, options],
@@ -100,6 +100,7 @@ export function useDecodedData(
         offset: options.offset,
         filter: options.filter,
         conn_id: options.connId ?? undefined,
+        semantic: options.semantic,
       }),
     enabled: !!sessionId,
     placeholderData: keepPreviousData, // 翻页/筛选时不闪骨架屏，沿用上一页数据

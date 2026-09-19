@@ -27,6 +27,10 @@ export function fuzzyTokens(query: string): string[] {
 /** 消息方向过滤值："" = 全部方向（不过滤），其余为后端 direction 枚举。 */
 export type DirectionFilter = "" | "client_to_server" | "server_to_client";
 
+/** 语义标签过滤值："" = 全部（不过滤），其余为 SDK annotate 闭集。
+ *  过滤在服务端 list_decoded_data 完成（按 meta.semantic 数组成员匹配），前端仅透传。 */
+export type SemanticFilter = "" | "request" | "response" | "notification" | "error";
+
 /** 事件是否命中方向过滤（空值恒真，与模糊搜索叠加为 AND）。 */
 export function eventMatchesDirection(ev: DecodedEvent, direction: DirectionFilter): boolean {
   if (!direction) return true;

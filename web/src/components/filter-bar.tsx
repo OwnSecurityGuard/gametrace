@@ -12,7 +12,7 @@ import { type ChangeEvent, type KeyboardEvent, type Ref, useEffect, useMemo, use
 import { Input } from "@/components/ui/input";
 import { Search } from "lucide-react";
 import { useConnections } from "@/hooks/use-mcp";
-import { type DirectionFilter } from "@/lib/fuzzy";
+import { type DirectionFilter, type SemanticFilter } from "@/lib/fuzzy";
 import type { ConnectionSummary } from "@/types/connection";
 
 interface FilterBarProps {
@@ -21,6 +21,9 @@ interface FilterBarProps {
   onQueryChange: (query: string) => void;
   direction: DirectionFilter;
   onDirectionChange: (direction: DirectionFilter) => void;
+  /** 语义标签过滤（SDK annotate：request/response/notification/error）。 */
+  semantic: SemanticFilter;
+  onSemanticChange: (semantic: SemanticFilter) => void;
   /** 连接过滤（null = 全部连接）；协议数据全部子视图共享。 */
   connFilter: ConnectionSummary | null;
   onConnFilterChange: (conn: ConnectionSummary | null) => void;
@@ -34,12 +37,22 @@ const DIRECTION_OPTIONS: { value: DirectionFilter; label: string }[] = [
   { value: "server_to_client", label: "S→C" },
 ];
 
+const SEMANTIC_OPTIONS: { value: SemanticFilter; label: string }[] = [
+  { value: "", label: "全部语义" },
+  { value: "request", label: "request" },
+  { value: "response", label: "response" },
+  { value: "notification", label: "notification" },
+  { value: "error", label: "error" },
+];
+
 export function FilterBar({
   sessionId,
   query,
   onQueryChange,
   direction,
   onDirectionChange,
+  semantic,
+  onSemanticChange,
   connFilter,
   onConnFilterChange,
   inputRef,
@@ -116,6 +129,19 @@ export function FilterBar({
         aria-label="消息方向过滤"
       >
         {DIRECTION_OPTIONS.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+      <select
+        value={semantic}
+        onChange={(e) => onSemanticChange(e.target.value as SemanticFilter)}
+        className="h-9 shrink-0 rounded-md border border-input bg-background px-2 text-sm"
+        aria-label="语义标签过滤"
+        title="按 annotate 语义标签过滤（request / response / notification / error）；服务端过滤，可精确分页"
+      >
+        {SEMANTIC_OPTIONS.map((opt) => (
           <option key={opt.value} value={opt.value}>
             {opt.label}
           </option>
