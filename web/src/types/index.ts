@@ -32,12 +32,6 @@ export type {
   PluginManifestResult,
 } from "./plugin-dev";
 export type {
-  BeginCaptureRunResult,
-  RunSummary,
-  EndCaptureRunResult,
-  RunStatusResult,
-} from "./behavior";
-export type {
   CaptureContext,
   ConnectionSummary,
   ConnectionDetail,

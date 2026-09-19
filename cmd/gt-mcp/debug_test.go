@@ -95,26 +95,6 @@ func TestDebug_TimeFormat(t *testing.T) {
 	var countAll int
 	db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE session_id=?", sessionID).Scan(&countAll)
 	t.Logf("query [no time filter]: count=%d", countAll)
-
-	// 验证 RunRegistry 持久化后的时间时区
-	runRegistry, _ := NewRunRegistry(workDir)
-	now2 := time.Now()
-	rec := RunRecord{
-		RunID: "run_test", SessionID: sessionID, FeatureName: "test",
-		ProjectPath: "/tmp", TimeFrom: now2, IsolationMode: "time_window_only",
-	}
-	runRegistry.Begin(rec)
-	loaded, _ := runRegistry.Get("run_test")
-	t.Logf("original TimeFrom: %v (tz=%v)", now2, now2.Location())
-	t.Logf("loaded  TimeFrom: %v (tz=%v)", loaded.TimeFrom, loaded.TimeFrom.Location())
-	t.Logf("loaded == original? %v", loaded.TimeFrom.Equal(now2))
-
-	// 用 loaded.TimeFrom 查询
-	var count2 int
-	db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM events WHERE session_id=? AND timestamp BETWEEN ? AND ?",
-		sessionID, loaded.TimeFrom.Add(-time.Hour), loaded.TimeFrom.Add(time.Hour)).Scan(&count2)
-	t.Logf("query with loaded.TimeFrom: count=%d", count2)
 }
 
 func mkdirAll(path string) error {

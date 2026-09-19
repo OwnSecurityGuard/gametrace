@@ -111,7 +111,6 @@ type mcpCapture struct {
 	workDir     string
 	mcpServer   *server.MCPServer
 	sessionMgr  *sessionManager
-	runRegistry *RunRegistry
 	projects    *projectStore
 	users       *userStore
 	// 自助注册（/access/register）：envResolver 做保留名检查；openRegister 由
@@ -403,20 +402,13 @@ func (sm *sessionManager) deleteSession(sessionID, owner string) error {
 }
 
 func newMCPCapture(iface, pluginsDir, workDir, pipelineAddr, httpAddr string, mcpServer *server.MCPServer, enableRawDebug bool, dbDriver, dbDSN string) (*mcpCapture, error) {
-	runRegistry, err := NewRunRegistry(workDir)
-	if err != nil {
-		slog.Warn("init run registry failed", "error", err)
-		// 不阻断启动，run 窗口功能降级
-	}
-
 	// gRPC client 连接 gt-pipeline。
 	// 默认拨号 :8088（TCP），可通过 -pipeline-addr 覆盖。
 	// token 模式下 pipeline 的 CaptureControl 挂了 Bearer 拦截器：
 	// 出站拦截器从 ctx 读取代调用方中转的原始 token（auth.WithToken，
 	// 由 HTTP 鉴权中间件注入），附加 authorization metadata，保证跨协议身份一致；
 	// 匿名模式无 token，原样放行。
-	var conn *grpc.ClientConn
-	conn, err = internalipc.DialGRPCAddr(
+	conn, err := internalipc.DialGRPCAddr(
 		pipelineAddr,
 		grpc.WithChainUnaryInterceptor(auth.ClientUnaryInterceptor()),
 		grpc.WithChainStreamInterceptor(auth.ClientStreamInterceptor()),
@@ -498,7 +490,6 @@ func newMCPCapture(iface, pluginsDir, workDir, pipelineAddr, httpAddr string, mc
 		workDir:        workDir,
 		mcpServer:      mcpServer,
 		sessionMgr:     newSessionManager(workDir),
-		runRegistry:    runRegistry,
 		projects:       projects,
 		users:          users,
 		authz:          newProjectAuthorizer(projects),
@@ -2712,28 +2703,6 @@ func main() {
 	// 状态变更分析：三视图共用的聚合查询 + 完整协议链/历史详情。
 	registerStateTools(s, capture)
 	registerDecodeErrorTools(s, capture)
-
-	// 行为（behavior）与因果链（causation chain）工具。
-	s.AddTool(mcp.NewTool("begin_capture_run",
-		mcp.WithDescription("Mark the start of a user operation or behavior WITHOUT starting capture. It records a run window and returns run_id for later correlation (end_capture_run / get_run_status / trace_protocol_flow). plugin_name/device/filter/port are DESCRIPTIVE HINTS only and do NOT auto-start capture. To actually capture, call start_capture separately; if no capture is running this tool only returns a time_window_only uncertainty telling you to call start_capture first."),
-		mcp.WithString("feature_name", mcp.Required(), mcp.Description("Name of the feature/behavior being tested, e.g. 'upgrade_building'")),
-		mcp.WithString("project_path", mcp.Required(), mcp.Description("Path to the load-test project where code will be generated")),
-		mcp.WithString("plugin_name", mcp.Description("Optional descriptive hint recorded for the run window. NOT used to auto-start capture; call start_capture separately.")),
-		mcp.WithString("device", mcp.Description("Optional device identifier")),
-		mcp.WithString("filter", mcp.Description("Optional capture filter")),
-		mcp.WithNumber("port", mcp.Description("Optional descriptive hint recorded for the run window. NOT used to auto-start capture.")),
-	), capture.handleBeginCaptureRun)
-
-	s.AddTool(mcp.NewTool("end_capture_run",
-		mcp.WithDescription("Close the current behavior window. Returns summary statistics for the run. Idempotent: repeated calls return the same summary."),
-		mcp.WithString("run_id", mcp.Required(), mcp.Description("Run ID from begin_capture_run")),
-		mcp.WithString("time_to", mcp.Description("Optional upper bound of the time window (RFC3339Nano). Defaults to now. Mainly for testing.")),
-	), capture.handleEndCaptureRun)
-
-	s.AddTool(mcp.NewTool("get_run_status",
-		mcp.WithDescription("Quickly check whether a behavior run has useful data. Returns flow/message counts for fail-fast decisions."),
-		mcp.WithString("run_id", mcp.Required(), mcp.Description("Run ID to check")),
-	), capture.handleGetRunStatus)
 
 	// 受限调试能力：原始包工具仅在 --enable-raw-debug 或 GT_MCP_ENABLE_RAW_DEBUG=1 时注册。
 	if capture.enableRawDebug {

@@ -5,7 +5,6 @@ import type { ConnectionSummary } from "@/types/connection";
 import type { DirectionFilter, SemanticFilter } from "@/lib/fuzzy";
 import { RawPacketTable } from "@/components/raw-packet-table";
 import { PluginPanel } from "@/components/plugin-panel";
-import { RunsPanel } from "@/components/runs-panel";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { StartCaptureDialog } from "@/components/start-capture-dialog";
 import { ProxyConfigDialog } from "@/components/proxy-config-dialog";
@@ -26,7 +25,7 @@ import { useAuthError, useIdentity } from "@/hooks/use-auth";
 import { toast } from "@/components/ui/toast";
 import type { ProjectInfo } from "@/types/project";
 
-type ViewTab = "home" | "overview" | "decoded" | "runs" | "plugins" | "raw";
+type ViewTab = "home" | "overview" | "decoded" | "plugins" | "raw";
 
 /** 一级视图：普通用户最常用的入口（我的抓包 / 会话 / 协议数据）。
  *  「会话」= 选中会话后的工作区（原「概览」，名字说不出它是什么，故改名）。
@@ -38,9 +37,8 @@ const PRIMARY_TABS: { id: ViewTab; label: string }[] = [
   { id: "decoded", label: "协议数据" },
 ];
 
-/** 高级视图：行为 / 插件 / 原始包，默认收进「更多」下拉，降低普通用户的认知负担。 */
+/** 高级视图：插件 / 原始包，默认收进「更多」下拉，降低普通用户的认知负担。 */
 const ADVANCED_TABS: { id: ViewTab; label: string }[] = [
-  { id: "runs", label: "行为" },
   { id: "plugins", label: "插件" },
   ...(RAW_DEBUG_ENABLED ? [{ id: "raw" as ViewTab, label: "原始包" }] : []),
 ];
@@ -68,9 +66,6 @@ export default function App() {
   }
 
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  // 与当前抓包会话联动的行为窗口（start_capture 成功后自动 begin，便于在「行为」Tab 直接查看）。
-  const [linkedRunId, setLinkedRunId] = useState<string | null>(null);
-  const [linkedRunSessionId, setLinkedRunSessionId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   // 协议数据页的消息方向过滤（C→S / S→C，空 = 全部）。
   const [direction, setDirection] = useState<DirectionFilter>("");
@@ -282,11 +277,6 @@ export default function App() {
           searchInputRef={sessionSearchInputRef}
           onDeleted={(id) => {
             if (id === selectedSessionId) setSelectedSessionId(null);
-            // 被删会话若正联动某行为窗口，一并清除联动状态
-            if (id && id === linkedRunSessionId) {
-              setLinkedRunId(null);
-              setLinkedRunSessionId(null);
-            }
           }}
         />
       </aside>
@@ -590,9 +580,6 @@ export default function App() {
               />
             </div>
           )}
-          {activeTab === "runs" && (
-            <RunsPanel linkedRunId={linkedRunId} linkedSessionId={linkedRunSessionId} />
-          )}
           {activeTab === "plugins" && <PluginPanel />}
           {activeTab === "raw" && (
             <div className="h-full overflow-auto p-4 gt-scroll">
@@ -648,10 +635,6 @@ export default function App() {
           // 抓包成功即进入「概览」（会话工作区默认入口），
           // 概览页可看到实时统计与最近连接/事件，并可一键跳到连接/时间线分析。
           setActiveTab("overview");
-        }}
-        onRunLinked={(runId, sessionId) => {
-          setLinkedRunId(runId);
-          setLinkedRunSessionId(sessionId);
         }}
       />
     </div>

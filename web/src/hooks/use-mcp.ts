@@ -36,11 +36,6 @@ import type {
   ExplainPluginResult,
   PluginManifestResult,
 } from "@/types/plugin-dev";
-import type {
-  BeginCaptureRunResult,
-  EndCaptureRunResult,
-  RunStatusResult,
-} from "@/types/behavior";
 import type { ListConnectionsResult, GetConnectionDetailResult, ListConnectionStreamsResult, ListConnectionFramesResult } from "@/types/connection";
 import type {
   ListProxyLeasesResult,
@@ -725,51 +720,6 @@ export function usePluginManifest(name: string | null) {
     queryKey: ["pluginManifest", name],
     queryFn: () => mcpClient.callTool<PluginManifestResult>("get_plugin_manifest", { name: name! }),
     enabled: !!name,
-  });
-}
-
-// ===== 行为 / 因果（Runs）=====
-
-/** begin_capture_run：标记一次用户操作窗口的开始。 */
-export function useBeginCaptureRun() {
-  return useMutation({
-    mutationFn: (vars: {
-      featureName: string;
-      projectPath: string;
-      pluginName?: string;
-      device?: string;
-      filter?: string;
-      port?: number;
-    }) =>
-      mcpClient.callTool<BeginCaptureRunResult>("begin_capture_run", {
-        feature_name: vars.featureName,
-        project_path: vars.projectPath,
-        plugin_name: vars.pluginName ?? "",
-        device: vars.device ?? "",
-        filter: vars.filter ?? "",
-        port: vars.port ?? 0,
-      }),
-  });
-}
-
-/** end_capture_run：关闭操作窗口，返回窗口内增量统计（幂等）。 */
-export function useEndCaptureRun() {
-  return useMutation({
-    mutationFn: (vars: { runId: string; timeTo?: string }) =>
-      mcpClient.callTool<EndCaptureRunResult>("end_capture_run", {
-        run_id: vars.runId,
-        time_to: vars.timeTo ?? "",
-      }),
-  });
-}
-
-/** get_run_status：快速检查某 run 是否有用数据。 */
-export function useRunStatus(runId: string | null) {
-  return useQuery({
-    queryKey: ["runStatus", runId],
-    queryFn: () => mcpClient.callTool<RunStatusResult>("get_run_status", { run_id: runId! }),
-    enabled: !!runId,
-    refetchInterval: runId ? 3000 : false,
   });
 }
 

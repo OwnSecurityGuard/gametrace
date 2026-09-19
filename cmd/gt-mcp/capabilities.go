@@ -46,11 +46,6 @@ func buildCapabilityCatalog() capabilityDoc {
 				Tools:       []string{"list_decoded_data", "list_state_changes"},
 			},
 			{
-				Name:        "behavior",
-				Description: "操作窗口标记（不启动抓包）",
-				Tools:       []string{"begin_capture_run", "end_capture_run", "get_run_status"},
-			},
-			{
 				Name:        "plugin-dev",
 				Description: "Developer Plane：脚手架 / 编译 / 拉起 / 归因",
 				Tools: []string{
@@ -87,9 +82,7 @@ func buildCapabilityCatalog() capabilityDoc {
 			"接入新协议: get_plugin_dev_guide -> create_plugin -> build_plugin -> start_capture(plugin=...) -> activate_plugin -> verify_plugin -> list_decoded_data",
 			"定位解码为空: status_plugin -> get_registry_addr -> sample_bytes_plugin -> explain_plugin",
 		},
-		Notes: []string{
-			"begin_capture_run 的 plugin_name/device/filter/port 是描述性提示，不会自动启动抓包；启动抓包必须显式调用 start_capture",
-		},
+		Notes:       []string{},
 	}
 }
 

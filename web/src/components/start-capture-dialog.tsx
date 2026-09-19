@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import {
   useStartCapture,
-  useBeginCaptureRun,
   useRegisteredPlugins,
   useListInterfaces,
   useSessionStatus,
@@ -27,8 +26,6 @@ interface StartCaptureDialogProps {
   open: boolean;
   onClose: () => void;
   onStarted?: (sessionId: string) => void;
-  /** 抓包启动并自动开启行为窗口后回调，携带 run_id 与联动的 session_id。 */
-  onRunLinked?: (runId: string, sessionId: string) => void;
   /** 从项目预填的默认端口（0=不预填） */
   initialPort?: number;
   /** 从项目预填的默认插件名 */
@@ -97,7 +94,6 @@ export function StartCaptureDialog({
   open,
   onClose,
   onStarted,
-  onRunLinked,
   initialPort,
   initialPlugin,
   initialProjectId,
@@ -119,9 +115,6 @@ export function StartCaptureDialog({
   // 高级设置折叠：Interface/BPF 等技术细节默认收起，普通用户只看 端口 + 解析器。
   const [showAdvanced, setShowAdvanced] = useState(false);
   const start = useStartCapture();
-  // 抓包成功后自动开启行为窗口：begin_capture_run 会读取 MCP 侧 current.json
-  // （start_capture 已在服务端同步写入），从而复用同一 session_id，实现抓取↔窗口联动。
-  const begin = useBeginCaptureRun();
   // 已注册且在线才能用于抓包解码；离线插件无法建立解码流，故置灰禁用但保留可见，便于排查。
   const { data: pluginsData } = useRegisteredPlugins();
   const plugins = pluginsData?.plugins ?? [];
@@ -224,29 +217,6 @@ export function StartCaptureDialog({
             .filter(Boolean)
             .join(" · ");
           toast.success("抓包会话已启动", detail);
-          const dbPath = data?.db_path ?? "";
-          const sessionDir = dbPath.replace(/[\\/][^\\/]+$/, "") || `session-${sessionId}`;
-          begin.mutate(
-            {
-              featureName: plugin ? `capture-${plugin}` : "capture",
-              projectPath: sessionDir,
-              pluginName: plugin || undefined,
-              port: p,
-              filter: `tcp port ${p}`,
-            },
-            {
-              onSuccess: (runData) => {
-                if (runData?.run_id) {
-                  onRunLinked?.(runData.run_id, runData.session_id ?? sessionId);
-                  toast.success("已开启行为窗口", `run ${runData.run_id}`);
-                }
-              },
-              onError: (err) => {
-                // 抓包已成功，行为窗口失败仅告警，不阻断抓包。
-                toast.info("行为窗口开启失败（抓包仍在进行）", err.message);
-              },
-            },
-          );
           setStarted(true);
           setTimeout(() => {
             setStarted(false);
