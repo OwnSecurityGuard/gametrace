@@ -32,8 +32,6 @@ const (
 	ActionPluginManage         Action = "plugin:manage"
 	ActionLeaseUse             Action = "lease:use"
 	ActionLeaseRelease         Action = "lease:release"
-	ActionAccessCodeCreate     Action = "access_code:create"
-	ActionAccessCodeClaim      Action = "access_code:claim"
 	ActionProbeRead            Action = "probe:read"
 	ActionProbeUse             Action = "probe:use"
 	ActionProbeControl         Action = "probe:control"
@@ -49,7 +47,6 @@ const (
 	KindSession    Kind = "session"
 	KindPlugin     Kind = "plugin"
 	KindLease      Kind = "lease"
-	KindAccessCode Kind = "access_code"
 	KindProbe      Kind = "probe"
 	KindUser       Kind = "user"
 )
@@ -60,7 +57,7 @@ const DefaultTenant = "default"
 
 // Resource 是资源的引用式描述，由调用方构造。
 // 各字段按 Kind 取舍：project 填 ID/TenantID；session 额外填 ProjectID/CreatorID；
-// plugin/lease/access_code 视归属填 ProjectID 或 CreatorID。
+// plugin/lease 视归属填 ProjectID 或 CreatorID。
 type Resource struct {
 	Kind      Kind
 	ID        string
@@ -288,22 +285,5 @@ func decideProjectScoped(p Principal, a Action, r Resource, role Role) error {
 		return fmt.Errorf("%w: %s %s is not manageable by %s", ErrForbidden, r.Kind, r.ID, p.User)
 	default:
 		return fmt.Errorf("%w: unsupported action %s", ErrForbidden, a)
-	}
-}
-
-// AccessCode 特例：create 归 creator 本人；claim 是未鉴权端点的内部动作，
-// 由启动码一次性 + 24h 过期兜底，不走 Decide 的用户轴（claim 时没有用户身份）。
-// 保留这两个 Action 是为了护栏测试能覆盖 access_code 相关 handler。
-func AccessCodeActionAllowed(p Principal, a Action, creatorID string) bool {
-	if p.IsAdmin {
-		return true
-	}
-	switch a {
-	case ActionAccessCodeCreate:
-		return creatorID == "" || creatorID == p.User
-	case ActionAccessCodeClaim:
-		return true
-	default:
-		return false
 	}
 }

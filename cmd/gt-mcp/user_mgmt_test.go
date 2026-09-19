@@ -47,7 +47,7 @@ func reqWith(kv ...string) mcp.CallToolRequest {
 	return req
 }
 
-// newUserMgmtMCP 构造带 users/accessCodes/projectStore/pipeline 桩的完整 mcpCapture。
+// newUserMgmtMCP 构造带 users/projectStore/pipeline 桩的完整 mcpCapture。
 func newUserMgmtMCP(t *testing.T) (*mcpCapture, *userStore, *fakeMgmtClient) {
 	t.Helper()
 	cs, err := store.NewControlStore(filepath.Join(t.TempDir(), "control.sqlite"))
@@ -63,14 +63,10 @@ func newUserMgmtMCP(t *testing.T) (*mcpCapture, *userStore, *fakeMgmtClient) {
 	if err := us.Init(); err != nil {
 		t.Fatal(err)
 	}
-	ac := newAccessCodeStore(cs.DB())
-	if err := ac.Init(); err != nil {
-		t.Fatal(err)
-	}
 	fc := &fakeMgmtClient{}
 	m := &mcpCapture{
 		projects: ps, users: us, authz: newProjectAuthorizer(ps),
-		accessCodes: ac, tokensByOwner: map[string]string{"bob": "tok-bob"},
+		tokensByOwner: map[string]string{"bob": "tok-bob"},
 		pipelineClient: fc, sessionMgr: newSessionManager(t.TempDir()),
 	}
 	return m, us, fc

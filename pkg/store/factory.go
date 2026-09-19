@@ -121,11 +121,11 @@ var (
 
 // OpenControlStore 打开控制元数据存储（sessions + plugin_debug_access）。
 //
-// driver=="sqlite"：dsnOrPath 为 control.sqlite 文件路径（projects / access_codes
+// driver=="sqlite"：dsnOrPath 为 control.sqlite 文件路径（projects / users
 // 等同文件共置）。
 //
 // driver=="postgres"：dsnOrPath 为共享 PG 连接串；sessions 与 plugin_debug_access
-// 落到 PG。注意：projects / access_codes 等组织-访问子系统仍使用本地 sqlite 文件
+// 落到 PG。注意：projects / users 等组织-访问子系统仍使用本地 sqlite 文件
 // （见 gt-mcp/main.go 的装配逻辑），不在本次 PG 化范围内。
 func OpenControlStore(driver, dsnOrPath string) (ControlStoreBackend, error) {
 	if IsPostgres(driver) {

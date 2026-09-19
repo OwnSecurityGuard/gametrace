@@ -80,8 +80,8 @@ export function MyCapturePage({
   const onlineDevices = devices.filter(
     (d) => d.state === "capturing" || d.state === "connected",
   ).length;
-  // 启动码只代表"等待接入"，真的接进来以后是一台探针。
-  const hasProbe = devices.some((d) => d.kind === "probe");
+  // 所有设备都是已接入的探针（接入方式只有下载 gt-agent 一种）。
+  const hasProbe = devices.length > 0;
 
   const recent = [...sessions]
     .sort((a, b) => b.started_at.localeCompare(a.started_at))

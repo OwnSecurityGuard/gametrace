@@ -4,7 +4,7 @@ package main
 //
 // AuthZ 层防不住"新 handler 忘记鉴权"，本测试把"靠人记得"变成"CI 报错"：
 //   1. 从 AST 提取 registerTools 里所有 s.AddTool(mcp.NewTool("<name>", ...), capture.<handler>)；
-//   2. 工具名命中敏感模式（session / project / lease / access_code）的 handler，
+//   2. 工具名命中敏感模式（session / project / lease）的 handler，
 //      函数体内必须出现受认可的鉴权入口调用（证据集见 authzEvidence）；
 //   3. 明确豁免清单中的工具必须逐条给出理由 —— 新增豁免是显式的代码评审决策。
 
@@ -29,7 +29,6 @@ var authzEvidence = map[string]bool{
 	"getDBPath":                  true, // 内部含 authorizeSession（main.go）
 	"openReader":                 true, // 内部经 getDBPath 鉴权
 	"visibleSessionFilter":       true, // 列表可见性 = owner ∪ 可见项目
-	"AccessCodeActionAllowed":    true, // 启动码动作（pkg/authz）
 }
 
 // authzExemptions 是命敏感模式但确认无需 handler 级鉴权的工具，必须逐条给理由。
@@ -40,7 +39,6 @@ var authzExemptions = map[string]string{
 	"create_project":       "创建动作无既有资源可鉴权，Owner=创建者",
 	"list_live_sessions":   "pipeline 侧 owner 作用域过滤（gRPC 透传 Owner/AllOwners）",
 	"list_all_sessions":    "visibleSessionFilter 已含 owner ∪ 可见项目（证据集亦覆盖）",
-	"list_access_codes":    "仅返回调用者自身 / admin 全量的启动码",
 	"get_proxy_lease":      "租约归属由 pipeline 侧 owner 校验（lease↔project 绑定未落地，P2）",
 	"list_proxy_leases":    "pipeline 侧 owner 作用域列表（透传 Owner/AllOwners）",
 	"create_proxy_lease":   "租约归属由 pipeline 记录为调用者（透传 Owner/AllOwners）",
@@ -76,7 +74,7 @@ func TestSensitiveHandlersHaveAuthz(t *testing.T) {
 	if len(handlers) < 30 {
 		t.Fatalf("parsed only %d tool registrations; AST extraction is broken", len(handlers))
 	}
-	sensitive := regexp.MustCompile(`session|project|lease|access_code`)
+	sensitive := regexp.MustCompile(`session|project|lease`)
 	bodyHasEvidence := func(fn *ast.FuncDecl) bool {
 		found := false
 		ast.Inspect(fn.Body, func(n ast.Node) bool {

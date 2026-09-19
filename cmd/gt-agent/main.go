@@ -7,12 +7,11 @@
 //     远端 AgentControl 双向流（desired-state 对齐，平台页面直接操控）；
 //  3. 托管本地插件：发现本机插件进程并以隧道模式拉起。
 //
-// 身份与回连存 probe.json（首启引导：命令行 flag / 固化配置 / 启动码）；
+// 身份与回连存 probe.json（首启引导：命令行 flag / 固化配置）；
 // 抓包参数是会话级配置，由平台指派或本地控制面临时给定，不落 probe.json。
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -20,7 +19,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -43,7 +41,7 @@ type embeddedAgentConfig struct {
 	BindPlugins  []string `json:"plugin_names,omitempty"`  // 仅托管这些名字的本地插件（空=托管全部）
 }
 
-// supplied 把固化配置（下载产物 / 启动码领取结果）转成「本次下发的身份与回连」。
+// supplied 把固化配置（下载产物）转成「本次下发的身份与回连」。
 func (e embeddedAgentConfig) supplied() suppliedConfig {
 	return suppliedConfig{token: e.Token, server: e.Server,
 		registry: e.RegistryAddr, ingest: e.IngestAddr}
@@ -64,8 +62,6 @@ func main() {
 		spoolDir      string
 		snapLen       int
 		promisc       bool
-		accessCode    string
-		accessHost    string
 	)
 	fs := flag.NewFlagSet("gt-agent", flag.ExitOnError)
 	fs.StringVar(&server, "server", "", "pipeline 服务端基址 host 或 host:port（port 为 registry 端口，ingest 自动取 port+1）")
@@ -81,8 +77,6 @@ func main() {
 	fs.StringVar(&spoolDir, "spool-dir", "", "上行链路磁盘缓冲目录根（断电续传+留存）；留空默认取探针当前目录下 spool/")
 	fs.IntVar(&snapLen, "snaplen", 262144, "pcap snaplen")
 	fs.BoolVar(&promisc, "promisc", true, "混杂模式")
-	fs.StringVar(&accessCode, "code", "", "启动码 GT-XXXX-XXXX：无 server/token 时用它自动领取配置并回连")
-	fs.StringVar(&accessHost, "mcp", "127.0.0.1:8781", "服务端 MCP HTTP 地址（启动码领取用）")
 	showVersion := fs.Bool("version", false, "print version and exit")
 	_ = fs.Parse(os.Args[1:])
 	if *showVersion {
@@ -92,7 +86,7 @@ func main() {
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
-	// ---- 身份与回连的装配（优先级：flag > probe.json > 固化配置 > 启动码）----
+	// ---- 身份与回连的装配（优先级：flag > probe.json > 固化配置）----
 	// 归档留存默认开启（loadAgentConfig 已处理：archive.enabled 未给出即视为开），
 	// 保证抓包数据落盘留存，除非配置显式关闭。
 	cfg, _ := loadAgentConfig()
@@ -106,54 +100,13 @@ func main() {
 		}
 	}
 
-	// 启动码：显式传 --code，或既无 server/token 又无固化配置（首启引导）时，
-	// 用码自动领取 server/token/session 等作为默认配置。
-	hasClaimed := false
-	var bindFromClaim []string
-	dirty := false
-	effServer := firstNonEmpty(server, cfg.Server, embeddedStr(embedded, "server"))
-	effToken := firstNonEmpty(token, cfg.UserToken, embeddedStr(embedded, "token"))
-	if accessCode != "" || (effServer == "" && effToken == "" && !hasEmbedded) {
-		if accessCode == "" {
-			// 交互式：stdin 读一行（首启引导）。非 TTY 下读 os.Stdin。
-			fmt.Print("请输入启动码 GT-XXXX-XXXX: ")
-			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-			accessCode = strings.ToUpper(strings.TrimSpace(line))
-		}
-		accessCode = strings.ToUpper(strings.TrimSpace(accessCode))
-		if accessCode == "" {
-			slog.Error("启动码不能为空；用 --code GT-XXXX-XXXX 或输入启动码")
-			os.Exit(1)
-		}
-		if !strings.HasPrefix(accessCode, "GT-") {
-			slog.Error("启动码格式应为 GT-XXXX-XXXX", "code", accessCode)
-			os.Exit(1)
-		}
-		claimed, err := claimAccessCode(context.Background(), accessHost, accessCode)
-		if err != nil {
-			slog.Error("领取启动码失败（请确认 --mcp <host:8781> 可达且码有效）", "error", err)
-			os.Exit(1)
-		}
-		bindFromClaim = claimed.BindPlugins
-		if sessionID == "" {
-			sessionID = claimed.SessionID
-		}
-		if bpf == "" {
-			bpf = claimed.BPF
-		}
-		// 领取到的身份与回连落 probe.json（此后改参走控制面，不再依赖启动码）。
-		// 启动码是"这台机器现在归谁"的显式意图：与 probe.json 里上次留下的凭证
-		// 冲突时以码为准并作废旧凭证，否则会连到上一个身份/上一个服务端上去。
-		if claimed.supplied().adopt(cfg, "access code") {
-			dirty = true
-		}
-		hasClaimed = true
-		slog.Info("access code claimed", "code", accessCode, "session", claimed.SessionID)
-	}
+	// 启动码已移除：探针身份与回连一律来自命令行 flag / probe.json / 固化配置
+	// （下载产物）。无 server/token 且无固化配置时走本地单机模式，不自动回连。
 
 	// 命令行 flag 非空时覆盖 probe.json 并写回（首启引导一次性生效；
 	// 此后一切改参走本地控制面 / 远端指令，不再需要命令行）。
 	// 身份或服务端被 flag 换掉时同样作废旧凭证（见 suppliedConfig.adopt）。
+	dirty := false
 	if (suppliedConfig{token: token, server: server,
 		registry: registryAddr, ingest: ingestAddr}).adopt(cfg, "command-line flag") {
 		dirty = true
@@ -262,13 +215,10 @@ func main() {
 		}
 	}()
 
-	// 3) 插件托管（无需抓包即可工作）。固化/启动码模式下仅托管白名单内的插件。
+	// 3) 插件托管（无需抓包即可工作）。固化配置模式下仅托管白名单内的插件。
 	// localOnly 时没有 registry 可注册，跳过。
 	var bind []string
-	switch {
-	case hasClaimed:
-		bind = bindFromClaim
-	case hasEmbedded && embedded != nil:
+	if hasEmbedded && embedded != nil {
 		bind = embedded.BindPlugins
 	}
 	if !localOnly {
@@ -360,18 +310,4 @@ func firstNonEmpty(vals ...string) string {
 // 归档扫描与断电续传共用同一目录布局）。
 func defaultSpoolDir(sessionID string) string {
 	return filepath.Join(spoolBase(), sessionID)
-}
-
-// embeddedStr 安全读取可能为 nil 的固化配置字段。
-func embeddedStr(e *embeddedAgentConfig, field string) string {
-	if e == nil {
-		return ""
-	}
-	switch field {
-	case "server":
-		return e.Server
-	case "token":
-		return e.Token
-	}
-	return ""
 }

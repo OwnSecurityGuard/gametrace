@@ -13,7 +13,7 @@ import {
 } from "@/hooks/use-mcp";
 import { toast } from "@/components/ui/toast";
 import { getIdentity } from "@/lib/auth";
-import type { GtaUser } from "@/types/access-code";
+import type { GtaUser } from "@/types/user";
 
 function formatTime(ts: string): string {
   const d = new Date(ts);

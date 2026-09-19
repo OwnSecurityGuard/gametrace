@@ -72,9 +72,9 @@ openssl rand -hex 24   # 输出前加 gt_tok_ 前缀
 
 ### 2.3 对外通告地址（远端探针回连，Docker / 公网部署必配）
 
-远端探针（成员机 / 启动码接入的机器）回连的是**服务端对外可达地址**，而非容器内监听地址。Docker / NAT 下这两者不同：容器内是 `:9091`（映射到宿主机 `19091`），容器内网卡还可能拿到 `172.x` 这类对端不可达网段。
+远端探针（成员机 / 下载接入的机器）回连的是**服务端对外可达地址**，而非容器内监听地址。Docker / NAT 下这两者不同：容器内是 `:9091`（映射到宿主机 `19091`），容器内网卡还可能拿到 `172.x` 这类对端不可达网段。
 
-下载探针 / 启动码接入时，回连地址（registry + ingest）由服务端 `advertisedAddrs` 解析，**优先级**：
+下载探针接入时，回连地址（registry + ingest）由服务端 `advertisedAddrs` 解析，**优先级**：
 
 1. **`GT_PUBLIC_HOST`（+ `GT_PUBLIC_REGISTRY_PORT` / `GT_PUBLIC_INGEST_PORT`）显式配置** —— 部署方承诺的地址，最可信，**强烈建议 Docker/公网部署配置**。端口用映射后的宿主端口（`19091` / `19092`）。
 2. 未配置时按"浏览器怎么访问到我们"回推（用 MCP 对外 host + 映射端口近似）——同网段/直连能用，跨 NAT/容器会连不上。
@@ -203,15 +203,12 @@ entrypoint 被覆盖后镜像 CMD 是否被意外继承。
 
 ## 5. 成员接入
 
-把服务器地址发给成员，成员按 [成员上手指南](member-onboarding.md) 操作。**推荐走前端「接入设备」生成启动码**，在目标机执行一条命令即自动领配置回连，无需手填 token / server / session：
+把服务器地址发给成员，成员按 [成员上手指南](member-onboarding.md) 操作。**推荐走前端「接入设备」下载探针**，在目标机解压运行即自动回连，无需手填 token / server / session：
 
-```bash
-# 启动码接入（推荐，免参数）：<code> 来自前端「我的接入」面板
-irm "http://10.0.0.5:8781/setup.ps1?code=GT-XXXX-XXXX&platform=windows/amd64" | iex   # Windows
-curl -fsSL "http://10.0.0.5:8781/setup.sh?code=GT-XXXX-XXXX&platform=linux/amd64" | bash # Linux/macOS
-```
+- 点顶部工具栏「接入设备」→ 选目标操作系统 →「下载探针」，得到 `gt-agent-<os>-<arch>.zip`；
+- 在目标电脑解压 zip 并运行 `gt-agent`（回连地址与凭证已内置在 `config.embedded.json`）。
 
-也可下载预置探针 zip 自行解压运行（同样免参数，回连地址已烧进 `config.embedded.json`）。registry 用映射后的宿主端口 `19091`，ingest 自动取 `19092`。
+也可用命令行直启（需 owner 先 `start_capture(source="agent")` 拿到 session_id 的场景）：
 
 > 抓包端口与解码插件**不在接入时决定**——探针在线后在「开始抓包」里选这台机器并指定，由服务端下发。改端口/换解析器都不必重下探针。
 

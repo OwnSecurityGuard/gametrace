@@ -11,9 +11,9 @@ import {
   Play,
   Loader2,
   AlertTriangle,
+  Cpu,
 } from "lucide-react";
 import { useAgentDownloadOptions, useListProbes } from "@/hooks/use-mcp";
-import { AccessCodePanel } from "@/components/access-code-panel";
 import { authHeaders, withTokenParam } from "@/lib/auth";
 import { toast } from "@/components/ui/toast";
 import type { AgentPlatform } from "@/types/agent";
@@ -48,16 +48,26 @@ function detectPlatform(): { os: string; arch: string } {
  * 平台取自服务端预置产物，不再依赖服务端平台。
  */
 export function AgentDownloadDialog({ open, onClose, onStartCapture }: AgentDownloadDialogProps) {
-  const { data, isLoading } = useAgentDownloadOptions();
+  // 手点「现场编译」（或自动兜底中）后高频轮询，直到后端产物就绪 / 编译结束。
+  const [buildTrigger, setBuildTrigger] = useState<string | null>(null);
+  const { data, isLoading } = useAgentDownloadOptions(
+    buildTrigger !== null ? { refetchIntervalSec: 2500 } : undefined,
+  );
 
   const opts = (data ?? null) as null | NonNullable<typeof data>;
   const platforms = opts?.platforms ?? [];
   const available = platforms.filter((p) => p.available);
 
+  // 编译结束（产物就绪，或后端已不再处于 building——无论成败）即停止轮询。
+  useEffect(() => {
+    if (!buildTrigger) return;
+    const p = platforms.find((x) => `${x.os}/${x.arch}` === buildTrigger);
+    if (p && (p.available || !p.building)) setBuildTrigger(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
   // 阶段：configure（选平台 + 下载）→ awaiting（等待探针接入）
   const [phase, setPhase] = useState<"configure" | "awaiting">("configure");
-  // 接入模式：quick=启动码主路径（推荐） / advanced=下载 zip + sidecar 配置
-  const [mode, setMode] = useState<"quick" | "advanced">("quick");
   const [os, setOs] = useState("windows");
   const [arch, setArch] = useState("amd64");
   const [busy, setBusy] = useState(false);
@@ -69,7 +79,6 @@ export function AgentDownloadDialog({ open, onClose, onStartCapture }: AgentDown
     if (!open) return;
     setBusy(false);
     setPhase("configure");
-    setMode("quick");
     if (available.length > 0) {
       const det = detectPlatform();
       const match = available.find((p) => p.os === det.os && p.arch === det.arch) ?? available[0];
@@ -97,9 +106,46 @@ export function AgentDownloadDialog({ open, onClose, onStartCapture }: AgentDown
 
   const selectedPlatform = platforms.find((p) => p.os === os && p.arch === arch);
 
+  /** 请求服务端现场编译指定平台产物（POST /agent/build，幂等：已有产物直接返回可用）。 */
+  async function handleBuild(p: AgentPlatform) {
+    const key = `${p.os}/${p.arch}`;
+    setBuildTrigger(key);
+    try {
+      const resp = await fetch(`/agent/build?platform=${encodeURIComponent(key)}`, {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      const body = (await resp.json().catch(() => ({}))) as {
+        status?: string;
+        message?: string;
+      };
+      if (!resp.ok || body.status === "error") {
+        toast.error("现场编译启动失败", body.message ?? `HTTP ${resp.status}`);
+        setBuildTrigger(null);
+      } else if (body.status === "available") {
+        // 后端已有该平台产物，无需重新编译——直接放行下载。
+        setBuildTrigger(null);
+        toast.success("产物已就绪", `${p.label} 已在服务端预置，可直接下载`);
+      }
+      // status == building：保持轮询，等后端产出后刷新平台列表。
+    } catch (e) {
+      toast.error("现场编译请求失败", e instanceof Error ? e.message : String(e));
+      setBuildTrigger(null);
+    }
+  }
+
   async function handleDownload() {
     if (!selectedPlatform) {
       toast.error("请选择操作系统", "当前没有任何可下载的平台产物");
+      return;
+    }
+    if (!selectedPlatform.available) {
+      toast.error(
+        "该平台尚未就绪",
+        selectedPlatform.buildable
+          ? "请先在页面点「现场编译」，服务器生成产物后再下载"
+          : "该平台需在镜像构建期预置（BUILD_DARWIN_AGENT=1）或经 GT_AGENT_BIN_DIR 补充",
+      );
       return;
     }
     if (!opts?.registry_addr) {
@@ -160,19 +206,11 @@ export function AgentDownloadDialog({ open, onClose, onStartCapture }: AgentDown
     }
   }
 
-  const inAdvanced = mode === "advanced";
-  const dialogTitle =
-    mode === "quick"
-      ? "我的接入"
-      : phase === "awaiting"
-        ? "等待探针接入"
-        : "下载抓包探针";
+  const dialogTitle = phase === "awaiting" ? "等待探针接入" : "下载抓包探针";
   const dialogDesc =
-    mode === "quick"
-      ? "生成一次性启动码，在目标机执行复制到的命令即可接入这台机器。"
-      : phase === "awaiting"
-        ? "在目标电脑解压并双击运行探针，接入后回到「开始抓包」选这台机器。"
-        : "只需选择目标操作系统：回连地址与凭证已打包进 zip。抓包端口与解码插件在「开始抓包」时指定。";
+    phase === "awaiting"
+      ? "在目标电脑解压并双击运行探针，接入后回到「开始抓包」选这台机器。"
+      : "只需选择目标操作系统：回连地址与凭证已打包进 zip。抓包端口与解码插件在「开始抓包」时指定。";
 
   return (
     <Dialog
@@ -182,7 +220,7 @@ export function AgentDownloadDialog({ open, onClose, onStartCapture }: AgentDown
       title={dialogTitle}
       description={dialogDesc}
       footer={
-        inAdvanced && phase === "awaiting" ? (
+        phase === "awaiting" ? (
           <>
             <Button variant="outline" onClick={() => setPhase("configure")}>
               <Download className="h-4 w-4" />
@@ -200,7 +238,7 @@ export function AgentDownloadDialog({ open, onClose, onStartCapture }: AgentDown
               开始抓包
             </Button>
           </>
-        ) : inAdvanced ? (
+        ) : (
           <>
             <Button variant="outline" onClick={onClose}>
               <X className="h-4 w-4" />
@@ -211,45 +249,10 @@ export function AgentDownloadDialog({ open, onClose, onStartCapture }: AgentDown
               {busy ? "打包下载中…" : "下载探针"}
             </Button>
           </>
-        ) : (
-          <>
-            <Button variant="outline" onClick={onClose} className="ml-auto">
-              <X className="h-4 w-4" />
-              关闭
-            </Button>
-          </>
         )
       }
     >
-      {/* 接入模式切换：启动码主路径（推荐） / 高级下载（zip + sidecar 配置） */}
-      {!(inAdvanced && phase === "awaiting") && (
-        <div className="mb-3 grid grid-cols-2 gap-1 rounded-md border border-border bg-muted/40 p-1">
-          <button
-            type="button"
-            onClick={() => setMode("quick")}
-            aria-pressed={mode === "quick"}
-            className={`rounded px-2 py-1.5 text-sm font-medium transition-colors ${
-              mode === "quick" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground"
-            }`}
-          >
-            ⚡ 快捷接入（推荐）
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("advanced")}
-            aria-pressed={mode === "advanced"}
-            className={`rounded px-2 py-1.5 text-sm font-medium transition-colors ${
-              mode === "advanced" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground"
-            }`}
-          >
-            高级下载
-          </button>
-        </div>
-      )}
-
-      {mode === "quick" ? (
-        <AccessCodePanel />
-      ) : phase === "awaiting" ? (
+      {phase === "awaiting" ? (
         <AwaitingAgentPanel
           attached={!!attachedProbe}
           probeName={attachedProbe?.name || attachedProbe?.hostname}
@@ -264,22 +267,53 @@ export function AgentDownloadDialog({ open, onClose, onStartCapture }: AgentDown
             </label>
             <div className="mt-1.5 grid grid-cols-2 gap-2">
               {platforms.map((p) => (
-                <PlatformOption
-                  key={`${p.os}/${p.arch}`}
-                  p={p}
-                  selected={os === p.os && arch === p.arch}
-                  onSelect={() => {
-                    if (p.available) {
+                <div key={`${p.os}/${p.arch}`}>
+                  <PlatformOption
+                    p={p}
+                    selected={os === p.os && arch === p.arch}
+                    onSelect={() => {
+                      // 所有候选都可选中：未就绪平台交由下方状态判定（现场编译/需预置）。
                       setOs(p.os);
                       setArch(p.arch);
-                    }
-                  }}
-                />
+                    }}
+                  />
+                  {/* 未就绪平台的状态判定：编译中 → 可现场编译 → 需镜像预置 */}
+                  {!p.available && !(os === p.os && arch === p.arch) && (
+                    <p className="mt-1 flex items-center justify-center text-[11px]">
+                      {p.building ? (
+                        <span className="inline-flex items-center gap-1 text-muted-foreground">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          服务器编译中…
+                        </span>
+                      ) : p.buildable ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOs(p.os);
+                            setArch(p.arch);
+                            handleBuild(p);
+                          }}
+                          className="inline-flex items-center gap-1 text-primary hover:underline"
+                        >
+                          <Cpu className="h-3 w-3" />
+                          现场编译
+                        </button>
+                      ) : (
+                        <span className="text-muted-foreground">需镜像预置</span>
+                      )}
+                    </p>
+                  )}
+                </div>
               ))}
             </div>
             {selectedPlatform && !selectedPlatform.available && (
               <p className="mt-1 text-xs text-destructive">
-                {selectedPlatform.label} 尚未预置，请在服务端运行 make build-agents 生成。
+                {selectedPlatform.building
+                  ? `服务器正在现场编译 ${selectedPlatform.label}，稍候即可下载。`
+                  : selectedPlatform.buildable
+                    ? `点上面的「现场编译」，服务器会为 ${selectedPlatform.label} 生成产物；编译结果平台共享，其他机器无需重复编译。`
+                    : `${selectedPlatform.label} 未预置：macOS 需镜像构建期开启 BUILD_DARWIN_AGENT=1、Linux ARM64 需 BUILD_ARM_AGENT=1，或经 GT_AGENT_BIN_DIR 提供产物。`}
               </p>
             )}
             <p className="mt-1.5 text-xs text-muted-foreground">
@@ -331,13 +365,12 @@ function PlatformOption({
     <button
       type="button"
       onClick={onSelect}
-      disabled={!p.available}
       aria-pressed={selected}
       className={`flex items-center gap-2 rounded-md border px-2.5 py-2 text-sm transition-colors ${
         selected
           ? "border-primary/60 bg-primary/10 text-foreground"
           : "border-border bg-background text-muted-foreground"
-      } ${p.available ? "cursor-pointer hover:bg-muted/60" : "cursor-not-allowed opacity-50"}`}
+      } ${p.available ? "cursor-pointer hover:bg-muted/60" : "cursor-pointer hover:bg-muted/40"}`}
     >
       {selected ? (
         <Check className="h-4 w-4 text-primary" />

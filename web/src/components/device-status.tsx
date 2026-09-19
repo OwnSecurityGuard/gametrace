@@ -1,9 +1,8 @@
-import { Laptop, Loader2, Activity, CircleCheck, ChevronRight, Clock } from "lucide-react";
+import { Laptop, Activity, CircleCheck, ChevronRight, Clock } from "lucide-react";
 import { useMyDevices } from "@/hooks/use-devices";
 import type { DeviceState, DeviceView } from "@/types/device";
 
 const STATE_META: Record<DeviceState, { label: string; text: string }> = {
-  waiting: { label: "等待接入", text: "text-amber-600 dark:text-amber-400" },
   connected: { label: "已连接", text: "text-blue-600 dark:text-blue-400" },
   capturing: { label: "正在抓包", text: "text-emerald-600 dark:text-emerald-400" },
   stopped: { label: "已停止", text: "text-muted-foreground" },
@@ -31,7 +30,6 @@ function fmtSeen(iso?: string): string {
 }
 
 function StatusIcon({ state }: { state: DeviceState }) {
-  if (state === "waiting") return <Loader2 className="h-4 w-4 animate-spin" />;
   if (state === "capturing") return <Activity className="h-4 w-4" />;
   if (state === "connected") return <CircleCheck className="h-4 w-4" />;
   return <Clock className="h-4 w-4" />;
@@ -43,7 +41,7 @@ interface DeviceStatusListProps {
 }
 
 /**
- * 「我的设备」状态列表：把启动码/会话捏成用户能一眼看懂的设备接入闭环。
+ * 「我的设备」状态列表：把探针捏成用户能一眼看懂的接入状态。
  * 无任何设备时给出引导文案，而非空白。
  */
 export function DeviceStatusList({ onSelectSession }: DeviceStatusListProps) {
@@ -55,7 +53,7 @@ export function DeviceStatusList({ onSelectSession }: DeviceStatusListProps) {
         <Laptop className="mx-auto h-5 w-5 text-muted-foreground/60" />
         <p className="mt-2 text-sm text-muted-foreground">还没有接入设备</p>
         <p className="mt-0.5 text-xs text-muted-foreground/80">
-          生成接入命令并在你的电脑上执行，接入后这里会显示「已连接」。
+          点击「接入设备」下载探针并在目标电脑上运行，接入后这里会显示「已连接」。
         </p>
       </div>
     );
@@ -64,7 +62,7 @@ export function DeviceStatusList({ onSelectSession }: DeviceStatusListProps) {
   return (
     <div className="space-y-2">
       {devices.map((d) => (
-        <DeviceCard key={d.code} device={d} onSelectSession={onSelectSession} />
+        <DeviceCard key={d.id} device={d} onSelectSession={onSelectSession} />
       ))}
     </div>
   );
@@ -102,9 +100,7 @@ function DeviceCard({
           )}
         </div>
         <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-          <span className="font-mono">{device.hostname || device.name || device.code || device.id}</span>
-          {device.port ? ` · 端口 ${device.port}` : ""}
-          {device.plugin ? ` · 解析器 ${device.plugin}` : ""}
+          <span className="font-mono">{device.hostname || device.name || device.id}</span>
         </p>
         <p className="mt-0.5 text-[11px] text-muted-foreground">
           {device.state === "capturing" ? (
@@ -131,7 +127,7 @@ function DeviceCard({
           ) : device.state === "connected" ? (
             <>已建立连接，等待收到网络包{seen ? ` · ${seen}` : ""}</>
           ) : (
-            <>启动命令已生成，请在目标电脑执行命令接入</>
+            <>探针离线，请确认目标电脑上的 gt-agent 正在运行</>
           )}
         </p>
       </div>

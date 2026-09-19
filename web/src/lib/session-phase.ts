@@ -241,7 +241,7 @@ export function describeSessionPhase(input: PhaseInput): SessionPhaseView {
         guidance: {
           title: "还没有探针接入。请：",
           steps: [
-            "在目标电脑上下载并运行 GameTrace 探针（用上面的启动码）",
+            "在目标电脑上下载并运行 GameTrace 探针（顶部「接入设备」下载）",
             "确认探针与 GameTrace 服务端网络互通（防火墙放行 ingest 端口）",
             "探针连上后这里会自动变成「等待流量」，无需刷新",
           ],

@@ -8,9 +8,9 @@
 #
 # Web UI：浏览器直接访问 http://<host>:8781（静态资源免鉴权，API 语义不变）。
 #
-# 远程 Agent 预置二进制：gt-mcp 的 /download/agent 只下发预置产物（见
-#   cmd/gt-mcp/agent_download.go 的 agentBinDir/availableAgentPlatforms），不再现场
-#   编译。镜像在 builder 阶段直接烧入四份可抓包产物（见 builder 注释）：
+# 远程 Agent 预置二进制：gt-mcp 的 /download/agent 优先下发预置产物（见
+#   cmd/gt-mcp/agent_download.go 的 agentBinDir/availableAgentPlatforms）。
+#   镜像在 builder 阶段直接烧入四份可抓包产物（见 builder 注释）：
 #   - linux/amd64（cgo+pcap，原生编译）
 #   - windows/amd64（gopacket/pcap 在 Windows 是纯 Go，CGO_ENABLED=0 交叉编译，
 #     运行时加载 Npcap 的 wpcap.dll）
@@ -18,8 +18,9 @@
 #     BUILD_DARWIN_AGENT 参数；gopacket/pcap 在 darwin 走 cgo，Linux builder 需
 #     osxcross 工具链，SDK 下载/工具链构建失败或被跳过时镜像退化为 linux+windows，
 #     下载页如实标 darwin 不可用）
-# runtime 保留 Go 工具链是为 gt-mcp 内嵌 Developer Plane 现场编译插件
-# （pkg/plugindev/build.go 的 build_plugin），与 agent 无关。
+# runtime 保留 Go 工具链：一是 gt-mcp 内嵌 Developer Plane 现场编译插件
+# （pkg/plugindev/build.go 的 build_plugin），二是现场编译远程探针
+# （cmd/gt-mcp/agent_build.go，配合 gcc/libpcap-dev 与 /src 源码，见 runtime 阶段）。
 #
 # pcap 说明：pipeline 仍可在服务端本地开 pcap 源（实时网卡抓包 / pcap 文件源），
 # 因此镜像带 pcap（cgo）编译；agent（gt-agent）推流入口是纯 Go gRPC，服务端
@@ -150,6 +151,25 @@ RUN --mount=type=cache,target=/osxcross-tarballs \
         echo "==> BUILD_DARWIN_AGENT=0 - skipping osxcross (darwin agents unavailable in this image)"; \
     fi
 
+# ---- Linux ARM64 交叉工具链（仅 BUILD_ARM_AGENT=1）----
+# 在 x86_64 builder 上交叉编译 linux/arm64 的可抓包探针（树莓派 4/5、ARM 服务器等）：
+# gopacket/pcap 在 linux 走 cgo，需 aarch64 gcc 与 arm64 的 libpcap 头文件
+# （multiarch 的 libpcap-dev:arm64）；libc6-dev-arm64-cross 是 cgo 链接 libc 所需。
+#   - BUILD_ARM_AGENT=0 可整体跳过（探针由 aarch64 Linux 宿主 `make build-agents`
+#     产出，经 GT_AGENT_BIN_DIR 补充，下载页自动标 linux/arm64 不可用）；
+# 安装失败只 WARN 不中断构建：镜像退化为无 linux/arm64，下载页如实标不可用。
+ARG BUILD_ARM_AGENT=1
+RUN if [ "${BUILD_ARM_AGENT}" = "1" ]; then \
+        dpkg --add-architecture arm64 \
+        && apt-get update \
+        && apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross libpcap-dev:arm64 \
+        && echo "==> aarch64 toolchain ready" \
+    || { echo "WARN: aarch64 toolchain install failed - linux/arm64 agent will be skipped"; }; \
+    else \
+        echo "==> BUILD_ARM_AGENT=0 - skipping aarch64 toolchain (linux/arm64 unavailable in this image)"; \
+    fi
+
 COPY . .
 
 # 前端产物嵌入 gt-mcp（//go:embed cmd/gt-mcp/webui）。.dockerignore 已把
@@ -178,21 +198,37 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 # 远程探针（gt-agent）预置产物：/download/agent 按 /opt/gametrace/agents 目录
 # 扫描平台下发（见 agent_download.go）。命名与 availableAgentPlatforms 对齐：
 #   - gt-agent-linux-amd64：cgo+pcap 原生编译（libpcap-dev 已装）；
-#   - gt-agent-windows-amd64.exe：gopacket/pcap 在 Windows 纯 Go（运行时加载
-#     wpcap.dll），CGO_ENABLED=0 交叉编译，无需 mingw/Npcap SDK；
+#   - gt-agent-linux-arm64：cgo+pcap aarch64 交叉编译（BUILD_ARM_AGENT=1 时，
+#     gcc-aarch64-linux-gnu + libpcap-dev:arm64），树莓派/ARM 服务器用；
+#   - gt-agent-windows-{amd64,arm64}.exe：gopacket/pcap 在 Windows 纯 Go（运行时
+#     加载 wpcap.dll），CGO_ENABLED=0 交叉编译，无需 mingw/Npcap SDK；
 #   - gt-agent-darwin-{amd64,arm64}：osxcross 交叉编译（BUILD_DARWIN_AGENT=1 时），
 #     运行时用 macOS 系统自带 libpcap。
-# darwin 编译失败只 WARN 不中断（镜像退化为 linux+windows，下载页如实标不可用）。
+# darwin/arm64 交叉编译失败只 WARN 不中断（镜像退化为不带对应平台，下载页如实标不可用）。
 RUN --mount=type=cache,target=/root/.cache/go-build \
     set -e; \
     CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
         go build -tags pcap -trimpath \
         -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
         -o /out/agents/gt-agent-linux-amd64 ./cmd/gt-agent; \
+    if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then \
+        echo "==> cross-compile linux/arm64 (aarch64)"; \
+        CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
+            go build -tags pcap -trimpath \
+            -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
+            -o /out/agents/gt-agent-linux-arm64 ./cmd/gt-agent \
+            || echo "WARN: linux/arm64 build failed - skipped"; \
+    else \
+        echo "==> no aarch64 gcc - linux/arm64 agent skipped"; \
+    fi; \
     CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
         go build -tags pcap -trimpath \
         -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
         -o /out/agents/gt-agent-windows-amd64.exe ./cmd/gt-agent; \
+    CGO_ENABLED=0 GOOS=windows GOARCH=arm64 \
+        go build -tags pcap -trimpath \
+        -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
+        -o /out/agents/gt-agent-windows-arm64.exe ./cmd/gt-agent; \
     if [ -x /osxcross/target/bin/o64-clang ]; then \
         export PATH="/osxcross/target/bin:${PATH}"; \
         export MACOSX_DEPLOYMENT_TARGET=11.0; \
@@ -229,10 +265,11 @@ ARG APT_MIRROR=mirrors.tencent.com
 RUN sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources
 
 # libpcap0.8：gopacket/pcap（cgo）的运行时共享库。
-# 不再安装 gcc/libpcap-dev：原为远程 agent 现场编译（-tags pcap 走 cgo）所需，
-# 现 agent 改走预置二进制；build_plugin 编译插件是纯 Go，亦无需 gcc。
+# gcc/libc6-dev/libpcap-dev：「现场编译」远程探针（agent_build.go）走 cgo -tags pcap，
+# 编译期需要 gcc 与 libpcap 头文件——key 保留它们，平台没有预置产物时可现场补齐。
+# build_plugin 编译插件是纯 Go，仅依赖 Go 工具链（下方已复制），无需 gcc。
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends libpcap0.8 \
+	&& apt-get install -y --no-install-recommends libpcap0.8 gcc libc6-dev libpcap-dev \
 	&& rm -rf /var/lib/apt/lists/* \
 	&& useradd --system --create-home --home-dir /data gametrace \
 	# 预建插件目录：进程只在 scaffold 时懒创建它，首次 list/build 前不存在会让
@@ -253,12 +290,15 @@ RUN chmod +x /usr/local/bin/gt-singbox-agent
 COPY --from=builder /out/agents/. /opt/gametrace/agents/
 RUN chown -R gametrace:gametrace /opt/gametrace/agents
 
-# == Developer Plane 插件编译：gt-mcp 内嵌的 PluginDev 会现场 `go build` 插件
-#    （pkg/plugindev/build.go），故 runtime 保留 Go 工具链 + 模块缓存；构建缓存落
-#    /data（gametrace 可写 HOME）。远程 Agent 已改「预置二进制」，不再现场编译，因此不
-#    携带 gt-agent 源码、也不装 gcc/libpcap-dev（见上方 apt 安装）。
+# == Developer Plane 插件编译 + 远程探针现场编译：gt-mcp 内嵌的 PluginDev 会现场
+#    `go build` 插件（pkg/plugindev/build.go），故 runtime 保留 Go 工具链 + 模块缓存；
+#    构建缓存落 /data（gametrace 可写 HOME）。远程 Agent 的「现场编译」
+#    （cmd/gt-mcp/agent_build.go）复用同一工具链，另需 gcc/libpcap-dev（上方 apt）
+#    与仓库源码（下方 COPY /src，agentSrcDir 的 GT_AGENT_SRC_DIR 指向这里）。
 COPY --from=builder /usr/local/go /usr/local/go
 COPY --from=builder /go/pkg/mod /go/pkg/mod
+# 现场编译远程探针的源码根（含 go.mod 与 cmd/gt-agent；只读，编译产物写 GT_AGENT_BIN_DIR）。
+COPY --from=builder /src /src
 
 ENV PATH=/usr/local/go/bin:${PATH} \
 	# 本地模块缓存：复用镜像内置缓存，避免插件编译时再访问网络
@@ -270,8 +310,10 @@ ENV PATH=/usr/local/go/bin:${PATH} \
 	GOPROXY=https://goproxy.cn,direct \
 	GOSUMDB=sum.golang.google.cn \
 	# 远程 agent 预置产物目录（镜像内建，见下方 COPY）：agentBinDir() 优先读此
-		# 变量，否则回退到 WORKDIR(/data) 下的 ./build/agents。
-		GT_AGENT_BIN_DIR=/opt/gametrace/agents
+	# 变量，否则回退到 WORKDIR(/data) 下的 ./build/agents。
+	GT_AGENT_BIN_DIR=/opt/gametrace/agents \
+	# 现场编译远程探针的源码根（agent_build.go 的 agentSrcDir 优先读此）。
+	GT_AGENT_SRC_DIR=/src
 
 # 远程 agent 预置产物目录（镜像内建）：gt-mcp 的 GT_AGENT_BIN_DIR 默认指向这里
 # （见 agentBinDir），agent 下载按此目录扫可用平台。需要额外平台（如 darwin）时，

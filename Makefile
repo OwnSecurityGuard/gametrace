@@ -86,17 +86,17 @@ build-agent:
 # 远程 agent 需要在"用户本机"做实时抓包。Docker 镜像已内建 linux/amd64 与
 # windows/amd64 两份可抓包探针（见 Dockerfile builder），本 target 供裸机部署
 # 或补充平台时预置（产物同样会进 GT_AGENT_BIN_DIR 扫描）：
-#   - windows/amd64：gopacket/pcap 在 Windows 是纯 Go（运行时加载 wpcap.dll），
-#     CGO_ENABLED=0 即可交叉编译，无需 mingw；
-#   - linux/amd64：cgo libpcap，需在 linux 宿主构建（windows/mac 宿主请配好
-#     mingw/交叉工具链）；
+#   - windows/amd64、windows/arm64：gopacket/pcap 在 Windows 是纯 Go（运行时加载
+#     wpcap.dll），CGO_ENABLED=0 即可交叉编译，无需 mingw；
+#   - linux/amd64：cgo libpcap，需在 linux(amd64) 宿主构建；
+#   - linux/arm64：cgo libpcap，需 aarch64 Linux 宿主构建（含 libpcap-dev）；
 #   - darwin/amd64、darwin/arm64：cgo libpcap，只能在 macOS 宿主构建——非 mac
 #     宿主会跳过并在结尾打印 WARN（对应下载页平台如实标为不可用）。
 # 产物是「通用」gt-agent（不带 embedded 标签），下载时由服务端把
 # config.embedded.json 作为 sidecar 打进 zip，运行时从 exe 同目录读取；
 # 缺平台的产物未提供时，后端 get_agent_download_options 会如实标记
 # 该平台不可下载（不会像旧方案那样回落到服务端本机平台）。
-AGENT_PLATFORMS := windows/amd64 linux/amd64 darwin/amd64 darwin/arm64
+AGENT_PLATFORMS := windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 build-agents:
 	set -e; \
 	mkdir -p build/agents; \

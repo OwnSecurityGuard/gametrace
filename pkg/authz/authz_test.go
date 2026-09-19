@@ -145,23 +145,6 @@ func TestDecidePluginLease(t *testing.T) {
 	}
 }
 
-func TestAccessCodeActionAllowed(t *testing.T) {
-	alice := Principal{User: "alice"}
-	bob := Principal{User: "bob"}
-	if !AccessCodeActionAllowed(alice, ActionAccessCodeCreate, "alice") {
-		t.Fatal("creator can create own code")
-	}
-	if AccessCodeActionAllowed(bob, ActionAccessCodeCreate, "alice") {
-		t.Fatal("non-creator cannot create for others")
-	}
-	if !AccessCodeActionAllowed(bob, ActionAccessCodeCreate, "") {
-		t.Fatal("anonymous-owner codes are claimable/creatable by anyone (anonymous deployments)")
-	}
-	if !AccessCodeActionAllowed(bob, ActionAccessCodeClaim, "") {
-		t.Fatal("claim is an unauthenticated endpoint by design")
-	}
-}
-
 // 编译期固定权限矩阵：任何对 projectActionRole / sessionProjectActionRole 的
 // 无意识改动都会让这份清单失配而编译失败。
 var (

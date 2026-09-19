@@ -196,7 +196,7 @@ export function ProbeAdminDialog({ open, onClose, onImported }: ProbeAdminDialog
           </div>
         ) : probes.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border bg-muted/40 px-3 py-6 text-center text-sm text-muted-foreground">
-            还没有探针接入。通过顶部「接入设备」生成启动码，在成员机上运行 gt-agent 完成接入。
+            还没有探针接入。通过顶部「接入设备」下载探针，在成员机上运行 gt-agent 完成接入。
           </div>
         ) : (
           probes.map((p) => {

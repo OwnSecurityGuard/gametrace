@@ -1,9 +1,10 @@
 // agent_download.go — 远程 agent 下载端点与选项查询。
 //
 // 让不在同一网络环境的成员也能抓包上报：用户在前端选择目标平台 + 抓包端口，服务端
-// 打开一个 agent 接收会话，再把平台对应的**预置二进制**（见 Makefile `build-agents`，
-// 产物位于 build/agents/，可由 GT_AGENT_BIN_DIR 覆盖）连同 config.embedded.json
-// 打进 zip 下发。终端用户拿到产物直接运行，无需任何命令行参数。不再服务端现场编译。
+// 打开一个 agent 接收会话，再把平台对应的二进制（镜像预置产物见 Makefile
+// `build-agents` / Dockerfile builder，位于 build/agents/，可由 GT_AGENT_BIN_DIR
+// 覆盖；缺失且可现场编译的平台由 agent_build.go 现场 go build 补齐）连同
+// config.embedded.json 打进 zip 下发。终端用户拿到产物直接运行，无需任何命令行参数。
 package main
 
 import (
@@ -168,7 +169,8 @@ func (m *mcpCapture) agentBinDir() (string, error) {
 	}(), nil
 }
 
-// prebuiltAgentPlatform 是一份已预置（或缺失）的 agent 平台产物。
+// prebuiltAgentPlatform 是一份已预置（或缺失）的 agent 平台产物，
+// 附带现场编译状态（agent_build.go）：Buildable/Building/LastError。
 type prebuiltAgentPlatform struct {
 	OS        string `json:"os"`        // windows / linux / darwin
 	Arch      string `json:"arch"`      // amd64 / arm64
@@ -176,14 +178,28 @@ type prebuiltAgentPlatform struct {
 	ExeSuffix bool   `json:"exe"`       // 是否需要 .exe 后缀
 	Available bool   `json:"available"` // 该平台产物是否已预置
 	Filename  string `json:"filename"`  // 磁盘文件名（含 .exe 时）
+	// Buildable：该平台能否在服务器现场编译（与 available 无关）。
+	Buildable bool `json:"buildable"`
+	// Building：现场编译是否在途（前端的「编译中」状态）。
+	Building bool `json:"building"`
+	// LastError：该平台最近一次现场编译失败原因（成功后清空）。
+	LastError string `json:"last_error,omitempty"`
 }
 
 // prebuiltplatforms 定义下载 agent 支持的目标平台矩阵（按公开顺序）。
-// Docker 镜像默认内建四份可抓包探针（见 Dockerfile）：linux/amd64（cgo+pcap）、
-// windows/amd64（纯 Go pcap）与 darwin/amd64、darwin/arm64（osxcross 交叉编译）。
-// BUILD_DARWIN_AGENT=0 或 osxcross 安装/编译失败时 darwin 产物缺失，本表会在
-// availableAgentPlatforms 里如实标为不可用（macOS 宿主 `make build-agents`
-// 构建后放进 GT_AGENT_BIN_DIR 目录即可补上）。
+// 全部候选都会返回给前端以供自由选择；系统按每种组合动态判定处理方式：
+//
+//	available  — 产物已在 GT_AGENT_BIN_DIR，直接下载；
+//	buildable  — 可在服务器现场编译（agent_build.go 的 plan）；
+//	两者皆无 — 需镜像构建期预置（linux/arm64 由 builder aarch64 交叉编译，
+//	darwin 由 osxcross），或经 GT_AGENT_BIN_DIR 补充。
+//
+// Docker 镜像内建六份可抓包探针（见 Dockerfile）：linux/amd64（cgo+pcap）、
+// windows/amd64、windows/arm64（纯 Go pcap）与 darwin/amd64、darwin/arm64
+// （osxcross 交叉编译），linux/arm64 由 gcc-aarch64-linux-gnu 交叉编译。
+// BUILD_DARWIN_AGENT=0 / BUILD_ARM_AGENT=0 / osxcross 失败时对应产物缺失，
+// 本表会在 availableAgentPlatforms 里如实标为不可用（macOS/aarch64 Linux 宿主
+// `make build-agents` 构建后放进 GT_AGENT_BIN_DIR 目录即可补上）。
 func prebuiltPlatforms() []struct {
 	OS        string
 	Arch      string
@@ -197,13 +213,15 @@ func prebuiltPlatforms() []struct {
 		ExeSuffix bool
 	}{
 		{"windows", "amd64", "Windows x64", true},
+		{"windows", "arm64", "Windows ARM64", true},
 		{"linux", "amd64", "Linux x64", false},
+		{"linux", "arm64", "Linux ARM64", false},
 		{"darwin", "amd64", "macOS Intel", false},
 		{"darwin", "arm64", "macOS Apple Silicon", false},
 	}
 }
 
-// availableAgentPlatforms 扫描 agentBinDir，返回每份产物及其可用性。
+// availableAgentPlatforms 扫描 agentBinDir，返回每份产物及其可用性 + 现场编译状态。
 func (m *mcpCapture) availableAgentPlatforms() []prebuiltAgentPlatform {
 	binDir, _ := m.agentBinDir()
 	out := make([]prebuiltAgentPlatform, 0, 4)
@@ -216,6 +234,8 @@ func (m *mcpCapture) availableAgentPlatforms() []prebuiltAgentPlatform {
 		if st, err := os.Stat(filepath.Join(binDir, fn)); err == nil && !st.IsDir() {
 			avail = true
 		}
+		platform := p.OS + "/" + p.Arch
+		_, _, _, _, buildable := plan(platform)
 		out = append(out, prebuiltAgentPlatform{
 			OS:        p.OS,
 			Arch:      p.Arch,
@@ -223,9 +243,20 @@ func (m *mcpCapture) availableAgentPlatforms() []prebuiltAgentPlatform {
 			ExeSuffix: p.ExeSuffix,
 			Available: avail,
 			Filename:  fn,
+			Buildable: buildable == nil,
+			Building:  m.agentBuild != nil && m.agentBuild.building(platform),
+			LastError: mapIf(m.agentBuild != nil, func() string { return m.agentBuild.lastError(platform) }),
 		})
 	}
 	return out
+}
+
+// mapIf 三元式辅助：cond 成立才调用 f（避免 nil 指针）。
+func mapIf(cond bool, f func() string) string {
+	if cond {
+		return f()
+	}
+	return ""
 }
 
 // handleGetAgentDownloadOptions 返回下载 Agent 页面需要的服务端信息：
@@ -237,7 +268,7 @@ func (m *mcpCapture) handleGetAgentDownloadOptions(ctx context.Context, req mcp.
 	registry, ingest, src := m.advertisedAddrs(ctx, req.GetString("host", ""))
 	host, registryPort := splitHostPort(registry)
 	_, ingestPort := splitHostPort(ingest)
-	msg := "选择目标操作系统下载 Agent。解压后双击运行 gt-agent(.exe) 即可接入；抓包端口与解码插件稍后在「开始抓包」里指定，由平台下发给探针。"
+	msg := "选择目标操作系统下载 Agent。解压后双击运行 gt-agent(.exe) 即可接入；抓包端口与解码插件稍后在「开始抓包」里指定，由平台下发给探针。未预置的平台按页面提示处理：Windows x64/ARM64 与 Linux x64 可点「编译」由服务器现场生成；Linux ARM64 与 darwin 平台由镜像构建期预置（BUILD_ARM_AGENT / BUILD_DARWIN_AGENT）。"
 	if src != addrSourceEnv {
 		msg += " 注意：服务端未配置 GT_PUBLIC_HOST，回连地址是按调用方请求回推的——Docker/公网部署请在服务端设置 GT_PUBLIC_HOST（必要时配 GT_PUBLIC_REGISTRY_PORT / GT_PUBLIC_INGEST_PORT），否则远端探针可能连不上。"
 	}
@@ -310,9 +341,13 @@ func buildAgentZip(binPath string, cfgJSON []byte) ([]byte, error) {
 //
 // serveAgentZip 把选定的预置平台二进制与该平台对应的 sidecar 配置
 // （config.embedded.json，含回连地址与 token）打成 zip 下发。
-// cfgJSON 为空时回退占位 {}，但下载端点应始终传入带齐身份与回连的配置，
-// 否则探针解压即待命却无凭证，注册会被服务端拒绝（见 handleAgentDownload）。
-// 返回 true 表示成功写出 zip；false 表示已写出错误响应（404/400/500）。
+//
+// 平台缺失时的自动兜底：可现场编译的平台（linux/amd64、windows/amd64）自动触发
+// 编译并等待完成（显式「编译」按钮之外的第二条路径）；不可编译的平台（darwin
+// 缺失）给出补齐指引。cfgJSON 为空时回退占位 {}，但下载端点应始终传入带齐身份
+// 与回连的配置，否则探针解压即待命却无凭证，注册会被服务端拒绝（见
+// handleAgentDownload）。
+// 返回 true 表示成功写出 zip；false 表示已写出错误响应（404/400/5xx）。
 func (m *mcpCapture) serveAgentZip(w http.ResponseWriter, platform string, cfgJSON []byte) bool {
 	binDir, _ := m.agentBinDir()
 	var binPath string
@@ -321,7 +356,33 @@ func (m *mcpCapture) serveAgentZip(w http.ResponseWriter, platform string, cfgJS
 			continue
 		}
 		if !p.Available {
-			http.Error(w, "platform "+platform+" is not available; prebuild it with `make build-agents` on a suitable host (darwin requires a macOS host)", http.StatusNotFound)
+			if m.agentBuild != nil && p.Buildable {
+				// 自动兜底：触发现场编译并等它完成（显式「编译」之外的路）。
+				status, terr := m.agentBuild.trigger(platform)
+				if terr != nil {
+					http.Error(w, "cannot build agent "+platform+": "+terr.Error(), http.StatusBadRequest)
+					return false
+				}
+				if status == "building" && !m.agentBuild.wait(platform, agentBuildTimeout) {
+					http.Error(w, "agent compile in progress, please retry in a moment", http.StatusServiceUnavailable)
+					return false
+				}
+				if lastErr := m.agentBuild.lastError(platform); lastErr != "" {
+					http.Error(w, "compile agent "+platform+" failed: "+lastErr, http.StatusInternalServerError)
+					return false
+				}
+				binPath = filepath.Join(binDir, p.Filename)
+				break
+			}
+			hint := "platform " + platform + " is not prebuilt"
+			if strings.HasPrefix(platform, "darwin/") {
+				hint += "; darwin requires a macOS toolchain — rebuild the image with BUILD_DARWIN_AGENT=1, or run `make build-agents` on a macOS host and mount the result via GT_AGENT_BIN_DIR"
+			} else if platform == "linux/arm64" {
+				hint += "; linux/arm64 requires an aarch64 toolchain — rebuild the image with BUILD_ARM_AGENT=1 (gcc-aarch64-linux-gnu) to prebuild it, or build on aarch64 Linux and mount the result via GT_AGENT_BIN_DIR"
+			} else {
+				hint += "; click 编译 in the download panel to build it on the server"
+			}
+			http.Error(w, hint, http.StatusNotFound)
 			return false
 		}
 		binPath = filepath.Join(binDir, p.Filename)
@@ -357,48 +418,9 @@ func (m *mcpCapture) serveAgentZip(w http.ResponseWriter, platform string, cfgJS
 	return true
 }
 
-// codeAgentConfig 为启动码接入模式构造 sidecar 配置（含 token），供下载 zip 烧入。
-// 与 /access/claim 返回内容一致；返回 ok=false 时错误响应已写出。
-func (m *mcpCapture) codeAgentConfig(w http.ResponseWriter, r *http.Request, code string) ([]byte, bool) {
-	_, token, registry, ingest, ok := m.resolveAccessCode(w, r, code)
-	if !ok {
-		return nil, false
-	}
-	cfgJSON, err := json.Marshal(map[string]any{
-		"server":        registry,
-		"registry_addr": registry,
-		"ingest_addr":   ingest,
-		"token":         token,
-	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return nil, false
-	}
-	return cfgJSON, true
-}
-
 func (m *mcpCapture) handleAgentDownload(w http.ResponseWriter, r *http.Request) {
 	owner := auth.OwnerFrom(r.Context())
 	q := r.URL.Query()
-
-	// 启动码接入：token 来自启动码对应的身份（与 /access/claim 同源），一并烧进
-	// config.embedded.json，使下载产物自包含——即使脱离接入脚本直接运行也有凭证。
-	if code := strings.TrimSpace(q.Get("code")); code != "" {
-		platform := strings.TrimSpace(q.Get("platform"))
-		if platform == "" {
-			http.Error(w, "platform (os/arch) is required, e.g. windows/amd64", http.StatusBadRequest)
-			return
-		}
-		cfgJSON, ok := m.codeAgentConfig(w, r, code)
-		if !ok {
-			return // 错误响应已在 codeAgentConfig 内写出
-		}
-		if !m.serveAgentZip(w, platform, cfgJSON) {
-			return
-		}
-		slog.Info("agent downloaded (code mode)", "platform", platform)
-		return
-	}
 
 	platform := strings.TrimSpace(q.Get("platform"))
 	if platform == "" {

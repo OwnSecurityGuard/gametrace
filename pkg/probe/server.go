@@ -29,7 +29,7 @@ const heartbeatInterval = 10 * time.Second
 // Server 实现 proto.AgentControlServer，与 AgentIngest 共用同一个 gRPC 端口（:9092）。
 //
 // 鉴权模型：
-//   - RegisterProbe：用户 token（claim 启动码所得）；匿名部署 owner=local；
+//   - RegisterProbe：用户 token（下载产物内置）；匿名部署 owner=local；
 //   - Connect / UploadArchive：必须用 probe_token（auth resolver 解析出 ProbeID）。
 type Server struct {
 	proto.UnimplementedAgentControlServer

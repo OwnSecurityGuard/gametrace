@@ -45,10 +45,6 @@ func isAPIPath(p string) bool {
 			return true
 		}
 	}
-	// /setup.sh 等单文件端点（无扩展名但属于 API）
-	if p == "/setup.sh" {
-		return true
-	}
 	return false
 }
 // 失败只可能是编译环境异常，panic 比静默 500 更早暴露问题。

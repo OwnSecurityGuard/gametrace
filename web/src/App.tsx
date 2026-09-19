@@ -418,7 +418,7 @@ export default function App() {
               size="sm"
               className="h-8"
               onClick={() => setAgentDownloadOpen(true)}
-              title="接入设备（生成启动码，把成员电脑接进团队抓包）"
+              title="接入设备（下载探针，把成员电脑接进团队抓包）"
               aria-label="接入设备"
             >
               <Download className="h-4 w-4" />

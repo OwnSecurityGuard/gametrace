@@ -48,13 +48,13 @@ message PushAck {
 //
 // 成员机在 NAT 后，平台无法主动连它；远端控制必须走探针 outbound 建立的长流。
 // AgentControl 与 AgentIngest 共用同一个 gRPC 端口（默认 :9092），零新增入站端口：
-//   - RegisterProbe：claim 启动码后用用户 token 一次性换发探针长期凭证（probe_id + probe_token）；
+//   - RegisterProbe：用户 token 一次性换发探针长期凭证（probe_id + probe_token）；
 //   - Connect：控制双向流。指令下行（Command），心跳/结果/归档摘要上行（ControlEvent）；
 //   - UploadArchive：按需回放本机归档（离线导入，独立流避免挤占控制流）。
 // ============================================================================
 
 service AgentControl {
-  // RegisterProbe 注册探针并换发长期凭证。鉴权：用户 token（claim 所得）。
+  // RegisterProbe 注册探针并换发长期凭证。鉴权：用户 token（下载产物内置）。
   // 同一机器重复注册（token 丢失重接）携带 prev_probe_id 覆盖旧记录。
   rpc RegisterProbe(RegisterProbeRequest) returns (RegisterProbeAck);
   // Connect 控制双向流。鉴权：probe_token。开流首包必须是 ProbeHello。

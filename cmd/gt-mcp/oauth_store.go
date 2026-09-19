@@ -1,6 +1,6 @@
 // oauth_store.go — MCP OAuth 浏览器授权的持久化（oauth_clients / oauth_codes 两张表）。
 //
-// 设计（与 access_codes 同库同模式，auxDB = sqlite 的 control.sqlite）：
+// 设计（auxDB = sqlite 的 control.sqlite，与项目/用户等组织表同库）：
 //   - oauth_clients：RFC 7591 动态注册的 agent 客户端身份（client_id + redirect 白名单）。
 //     注意它是「AI 客户端」的身份，不是平台用户——真正的授权门在 approve 必须持有
 //     有效用户 Bearer token，agent 拿不拿得到 token 完全取决于用户在授权页的同意。
@@ -9,7 +9,7 @@
 //     当前 token——密钥不进 OAuth 表，且 approve 与兑换之间用户被 revoke_user
 //     撤销时兑换自然失败（invalid_grant），不存在"已发码即锁定旧 token"的窗口。
 //   - Consume 用 `UPDATE ... WHERE consumed=0` 的原子消费语义（RowsAffected==1
-//     才算成功），比 accessCodeStore.MarkClaimed 更严格，天然防并发双重兑换。
+//     才算成功），比 update-then-check 更严格，天然防并发双重兑换。
 package main
 
 import (

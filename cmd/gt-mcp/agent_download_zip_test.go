@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// TestServePrebuiltAgentByPlatform drives serveAgentZip (the "code mode"
-// download used by setup.sh / PowerShell onboarding) against a temp bin dir.
+// TestServePrebuiltAgentByPlatform drives serveAgentZip (the shared zip
+// packaging used by /download/agent) against a temp bin dir.
 func TestServePrebuiltAgentByPlatform(t *testing.T) {
 	dir := t.TempDir()
 	// 构造 linux/amd64 的假预置产物，供 availableAgentPlatforms 识别为 available。

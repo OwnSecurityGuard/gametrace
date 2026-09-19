@@ -12,6 +12,12 @@ export interface AgentPlatform {
   available: boolean;
   /** 磁盘文件名（含 .exe 时） */
   filename: string;
+  /** 该平台能否在服务器现场编译（与 available 无关；darwin 恒 false） */
+  buildable: boolean;
+  /** 现场编译是否在途（前端的「编译中」状态） */
+  building: boolean;
+  /** 最近一次现场编译失败原因（成功后为空） */
+  last_error?: string;
 }
 
 /** 已注册插件归类后的友善呈现项（供 StartCaptureDialog 卡片选择使用）。 */

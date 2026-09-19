@@ -119,9 +119,12 @@ type mcpCapture struct {
 	openRegister bool
 	// authz 是项目/会话/插件/租约动作的鉴权器（策略在 pkg/authz，role 解析在本包）。
 	authz *projectAuthorizer
-	// 启动码（GT-XXXX）存取；ownerSecret 用的 token 表在装配处解析填充。
-	accessCodes   *accessCodeStore
+	// ownerSecret 用的 token 表在装配处解析填充。
 	tokensByOwner map[string]string
+	// agentBuild 是 gt-agent 探针的现场编译器（agent_build.go）：下载页点「编译」
+	// 或下载端点发现平台缺失时，在服务器现场 go build 补齐（linux/amd64、
+	// windows/amd64；darwin 维持镜像预置）。
+	agentBuild *agentBuildManager
 	// OAuth 浏览器授权（oauth.go）：DCR 客户端注册与一次性授权码存取。
 	oauthClients *oauthClientStore
 	oauthCodes   *oauthCodeStore
@@ -440,7 +443,7 @@ func newMCPCapture(iface, pluginsDir, workDir, pipelineAddr, httpAddr string, mc
 		return nil, fmt.Errorf("open control store: %w", err)
 	}
 
-	// projects / access_codes 等组织-访问子系统始终落在本地 sqlite 文件
+	// projects / users 等组织-访问子系统始终落在本地 sqlite 文件
 	// （不在本次 PG 化范围）：sqlite 模式复用 control.sqlite；postgres 模式用
 	// 独立的 control-aux.sqlite，避免与 PG 控制库耦合。
 	var auxDB *sql.DB
@@ -465,13 +468,6 @@ func newMCPCapture(iface, pluginsDir, workDir, pipelineAddr, httpAddr string, mc
 		return nil, fmt.Errorf("init user store: %w", err)
 	}
 
-	// 启动码表（access_codes）落在同一个 auxDB（sqlite 模式即 control.sqlite）。
-	accessCodes := newAccessCodeStore(auxDB)
-	if err := accessCodes.Init(); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("init access code store: %w", err)
-	}
-
 	// OAuth 表（oauth_clients / oauth_codes）同库（MCP 浏览器授权，见 oauth.go）。
 	oauthClients := newOAuthClientStore(auxDB)
 	if err := oauthClients.Init(); err != nil {
@@ -493,7 +489,6 @@ func newMCPCapture(iface, pluginsDir, workDir, pipelineAddr, httpAddr string, mc
 		projects:       projects,
 		users:          users,
 		authz:          newProjectAuthorizer(projects),
-		accessCodes:    accessCodes,
 		tokensByOwner:  loadTokensByOwner(),
 		oauthClients:   oauthClients,
 		oauthCodes:     oauthCodes,
@@ -514,6 +509,8 @@ func newMCPCapture(iface, pluginsDir, workDir, pipelineAddr, httpAddr string, mc
 	}
 	// 订阅 gt-pipeline 的插件事件流并广播给 SSE 客户端（断线自动重连）。
 	m.startPluginEventWatcher()
+	// 现场编译器装配（agent_build.go）：全局并发上限见 agentBuildGlobalLimit。
+	m.agentBuild = newAgentBuildManager(m, agentBuildGlobalLimit)
 	return m, nil
 }
 
@@ -2796,17 +2793,6 @@ func main() {
 		mcp.WithDescription("List capture projects visible to the current user (admin sees all owners' projects; normal users only see their own and projects they are a member of)."),
 	), capture.handleListProjects)
 
-	// 启动码接入：生成/列出 GT-XXXX 码，成员在目标机输入即可自动注册并回连抓包。
-	// 启动码只带身份与回连地址；抓包端口与解码插件在 probe_start_capture 时决定。
-	s.AddTool(mcp.NewTool("create_access_code",
-		mcp.WithDescription("Generate an access code (GT-XXXX-XXXX) bound to the current user. A member enters this code when first starting gt-agent to auto-register and connect. The code only carries identity + back-connect address — capture port/plugin are decided later at probe_start_capture. Optional: project_id, platform, server."),
-		mcp.WithString("project_id"),
-		mcp.WithString("platform"), mcp.WithString("server"),
-	), capture.handleCreateAccessCode)
-	s.AddTool(mcp.NewTool("list_access_codes",
-		mcp.WithDescription("List access codes visible to the current user (global admin sees all)."),
-	), capture.handleListAccessCodes)
-
 	s.AddTool(mcp.NewTool("get_project",
 		mcp.WithDescription("Get a single capture project with its metadata and recent sessions."),
 		mcp.WithString("id", mcp.Required(), mcp.Description("Project ID")),
@@ -2906,6 +2892,8 @@ func main() {
 	mux.HandleFunc("/events/plugins", capture.handleEventsSSE)
 	// 远程 Agent 下载：处于鉴权链内，访问者即接收会话 owner。
 	mux.HandleFunc("/download/agent", capture.handleAgentDownload)
+	// 远程 Agent 现场编译：平台缺失产物时点「编译」触发（鉴权同上）。
+	mux.HandleFunc("/agent/build", capture.handleAgentBuild)
 
 	// CORS：仅放行 -allowed-origins 中的 Origin（T12 之前是 *，任意站点都能
 	// 跨域调用 MCP 工具）。未配置任何 origin 时不返回 CORS 头，同源用法不受影响。
@@ -2930,14 +2918,8 @@ func main() {
 	// （与扫码页展示的信息一致），不含任何会话/抓包数据，故挂载在鉴权链之外。
 	root := http.NewServeMux()
 	root.HandleFunc("/singbox/profile", capture.handleSingboxProfile)
-	// 自助注册鉴权豁免：注册者本来就是"还没有身份的人"（与 /access/claim 同理）。
+	// 自助注册鉴权豁免：注册者本来就是"还没有身份的人"。
 	root.HandleFunc("/access/register", capture.handleRegister)
-	// 启动码 claim / setup.sh 鉴权豁免：agent 首启（还没有 token）与 `curl | bash`
-	// 一键脚本都无法携带 Bearer，两者只凭一次性+限时启动码即可工作（见 access_code.go）。
-	root.HandleFunc("/access/claim", capture.handleAccessClaim)
-	root.HandleFunc("/setup.sh", capture.handleSetupScript)
-	// Windows 一键脚本（与 /setup.sh 对称）：PowerShell  irm ... | iex 一键接入。
-	root.HandleFunc("/setup.ps1", capture.handleSetupScriptPS1)
 	// MCP OAuth 浏览器授权（oauth.go）：well-known 发现 + DCR + 授权码流程，
 	// 整组鉴权豁免——401 挑战头（http_server.go oauthChallenge）把客户端引到这里，
 	// /access/* 豁免同理：发起授权的人本来就是"还没有 token 的 agent"。

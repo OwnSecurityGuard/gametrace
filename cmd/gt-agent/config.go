@@ -1,11 +1,11 @@
 package main
 
-// agentConfig 是探针的持久化配置（probe.json）+ 首启引导（命令行 flag / 启动码）。
+// agentConfig 是探针的持久化配置（probe.json）+ 首启引导（命令行 flag / 下载固化配置）。
 //
 // 优先级（v2 探针优化，docs/plans/2026-09-05 §4.1）：
 //   1. 命令行 flag 非空 → 覆盖并写回 probe.json（首启引导一次性生效）；
 //   2. probe.json 已有值 → 直接用（此后一切改参走本地控制面 / 远端指令）；
-//   3. embedded / sidecar / 启动码 → 首启引导的默认值来源。
+//   3. embedded / sidecar → 首启引导的默认值来源。
 //
 // probe.json 只存"身份与回连"，抓包参数（iface/ports/bpf）是会话级配置，
 // 由平台指派或本地控制面临时给定，不落 probe.json。
@@ -124,7 +124,7 @@ func saveAgentConfig(cfg *agentConfig) error {
 }
 
 // suppliedConfig 是「本次下发」的身份与回连目标：命令行 flag / 下载产物里的
-// config.embedded.json / 启动码领取结果。它们是同一样东西的三种来源。
+// config.embedded.json。它们是同一样东西的两种来源。
 type suppliedConfig struct {
 	token    string
 	server   string

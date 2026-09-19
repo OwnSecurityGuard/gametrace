@@ -1,7 +1,7 @@
 package main
 
 // register.go：探针注册（AgentControl.RegisterProbe）。
-// claim 启动码 → 换发长期凭证（probe_id + probe_token）→ 落盘 probe.json。
+// 用户 token → 换发长期凭证（probe_id + probe_token）→ 落盘 probe.json。
 // 已有凭证直接复用；凭证被吊销（服务端拒绝）时清除本地凭证，等下次带用户 token 重接。
 
 import (

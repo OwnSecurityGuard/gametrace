@@ -4,7 +4,7 @@
 #   - control 元数据（sessions/probes 等）与事件数据统一存 PG（gt-pgdata 卷），
 #     pipeline 与 mcp 通过 GT_DB_DRIVER=postgres + GT_DB_DSN 访问同一库；
 #   - gt-data 共享卷仍保留，承载非数据库文件：plugins 目录、会话本地
-#     metadata.json、projects/access_codes 的 control-aux.sqlite（PG 模式下
+#     metadata.json、projects/users 等组织表的 control-aux.sqlite（PG 模式下
 #     有意不进 PG，见 cmd/gt-mcp/main.go）；
 #   - SQLite 模式（原默认）回滚方式：删掉 GT_DB_DRIVER/GT_DB_DSN 两个环境
 #     变量与 postgres 服务即可，两套模式的配置入口是同一对 env（pkg/config）。
@@ -58,9 +58,12 @@ x-build: &server-build
   # 不主动检查基础镜像更新（默认 false）：省去每次构建访问 Docker Hub。
   # 要刷新基础镜像：GT_BUILD_PULL=true docker compose up -d
   pull: ${GT_BUILD_PULL:-false}
-  # 探针 4 平台编译开关：默认 1（osxcross 交叉编译 darwin/amd64 + darwin/arm64，
-  # 见 Dockerfile；SDK 下载/编译失败会自动退化为 linux+windows 并 WARN）。
-  # 网络受限环境可设 0 跳过，darwin 探针由 macOS 宿主 make build-agents 补充。
+  # 探针平台编译开关：默认 1——
+  #   GT_BUILD_DARWIN_AGENT：osxcross 交叉编译 darwin/amd64 + darwin/arm64（见 Dockerfile；
+  #     SDK 下载/编译失败会自动退化为无 darwin 并 WARN）；
+  #   GT_BUILD_ARM_AGENT：aarch64 交叉编译 linux/arm64（gcc-aarch64-linux-gnu +
+  #     libpcap-dev:arm64；失败自动退化为无 linux/arm64 并 WARN）。
+  # 网络受限环境可设 0 跳过，缺失平台由对应宿主 make build-agents 补充。
   #
   # 版本戳：把宿主 git 的版本埋进镜像二进制（-version 输出），避免"看不出跑的是
   # 不是新版本"。不设时退回 Dockerfile 默认 dev/unknown（BuildTime 为空则不展示）。
@@ -71,6 +74,7 @@ x-build: &server-build
   #   docker compose up -d --build --force-recreate
   args:
     BUILD_DARWIN_AGENT: ${GT_BUILD_DARWIN_AGENT:-1}
+    BUILD_ARM_AGENT: ${GT_BUILD_ARM_AGENT:-1}
     VERSION: ${GT_VERSION:-dev}
     GIT_COMMIT: ${GT_GIT_COMMIT:-unknown}
     BUILD_TIME: ${GT_BUILD_TIME:-}

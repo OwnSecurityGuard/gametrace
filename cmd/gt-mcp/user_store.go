@@ -98,7 +98,7 @@ func (us *userStore) OwnerExists(ctx context.Context, owner string) (bool, error
 	return true, nil
 }
 
-// TokenByOwner 返回已存在用户的 token（启动码重复领取时复用，而非重建身份）。
+// TokenByOwner 返回已存在用户的 token（已注册身份复用，而非重建）。
 // 用户不存在返回 ("", nil)；仅数据库错误才返回 err。
 func (us *userStore) TokenByOwner(ctx context.Context, owner string) (string, error) {
 	var token string

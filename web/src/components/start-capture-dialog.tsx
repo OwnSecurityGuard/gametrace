@@ -347,7 +347,7 @@ export function StartCaptureDialog({
               <label className="text-sm font-medium">选择机器</label>
               {probes.length === 0 ? (
                 <div className="mt-1.5 rounded-lg border border-dashed border-border bg-muted/40 px-3 py-4 text-center text-xs text-muted-foreground">
-                  还没有可用的探针机器。通过顶部「接入设备」生成启动码，
+                  还没有可用的探针机器。通过顶部「接入设备」下载探针，
                   在目标机器上运行 gt-agent 完成接入。
                 </div>
               ) : (

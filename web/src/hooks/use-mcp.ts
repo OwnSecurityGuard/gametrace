@@ -58,11 +58,9 @@ import type {
   ProbeImportArchiveResult,
 } from "@/types/probe";
 import type {
-  CreateAccessCodeResult,
-  ListAccessCodesResult,
   ListUsersResult,
   RevokeUserResult,
-} from "@/types/access-code";
+} from "@/types/user";
 import type {
   ListProjectsResult,
   ProjectResult,
@@ -810,7 +808,7 @@ export function useConnectionFrames(
 // ===== 远程 Agent 下载 =====
 
 /** get_agent_download_options：返回下载 Agent 页面需要的服务端信息（可达 IP / registry+ingest 端口 / 平台）。 */
-export function useAgentDownloadOptions() {
+export function useAgentDownloadOptions(opts?: { refetchIntervalSec?: number }) {
   // 把浏览器看到的 host 传给服务端：NAT/端口映射下的对外地址服务端无从推导，
   // 只能靠部署方配 GT_PUBLIC_HOST 或调用方告知（回环地址不传，对远端探针无意义）。
   const host =
@@ -829,6 +827,9 @@ export function useAgentDownloadOptions() {
         loopback ? {} : { host },
       ),
     staleTime: 30_000, // 地址/平台变化不频繁，缓存 30s
+    // 现场编译进行中时由调用方要求高频轮询（默认不轮询）。
+    refetchInterval: opts?.refetchIntervalSec,
+    refetchIntervalInBackground: !!opts?.refetchIntervalSec,
   });
 }
 
@@ -913,39 +914,7 @@ export function useStopLeaseCapture() {
   });
 }
 
-// ===== 启动码接入（GT-XXXX，成员目标机免参数回连抓包）=====
-
-/** list_access_codes：列出当前用户可见的启动码。 */
-export function useAccessCodes() {
-  return useQuery({
-    queryKey: ["accessCodes"],
-    queryFn: () => mcpClient.callTool<ListAccessCodesResult>("list_access_codes"),
-    staleTime: 10_000,
-    // 「我的设备」接入闭环靠轮询驱动：认领/会话状态变化需在数秒内反映到页面。
-    refetchInterval: 4_000,
-  });
-}
-
-/** create_access_code：生成一个绑定当前用户的启动码（可选绑项目/平台/回连地址）。
- *  启动码只带身份与回连，不带抓包端口/插件——抓包在「开始抓包」时下发。 */
-export function useCreateAccessCode() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (vars: {
-      projectId?: string;
-      platform?: string;
-      server?: string;
-    }) =>
-      mcpClient.callTool<CreateAccessCodeResult>("create_access_code", {
-        project_id: vars.projectId ?? "",
-        platform: vars.platform ?? "",
-        server: vars.server ?? "",
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["accessCodes"] });
-    },
-  });
-}
+// ===== 成员账号管理（users 表）=====
 
 /** list_users：列出注册制用户（仅 global admin；非 admin 调用会抛错，由调用方降级隐藏）。 */
 export function useListUsers() {
