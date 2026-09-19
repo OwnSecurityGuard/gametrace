@@ -44,6 +44,7 @@ message ConnData {
 // ConnClose 连接关闭：插件可据此 flush 该连接的待组装缓冲。
 message ConnClose {
   string reason = 1;        // 关闭原因（可选）
+  int32  close_side = 2;    // 关闭侧：0=unknown，1=client（本机/客户端发起），2=server（服务端发起）
 }
 
 // PushResult 推送汇总统计。

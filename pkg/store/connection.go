@@ -38,6 +38,10 @@ type ConnectionSummary struct {
 	DurationSec float64   `json:"duration_sec"`
 	EventCount  int       `json:"event_count"`
 	FrameCount  int       `json:"frame_count"`
+	// Closed 表示连接是否已关闭（观测到 FIN/RST，或移动侧 ConnClose 上报）。
+	// ClosedBy 关闭方："client" | "server" | "unknown"；未关闭时为空串。
+	Closed   bool   `json:"closed"`
+	ClosedBy string `json:"closed_by"`
 }
 
 // ConnectionDetail 连接详情（Connection Detail 页面头部 + 统计）。
@@ -56,6 +60,9 @@ type ConnectionDetail struct {
 	EventCount  int       `json:"event_count"`
 	StreamCount int       `json:"stream_count"`
 	FrameCount  int       `json:"frame_count"`
+	// Closed / ClosedBy 语义同 ConnectionSummary。
+	Closed   bool   `json:"closed"`
+	ClosedBy string `json:"closed_by"`
 }
 
 // ConnectionEvent 连接内单个解码事件（Stream View 与 Events 子页共用）。
@@ -159,8 +166,13 @@ func (s *SQLiteStore) QueryConnections(ctx context.Context, sessionID string, li
 		       (SELECT f.src FROM raw_packets f WHERE f.conn_id = r.conn_id ORDER BY f.timestamp ASC, f.rowid ASC LIMIT 1) AS src,
 		       (SELECT f.dst FROM raw_packets f WHERE f.conn_id = r.conn_id ORDER BY f.timestamp ASC, f.rowid ASC LIMIT 1) AS dst,
 		       (SELECT f.protocol FROM raw_packets f WHERE f.conn_id = r.conn_id ORDER BY f.timestamp ASC, f.rowid ASC LIMIT 1) AS protocol,
-		       (SELECT f.metadata FROM raw_packets f WHERE f.conn_id = r.conn_id ORDER BY f.timestamp ASC, f.rowid ASC LIMIT 1) AS metadata
-		FROM (
+		       (SELECT f.metadata FROM raw_packets f WHERE f.conn_id = r.conn_id ORDER BY f.timestamp ASC, f.rowid ASC LIMIT 1) AS metadata,
+		       (SELECT f2.metadata FROM raw_packets f2
+		          WHERE f2.conn_id = r.conn_id
+		            AND f2.metadata IS NOT NULL
+		            AND f2.metadata LIKE '%"tcp_close"%'
+		          ORDER BY f2.timestamp ASC, f2.rowid ASC LIMIT 1) AS close_meta
+			FROM (
 			SELECT conn_id,
 			       MIN(timestamp) AS first_ts,
 			       MAX(timestamp) AS last_ts,
@@ -185,8 +197,8 @@ func (s *SQLiteStore) QueryConnections(ctx context.Context, sessionID string, li
 		var c ConnectionSummary
 		var firstTS, lastTS any
 		var src, dst, protocol string
-		var meta sql.NullString
-		if err := rows.Scan(&c.ConnID, &firstTS, &lastTS, &c.FrameCount, &src, &dst, &protocol, &meta); err != nil {
+		var meta, closeMeta sql.NullString
+		if err := rows.Scan(&c.ConnID, &firstTS, &lastTS, &c.FrameCount, &src, &dst, &protocol, &meta, &closeMeta); err != nil {
 			return nil, fmt.Errorf("scan connection: %w", err)
 		}
 		first, err := scanPacketTime(firstTS)
@@ -202,6 +214,7 @@ func (s *SQLiteStore) QueryConnections(ctx context.Context, sessionID string, li
 		c.DurationSec = c.EndTime.Sub(c.StartTime).Seconds()
 		c.Client, c.Server, c.Source = endpointsFromMeta(meta.String, src, dst)
 		c.Protocol = protocol
+		c.Closed, c.ClosedBy = closedByFromMeta(closeMeta.String, c.Client, c.Server)
 		index[c.ConnID] = len(conns)
 		conns = append(conns, c)
 		connIDs = append(connIDs, c.ConnID)
@@ -331,14 +344,21 @@ func (s *SQLiteStore) QueryConnectionDetail(ctx context.Context, sessionID, conn
 
 	// 端地址 / 协议 / 来源 / 应用/设备：取连接内第一帧。
 	var src, dst, protocol string
-	var meta sql.NullString
+	var meta, closeMeta sql.NullString
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT src, dst, protocol, metadata FROM raw_packets
-		WHERE conn_id = ? ORDER BY timestamp ASC LIMIT 1`,
-		connID,
-	).Scan(&src, &dst, &protocol, &meta); err == nil {
+		SELECT (SELECT src FROM raw_packets WHERE conn_id = ? ORDER BY timestamp ASC, rowid ASC LIMIT 1),
+		       (SELECT dst FROM raw_packets WHERE conn_id = ? ORDER BY timestamp ASC, rowid ASC LIMIT 1),
+		       (SELECT protocol FROM raw_packets WHERE conn_id = ? ORDER BY timestamp ASC, rowid ASC LIMIT 1),
+		       (SELECT metadata FROM raw_packets WHERE conn_id = ? ORDER BY timestamp ASC, rowid ASC LIMIT 1),
+		       (SELECT f2.metadata FROM raw_packets f2
+		          WHERE f2.conn_id = ? AND f2.metadata IS NOT NULL
+		            AND f2.metadata LIKE '%"tcp_close"%'
+		          ORDER BY f2.timestamp ASC, f2.rowid ASC LIMIT 1)`,
+		connID, connID, connID, connID, connID,
+	).Scan(&src, &dst, &protocol, &meta, &closeMeta); err == nil {
 		d.Client, d.Server, d.Source = endpointsFromMeta(meta.String, src, dst)
 		d.Protocol = protocol
+		d.Closed, d.ClosedBy = closedByFromMeta(closeMeta.String, d.Client, d.Server)
 		if meta.Valid {
 			var m map[string]any
 			if json.Unmarshal([]byte(meta.String), &m) == nil {
@@ -566,6 +586,40 @@ func parsePacketTime(s string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// TCPCloseKey 是 raw_packets.metadata 中标记连接关闭的键。
+//   - pcap 源：FIN/RST 帧写发送端地址字符串，聚合时按 client/server 取向归一；
+//   - 移动 SDK：ConnClose.close_side 写 "client"|"server"（SDK 权威侧别）。
+const TCPCloseKey = "tcp_close"
+
+// closedByFromMeta 从关闭标记帧的 metadata 归一化「是否关闭 + 关闭方」。
+// rawJSON 为空或未含 tcp_close 键时返回未关闭；值为地址时与 client/server 比对，
+// 两侧都不匹配 → "unknown"（无法归类）。
+func closedByFromMeta(rawJSON, client, server string) (closed bool, closedBy string) {
+	if rawJSON == "" {
+		return false, ""
+	}
+	var m map[string]any
+	if json.Unmarshal([]byte(rawJSON), &m) != nil {
+		return false, ""
+	}
+	v, ok := m[TCPCloseKey].(string)
+	if !ok || v == "" {
+		return false, ""
+	}
+	closed = true
+	switch v {
+	case "client", "server":
+		return true, v
+	}
+	if client != "" && v == client {
+		return true, "client"
+	}
+	if server != "" && v == server {
+		return true, "server"
+	}
+	return true, "unknown"
 }
 
 // endpointsFromMeta 从帧 metadata 还原 client/server/source，缺失时回退到 src/dst。

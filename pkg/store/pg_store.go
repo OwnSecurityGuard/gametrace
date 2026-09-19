@@ -707,12 +707,15 @@ func (s *PGStore) QueryConnections(ctx context.Context, sessionID string, limit,
 	var a pgArgs
 	sid := a.next(s.sessionID) // 共享库：子查询与主查询统一按 session_id 隔离
 	sub := `WHERE f.conn_id = r.conn_id AND f.session_id = ` + sid + ` ORDER BY f.timestamp ASC, f.id ASC LIMIT 1`
+	closeSub := `WHERE f2.conn_id = r.conn_id AND f2.session_id = ` + sid +
+		` AND f2.metadata IS NOT NULL AND f2.metadata LIKE '%"tcp_close"%' ORDER BY f2.timestamp ASC, f2.id ASC LIMIT 1`
 	query := `
 		SELECT r.conn_id, r.first_ts, r.last_ts, r.frame_count,
 		       (SELECT f.src FROM raw_packets f ` + sub + `) AS src,
 		       (SELECT f.dst FROM raw_packets f ` + sub + `) AS dst,
 		       (SELECT f.protocol FROM raw_packets f ` + sub + `) AS protocol,
-		       (SELECT f.metadata FROM raw_packets f ` + sub + `) AS metadata
+		       (SELECT f.metadata FROM raw_packets f ` + sub + `) AS metadata,
+		       (SELECT f2.metadata FROM raw_packets f2 ` + closeSub + `) AS close_meta
 		FROM (
 			SELECT conn_id,
 			       MIN(timestamp) AS first_ts,
@@ -736,8 +739,8 @@ func (s *PGStore) QueryConnections(ctx context.Context, sessionID string, limit,
 		var c ConnectionSummary
 		var firstTS, lastTS any
 		var src, dst, protocol string
-		var meta sql.NullString
-		if err := rows.Scan(&c.ConnID, &firstTS, &lastTS, &c.FrameCount, &src, &dst, &protocol, &meta); err != nil {
+		var meta, closeMeta sql.NullString
+		if err := rows.Scan(&c.ConnID, &firstTS, &lastTS, &c.FrameCount, &src, &dst, &protocol, &meta, &closeMeta); err != nil {
 			return nil, fmt.Errorf("scan connection: %w", err)
 		}
 		first, err := scanPacketTime(firstTS)
@@ -753,6 +756,7 @@ func (s *PGStore) QueryConnections(ctx context.Context, sessionID string, limit,
 		c.DurationSec = c.EndTime.Sub(c.StartTime).Seconds()
 		c.Client, c.Server, c.Source = endpointsFromMeta(meta.String, src, dst)
 		c.Protocol = protocol
+		c.Closed, c.ClosedBy = closedByFromMeta(closeMeta.String, c.Client, c.Server)
 		index[c.ConnID] = len(conns)
 		conns = append(conns, c)
 		connIDs = append(connIDs, c.ConnID)
@@ -861,14 +865,20 @@ func (s *PGStore) QueryConnectionDetail(ctx context.Context, sessionID, connID s
 	}
 
 	var src, dst, protocol string
-	var meta sql.NullString
+	var meta, closeMeta sql.NullString
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT src, dst, protocol, metadata FROM raw_packets
+		SELECT src, dst, protocol, metadata,
+		       (SELECT f2.metadata FROM raw_packets f2
+		          WHERE f2.conn_id = $1 AND f2.session_id = $2
+		            AND f2.metadata IS NOT NULL AND f2.metadata LIKE '%"tcp_close"%'
+		          ORDER BY f2.timestamp ASC, f2.id ASC LIMIT 1)
+		FROM raw_packets
 		WHERE conn_id = $1 AND session_id = $2 ORDER BY timestamp ASC LIMIT 1`,
 		connID, sessionID,
-	).Scan(&src, &dst, &protocol, &meta); err == nil {
+	).Scan(&src, &dst, &protocol, &meta, &closeMeta); err == nil {
 		d.Client, d.Server, d.Source = endpointsFromMeta(meta.String, src, dst)
 		d.Protocol = protocol
+		d.Closed, d.ClosedBy = closedByFromMeta(closeMeta.String, d.Client, d.Server)
 		if meta.Valid {
 			var m map[string]any
 			if json.Unmarshal([]byte(meta.String), &m) == nil {

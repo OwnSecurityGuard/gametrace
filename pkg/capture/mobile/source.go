@@ -197,7 +197,7 @@ func (s *mobileSource) handleEvent(streamKey string, evt *proto.AgentEvent) {
 	case *proto.AgentEvent_Data:
 		s.handleData(streamKey, connID, e.Data.GetDirection(), ts, e.Data.GetPayload())
 	case *proto.AgentEvent_Close:
-		s.handleClose(streamKey, connID)
+		s.handleClose(streamKey, connID, ts, e.Close.GetCloseSide())
 	default:
 		s.countError("unknown agent event for conn %s", connID)
 	}
@@ -254,7 +254,7 @@ func (s *mobileSource) handleData(streamKey, connID, direction string, ts time.T
 	s.emit(conn, direction, payload, ts)
 }
 
-func (s *mobileSource) handleClose(streamKey, connID string) {
+func (s *mobileSource) handleClose(streamKey, connID string, ts time.Time, closeSide int32) {
 	key := connKey(streamKey, connID)
 	s.connsMu.Lock()
 	conn := s.conns[key]
@@ -270,7 +270,62 @@ func (s *mobileSource) handleClose(streamKey, connID string) {
 	if s.activity != nil {
 		s.activity.activeConns.Add(-1)
 	}
+	// 关闭方已知且为 TCP（UDP 无连接关闭语义，靠空闲超时判定）：发射一个合成
+	// 关闭标记帧（无 payload，metadata 带 tcp_close），使下游按连接聚合能推导
+	// 「已关闭 + 关闭方」。移动抓包无 TCP 头，无法在管道侧解析，只能靠此补报。
+	if network := strings.ToLower(conn.open.GetNetwork()); (network == "" || network == "tcp") {
+		if side := closeSideString(closeSide); side != "" {
+			s.emitCloseMarker(conn, side, ts)
+		}
+	}
 }
+
+// closeSideString 把 ConnClose.close_side 枚举映射为连接关闭方侧别；
+// 0（unknown）返回空串表示不发射标记。
+func closeSideString(closeSide int32) string {
+	switch closeSide {
+	case 1:
+		return "client"
+	case 2:
+		return "server"
+	default:
+		return ""
+	}
+}
+
+// emitCloseMarker 向 out 投递一条连接关闭标记帧（幂等：同连接可能收到多次 close，
+// 取最早一次上送为准；重复帧由聚合取时间最早的一条）。
+func (s *mobileSource) emitCloseMarker(conn *connState, side string, ts time.Time) {
+	client, _ := netip.ParseAddrPort(conn.open.GetClientAddr())
+	server, _ := netip.ParseAddrPort(conn.open.GetServerAddr())
+	pkt := event.Packet{
+		Timestamp: ts,
+		LinkType:  event.LinkTypeProxyPayload, // 无 TCP 头，关闭方由 SDK 显式补报
+		Src:       client,
+		Dst:       server,
+		Protocol:  "tcp",
+		Metadata: map[string]any{
+			"conn_id":     conn.id,
+			"conn_id_raw": conn.rawID,
+			"direction":   "request",
+			// 与 store.TCPCloseKey 保持一致：移动来源写权威侧别字符串。
+			tcpCloseKey: side,
+		},
+	}
+	select {
+	case s.out <- pkt:
+		s.StatTracker.AddIn(len(pkt.Raw))
+	default:
+		s.StatTracker.AddBlocked()
+		select {
+		case s.out <- pkt:
+		case <-s.Context().Done():
+		}
+	}
+}
+
+// tcpCloseKey 是 raw_packets.metadata 标记连接关闭的键（与 store 层 TCPCloseKey 一致）。
+const tcpCloseKey = "tcp_close"
 
 // emit 把一段应用层数据块包装为 event.Packet 并发往 out channel。
 func (s *mobileSource) emit(conn *connState, direction string, frame []byte, ts time.Time) {

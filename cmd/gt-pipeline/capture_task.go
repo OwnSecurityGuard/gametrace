@@ -20,6 +20,7 @@ import (
 	"gametrace/pkg/plugin"
 	"gametrace/pkg/state"
 	"gametrace/pkg/store"
+	"github.com/google/gopacket/layers"
 	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
@@ -710,6 +711,8 @@ func (t *captureTask) run() {
 			// 落库与解码事件上下文使用——Connections 页面依赖 raw_packets.conn_id
 			// 聚合，缺失时整个页面为空。
 			t.conns.assign(&pkt)
+			// 补齐 TCP 关闭标记（FIN/RST → metadata["tcp_close"]），供 Connections 聚合推导关闭方。
+			ensureTCPCloseMarker(&pkt)
 			raws = append(raws, pkt)
 			resolveDecoder(false)
 			if pkt.Protocol == "" {
@@ -1006,4 +1009,40 @@ func mergePacketSources(ctx context.Context, sources []capture.Source) <-chan ev
 		close(out)
 	}()
 	return out
+}
+
+// tcpCloseMetaKey 与 store 层的 tcpCloseKey 一致：raw_packets.metadata 中标记连接关闭的键。
+const tcpCloseMetaKey = store.TCPCloseKey
+
+// ensureTCPCloseMarker 在原始包写入前补齐 TCP 关闭标记。
+//
+// 对真实 IP/TCP 抓包（非代理透传 / TLS 明文这类无头载荷），若 TCPFlags 尚未解析
+// （如远程 gt-agent 仅上送 raw 帧未解 TCP 头），用 capture.ParsePacketLayers 从原始
+// 帧重解析恢复 FIN/RST；命中关闭标志则在 metadata 写 tcp_close=发送端地址，供
+// Connections 聚合推导「关闭状态 + 关闭方」。本地 pcap 已解出标志时为空操作（幂等）。
+func ensureTCPCloseMarker(pkt *event.Packet) {
+	if pkt.Protocol != "tcp" {
+		return
+	}
+	switch pkt.LinkType {
+	case event.LinkTypeProxyPayload, event.LinkTypeTLSPlaintext:
+		// 无 IP/TCP 头，无法解析关闭标志（此路交由移动 SDK ConnClose.close_side 补报）。
+		return
+	}
+	if !pkt.TCPFlags.HasCloseFlags() {
+		// 标志非空（如 SYN/ACK 数据包）说明来源已解析过 TCP 头，无需重解析；
+		// 全空才可能是 agent 上送的未解析帧。
+		if pkt.TCPFlags.String() != "" {
+			return
+		}
+		_, _, _, flags := capture.ParsePacketLayers(pkt.Raw, layers.LinkType(pkt.LinkType))
+		pkt.TCPFlags = flags
+		if !pkt.TCPFlags.HasCloseFlags() {
+			return
+		}
+	}
+	if pkt.Metadata == nil {
+		pkt.Metadata = map[string]any{}
+	}
+	pkt.Metadata[tcpCloseMetaKey] = pkt.Src.String()
 }

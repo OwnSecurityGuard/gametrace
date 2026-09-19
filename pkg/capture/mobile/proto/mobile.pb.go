@@ -277,7 +277,8 @@ func (x *ConnData) GetPayload() []byte {
 // ConnClose 连接关闭：插件可据此 flush 该连接的待组装缓冲。
 type ConnClose struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"` // 关闭原因（可选）
+	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`                         // 关闭原因（可选）
+	CloseSide     int32                  `protobuf:"varint,2,opt,name=close_side,json=closeSide,proto3" json:"close_side,omitempty"` // 关闭侧：0=unknown，1=client（本机/客户端发起），2=server（服务端发起）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -317,6 +318,13 @@ func (x *ConnClose) GetReason() string {
 		return x.Reason
 	}
 	return ""
+}
+
+func (x *ConnClose) GetCloseSide() int32 {
+	if x != nil {
+		return x.CloseSide
+	}
+	return 0
 }
 
 // PushResult 推送汇总统计。
@@ -413,9 +421,11 @@ const file_pkg_capture_mobile_proto_mobile_proto_rawDesc = "" +
 	"\fprocess_name\x18\x06 \x01(\tR\vprocessName\"B\n" +
 	"\bConnData\x12\x1c\n" +
 	"\tdirection\x18\x01 \x01(\tR\tdirection\x12\x18\n" +
-	"\apayload\x18\x02 \x01(\fR\apayload\"#\n" +
+	"\apayload\x18\x02 \x01(\fR\apayload\"B\n" +
 	"\tConnClose\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason\"v\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x1d\n" +
+	"\n" +
+	"close_side\x18\x02 \x01(\x05R\tcloseSide\"v\n" +
 	"\n" +
 	"PushResult\x12 \n" +
 	"\vconnections\x18\x01 \x01(\x04R\vconnections\x12\x18\n" +

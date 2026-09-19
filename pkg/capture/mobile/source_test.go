@@ -162,3 +162,61 @@ func TestMobileSourceDataBeforeOpen(t *testing.T) {
 		t.Fatalf("want 1 error, got %d", got)
 	}
 }
+
+// TestMobileSourceCloseSide 验证 ConnClose.close_side 会在 TCP 连接关闭时发射
+// 关闭标记帧（metadata["tcp_close"]="client"/"server"），供下游推导关闭方；
+// 未知侧别与 UDP 不发射。
+func TestMobileSourceCloseSide(t *testing.T) {
+	src, addr := startSource(t)
+	stream := openPush(t, addr)
+
+	mustSend := func(evt *proto.AgentEvent) {
+		t.Helper()
+		if err := stream.Send(evt); err != nil {
+			t.Fatalf("stream.Send: %v", err)
+		}
+	}
+
+	// TCP：server 侧关闭 → 发射 tcp_close="server" 标记。
+	mustSend(&proto.AgentEvent{ConnId: "c1", Event: &proto.AgentEvent_Open{Open: &proto.ConnOpen{
+		ClientAddr: "10.0.0.5:50000", ServerAddr: "1.2.3.4:443", Network: "tcp",
+	}}})
+	mustSend(dataEvent("c1", "request", []byte("hi")))
+	mustSend(&proto.AgentEvent{ConnId: "c1", Event: &proto.AgentEvent_Close{Close: &proto.ConnClose{CloseSide: 2}}})
+
+	// UDP：无连接关闭语义，即使上报 close_side 也不发射标记。
+	mustSend(&proto.AgentEvent{ConnId: "u1", Event: &proto.AgentEvent_Open{Open: &proto.ConnOpen{
+		ClientAddr: "10.0.0.5:50001", ServerAddr: "1.2.3.4:5300", Network: "udp",
+	}}})
+	mustSend(dataEvent("u1", "request", []byte("quic")))
+	mustSend(&proto.AgentEvent{ConnId: "u1", Event: &proto.AgentEvent_Close{Close: &proto.ConnClose{CloseSide: 1}}})
+
+	if _, err := stream.CloseAndRecv(); err != nil {
+		t.Fatalf("close and recv: %v", err)
+	}
+
+	// 期望 3 个 packet：c1 数据 + c1 关闭标记 + u1 数据（u1 关闭不发射）。
+	pkts := readN(t, src.Packets(), 3)
+	if string(pkts[0].Raw) != "hi" {
+		t.Fatalf("c1 data payload = %q", pkts[0].Raw)
+	}
+	marker := pkts[1]
+	if marker.LinkType != event.LinkTypeProxyPayload {
+		t.Fatalf("marker link_type = %d, want ProxyPayload", marker.LinkType)
+	}
+	if marker.Metadata[tcpCloseKey] != "server" {
+		t.Fatalf("marker tcp_close = %v, want server", marker.Metadata[tcpCloseKey])
+	}
+	if marker.Src.String() != "10.0.0.5:50000" || marker.Dst.String() != "1.2.3.4:443" {
+		t.Fatalf("marker src/dst = %s/%s", marker.Src, marker.Dst)
+	}
+	if string(pkts[2].Raw) != "quic" {
+		t.Fatalf("u1 data payload = %q", pkts[2].Raw)
+	}
+	// u1 之后不应再有标记帧：通道应立即关闭（CloseAndRecv 已收流，source.run 结束）。
+	select {
+	case pkt, ok := <-src.Packets():
+		t.Fatalf("unexpected extra packet after u1 close: ok=%v pkt=%+v", ok, pkt)
+	case <-time.After(200 * time.Millisecond):
+	}
+}

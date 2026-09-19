@@ -32,6 +32,10 @@ export interface ConnectionSummary {
   duration_sec: number;
   event_count: number;
   frame_count: number;
+  /** 连接是否已关闭（观测到 FIN/RST，或移动侧 ConnClose 上报）。 */
+  closed: boolean;
+  /** 关闭方："client" | "server" | "unknown"；未关闭时为空串。 */
+  closed_by: string;
 }
 
 /** get_connection_detail 返回的连接详情（Detail 头部 + 统计）。 */
@@ -50,6 +54,10 @@ export interface ConnectionDetail {
   event_count: number;
   stream_count: number;
   frame_count: number;
+  /** 连接是否已关闭（观测到 FIN/RST，或移动侧 ConnClose 上报）。 */
+  closed: boolean;
+  /** 关闭方："client" | "server" | "unknown"；未关闭时为空串。 */
+  closed_by: string;
 }
 
 /** 连接内单个解码事件（Stream View 与 Events 子页共用）。 */

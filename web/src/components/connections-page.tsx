@@ -53,6 +53,22 @@ export function protocolLabel(c: Pick<ConnectionSummary, "protocol" | "event_typ
   return (c.protocol || "?").toUpperCase();
 }
 
+/** 连接状态展示（与后端 Closed / ClosedBy 对应）：标签 + 徽章变体。 */
+export function connectionStatusLabel(c: Pick<ConnectionSummary, "closed" | "closed_by">): {
+  label: string;
+  variant: "secondary" | "destructive" | "default" | "outline";
+} {
+  if (!c.closed) return { label: "活跃", variant: "secondary" };
+  switch (c.closed_by) {
+    case "client":
+      return { label: "客户端关闭", variant: "destructive" };
+    case "server":
+      return { label: "服务端关闭", variant: "outline" };
+    default:
+      return { label: "已关闭", variant: "default" };
+  }
+}
+
 interface ConnectionsPageProps {
   sessionId: string | null;
   /** 点击某连接时回调（协议数据页据此过滤事件并切到「事件」子视图）。 */
@@ -177,6 +193,7 @@ export function ConnectionsPage({ sessionId, onSelectConn }: ConnectionsPageProp
             <TableHead>客户端</TableHead>
             <TableHead>服务端</TableHead>
             <TableHead className="w-20">协议</TableHead>
+            <TableHead className="w-24">状态</TableHead>
             {showSource && <TableHead className="w-28">来源</TableHead>}
             <TableHead className="w-28">事件 / 帧</TableHead>
             <TableHead className="w-20 text-right">时长</TableHead>
@@ -221,6 +238,13 @@ export function ConnectionsPage({ sessionId, onSelectConn }: ConnectionsPageProp
                 <TableCell>
                   <Badge variant="secondary" className="font-mono">
                     {protocolLabel(conn)}
+                  </Badge>
+                </TableCell>
+
+                {/* 状态：展示是否已关闭及由哪一侧关闭 */}
+                <TableCell>
+                  <Badge variant={connectionStatusLabel(conn).variant} className="whitespace-nowrap">
+                    {connectionStatusLabel(conn).label}
                   </Badge>
                 </TableCell>
 
