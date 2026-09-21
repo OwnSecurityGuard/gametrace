@@ -121,6 +121,12 @@ type mcpCapture struct {
 	authz *projectAuthorizer
 	// ownerSecret 用的 token 表在装配处解析填充。
 	tokensByOwner map[string]string
+	// publicMCPPort / proxyPortOffset 声明「容器内端口 → 宿主对外端口」的映射，
+	// 由 main() 从 flag/env 注入。二维码（profile URL 的端口、sing-box outbound
+	// 的 server_port）只写对外端口——手机够不到容器内端口。
+	//   0 值语义：publicMCPPort=0 用自身监听端口；proxyPortOffset=0 恒等映射。
+	publicMCPPort   int
+	proxyPortOffset int
 	// agentBuild 是 gt-agent 探针的现场编译器（agent_build.go）：下载页点「编译」
 	// 或下载端点发现平台缺失时，在服务器现场 go build 补齐（linux/amd64、
 	// windows/amd64；darwin 维持镜像预置）。
@@ -1180,6 +1186,14 @@ func (m *mcpCapture) handleListDecodedData(ctx context.Context, req mcp.CallTool
 	}), nil
 }
 
+// formatEventTime 把事件/帧时间戳序列化为 RFC3339（固定微秒精度，本地时区偏移）。
+// 秒级布局（time.RFC3339）会截掉毫秒/微秒：同一秒内的请求/响应时间戳变得无法
+// 区分先后，前端据此排序会出现"响应早于请求"。DB 里存的是 UnixNano，输出层
+// 保留到微秒即可满足时序展示；纳秒部分（末 3 位）不参与展示。
+func formatEventTime(t time.Time) string {
+	return t.Format("2006-01-02T15:04:05.000000Z07:00")
+}
+
 // lookupRawLens 批量查询原始包长度（SELECT id, LENGTH(payload) WHERE id IN ...），
 // 作用于页内/批内事件，返回 RawPacketID → 字节数映射。
 // 查询失败非致命：返回空 map，raw_len 字段为 0。
@@ -1255,7 +1269,7 @@ func decodedEventMap(ev *event.Event, captureIdx map[string]captureContextJSON, 
 	}
 	eventMap := map[string]any{
 		"id":             string(ev.Identity.ID),
-		"timestamp":      ev.Identity.Timestamp.Format(time.RFC3339),
+		"timestamp":      formatEventTime(ev.Identity.Timestamp),
 		"session_id":     ev.Identity.SessionID,
 		"protocol":       string(ev.Identity.Type),
 		"raw_len":        rawLen,
@@ -1610,7 +1624,7 @@ func (m *mcpCapture) handleListRawPackets(ctx context.Context, req mcp.CallToolR
 	for _, r := range rows {
 		packets = append(packets, map[string]any{
 			"id":          r.ID,
-			"timestamp":   r.Timestamp.Format(time.RFC3339),
+			"timestamp":   formatEventTime(r.Timestamp),
 			"src":         r.Src,
 			"dst":         r.Dst,
 			"protocol":    r.Protocol,
@@ -1676,7 +1690,7 @@ func (m *mcpCapture) handleListStateChanges(ctx context.Context, req mcp.CallToo
 			"event_id":     r.EventID,
 			"session_id":   r.SessionID,
 			"flow_id":      r.FlowID,
-			"timestamp":    r.Timestamp.Format(time.RFC3339),
+			"timestamp":    formatEventTime(r.Timestamp),
 			"subject_type": r.SubjectType,
 			"subject_id":   r.SubjectID,
 			"op":           r.Op,
@@ -2282,6 +2296,16 @@ func main() {
 	// 二维码里的 host:port 必须用这个地址，手机才连得上。
 	lanIP := flag.String("lan-ip", os.Getenv("GT_LAN_IP"),
 		"override detected host LAN IP for QR-code connect address (env GT_LAN_IP)")
+	// 本服务 HTTP 的对外（宿主映射）端口。容器内监听 8781，宿主映射 18781
+	// （compose 的 GT_MCP_PORT），二维码里的 profile URL 必须用宿主端口——
+	// 手机访问容器内端口是必然失败的。
+	publicMCPPort := flag.Int("public-mcp-port", configEnvInt("GT_PUBLIC_MCP_PORT", 0),
+		"对外(宿主映射)HTTP端口，用于二维码 profile URL；0=用自身监听端口 (env GT_PUBLIC_MCP_PORT)")
+	// 代理 CONNECT 端口段的宿主映射偏移：对外端口 = 容器内 agent 端口 + offset。
+	// compose 的 GT_PROXY_PORTS 若是非恒等映射（如 22100-22199:12100-12199），
+	// 必须同步设置，否则 sing-box profile 的 server_port 写成容器内端口，手机连不上。
+	proxyPortOffset := flag.Int("proxy-port-offset", configEnvInt("GT_PROXY_PORT_OFFSET", 0),
+		"代理 CONNECT 端口宿主映射偏移(对外端口=容器内端口+offset)；0=恒等映射 (env GT_PROXY_PORT_OFFSET)")
 	// 工作目录解析规则（T10）：显式 -work-dir > GT_HOME > gametrace.yaml workdir >
 	// CWD 既有数据探测（存在 control.sqlite/sessions/runs 时沿用 CWD）> ~/.gametrace。
 	workDir := flag.String("work-dir", ".", "working directory for session databases（显式传参优先；否则 GT_HOME > gametrace.yaml workdir > CWD 既有数据沿用 > ~/.gametrace）")
@@ -2441,6 +2465,18 @@ func main() {
 			source = "flag"
 		}
 		slog.Info("lan ip override enabled", "lan_ip", v, "source", source)
+	}
+	// 手机只能访问宿主端口：二维码里的 profile URL 端口与 sing-box 的
+	// server_port 都必须按宿主映射写，容器内端口搬过去就是不可达地址。
+	capture.publicMCPPort = *publicMCPPort
+	capture.proxyPortOffset = *proxyPortOffset
+	if *publicMCPPort > 0 {
+		slog.Info("public mcp port override enabled",
+			"public_mcp_port", *publicMCPPort, "listen", *addr)
+	}
+	if *proxyPortOffset != 0 {
+		slog.Info("proxy port offset enabled",
+			"offset", *proxyPortOffset, "note", "对外端口 = 容器内 agent 端口 + offset")
 	}
 
 	// 会话保留策略（存储优化）：启动即清一轮，之后周期执行。

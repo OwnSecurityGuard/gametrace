@@ -21,8 +21,12 @@ export interface ProxyLease {
   device: string;
   /** agent HTTP CONNECT 监听地址（手机连这里），如 0.0.0.0:12100。 */
   listen_addr: string;
-  /** agent 监听端口（租约内稳定，sticky 时跨租约复用）。 */
+  /** agent 在容器内/本机的监听端口（租约内稳定，sticky 时跨租约复用）。
+   *  容器部署时手机够不到这个端口，展示与填写请用 public_port。 */
   agent_listen_port: number;
+  /** 手机侧实际要连的端口（宿主映射后的对外端口）。恒等映射时与
+   *  agent_listen_port 相同；非恒等映射下 = agent_listen_port + 偏移。 */
+  public_port: number;
   /** agent 本地控制接口端口（pipeline 通过它切 start/stop）。 */
   control_port: number;
   /** mobile Source gRPC 监听端口（= 当前抓包会话占用；idle 时为 0）。 */

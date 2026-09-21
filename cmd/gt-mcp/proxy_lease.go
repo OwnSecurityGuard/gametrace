@@ -191,8 +191,13 @@ type leaseJSON struct {
 	LastCaptureAtUnix int64 `json:"last_capture_at_unix"`
 	// StickyPort 为 true 时本端口是 (owner, device) 复用端口——二维码长期有效。
 	StickyPort bool `json:"sticky_port"`
+	// PublicPort 是手机侧实际要连的端口（宿主映射后的端口 =
+	// agent_listen_port + GT_PROXY_PORT_OFFSET）。恒等映射时与 AgentListenPort
+	// 相同。二维码/connect_addr/sing-box server_port 一律用它——容器内端口
+	// 对手机不可达。
+	PublicPort int32 `json:"public_port"`
 	// LANIP 是手机所在局域网内可达的本机地址；ConnectAddr 为二维码内容
-	// （手机代理软件填写的 HTTP CONNECT 代理地址 = LANIP:agent_listen_port）。
+	// （手机代理软件填写的 HTTP CONNECT 代理地址 = LANIP:public_port）。
 	LANIP       string `json:"lan_ip"`
 	ConnectAddr string `json:"connect_addr"`
 	// SingboxURI 是手机 sing-box 客户端（SFA）可直接扫码导入的远程 profile
@@ -201,29 +206,55 @@ type leaseJSON struct {
 	SingboxURI string `json:"singbox_uri"`
 }
 
+// publicHTTPPort 返回本服务对外的 HTTP 端口：显式配置（-public-mcp-port /
+// GT_PUBLIC_MCP_PORT）优先，未配置时退回自身监听端口（非容器部署即正确）。
+func (m *mcpCapture) publicHTTPPort() string {
+	if m.publicMCPPort > 0 {
+		return strconv.Itoa(m.publicMCPPort)
+	}
+	return httpPortOf(m.httpAddr)
+}
+
 // singboxProfileURI 构造手机 sing-box 客户端可扫码导入的远程 profile URI。
-// agentPort 是该租约 gt-singbox-agent 的 HTTP CONNECT 监听端口，profileURL
-// 携带 ?port= 由 /singbox/profile 端点校验租约仍活跃（防陈旧二维码）。
-func (m *mcpCapture) singboxProfileURI(lan string, agentPort int32) string {
-	httpPort := httpPortOf(m.httpAddr)
+// publicPort 是该租约对手机暴露的 HTTP CONNECT 端口（宿主映射后的），
+// profileURL 携带 ?port= 由 /singbox/profile 端点校验租约仍活跃（防陈旧二维码）。
+func (m *mcpCapture) singboxProfileURI(lan string, publicPort int32) string {
+	httpPort := m.publicHTTPPort()
 	if httpPort == "" {
 		return ""
 	}
-	profileURL := fmt.Sprintf("http://%s:%s/singbox/profile?port=%d", lan, httpPort, agentPort)
+	profileURL := fmt.Sprintf("http://%s:%s/singbox/profile?port=%d", lan, httpPort, publicPort)
 	return "sing-box://import-remote-profile?url=" +
 		url.QueryEscape(profileURL) + "#" + url.QueryEscape("GameTrace 代理抓包")
+}
+
+// publicAgentPort 把容器内 agent 端口换算成手机侧可达的端口。
+// 非容器部署（或 GT_PROXY_PORT_OFFSET=0）时两者相同。
+func (m *mcpCapture) publicAgentPort(agentPort int32) int32 {
+	if agentPort <= 0 {
+		return 0
+	}
+	return agentPort + int32(m.proxyPortOffset)
+}
+
+// agentPortFromPublic 把手机侧端口反解回容器内 agent 端口。
+// /singbox/profile 收到的 port 参数是二维码里的对外端口，需反解后与 pipeline
+// 上报的 agent 监听端口比对。
+func (m *mcpCapture) agentPortFromPublic(publicPort int) int {
+	return publicPort - m.proxyPortOffset
 }
 
 // leaseToJSON 把 pipeline 返回的租约状态转为前端 JSON（补充 LAN IP / 连接地址 / 二维码 URI）。
 func (m *mcpCapture) leaseToJSON(l *pb.ProxyLeaseState) leaseJSON {
 	lan := lanIP()
+	publicPort := m.publicAgentPort(l.GetAgentListenPort())
 	connectAddr := ""
-	if lan != "" && l.GetAgentListenPort() > 0 {
-		connectAddr = net.JoinHostPort(lan, strconv.Itoa(int(l.GetAgentListenPort())))
+	if lan != "" && publicPort > 0 {
+		connectAddr = net.JoinHostPort(lan, strconv.Itoa(int(publicPort)))
 	}
 	singboxURI := ""
 	if connectAddr != "" {
-		singboxURI = m.singboxProfileURI(lan, l.GetAgentListenPort())
+		singboxURI = m.singboxProfileURI(lan, publicPort)
 	}
 	return leaseJSON{
 		LeaseID:           l.GetLeaseId(),
@@ -250,6 +281,7 @@ func (m *mcpCapture) leaseToJSON(l *pb.ProxyLeaseState) leaseJSON {
 		CaptureCount:      l.GetCaptureCount(),
 		LastCaptureAtUnix: l.GetLastCaptureAtUnix(),
 		StickyPort:        l.GetStickyPort(),
+		PublicPort:        publicPort,
 		LANIP:             lan,
 		ConnectAddr:       connectAddr,
 		SingboxURI:        singboxURI,

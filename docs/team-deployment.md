@@ -84,7 +84,7 @@ openssl rand -hex 24   # 输出前加 gt_tok_ 前缀
 
 ### 2.4 代理抓包手机连接地址（同 LAN 容器部署必配）
 
-代理抓包（移动端扫码接入）的二维码里，手机要填的 HTTP CONNECT 代理地址 = `host:agent_port`，其中 `host` 由服务端 `lanIP()` 解析、**端口由租约分配**（agent 绑定 `0.0.0.0`，全接口可达）。
+代理抓包（移动端扫码接入）的二维码里，手机要填的 HTTP CONNECT 代理地址 = `host:public_port`，其中 `host` 由服务端 `lanIP()` 解析、`public_port` 是**租约分配的 agent 端口经宿主映射后对外暴露的那个端口**（agent 在容器内绑 `0.0.0.0`，全接口可达，但手机够不到容器内端口）。二维码里 profile 下载地址的端口同理，取 `GT_MCP_PORT`（宿主发布端口），不是容器内的 8781。
 
 `lanIP()` 解析优先级：
 
@@ -93,7 +93,9 @@ openssl rand -hex 24   # 输出前加 gt_tok_ 前缀
 
 配置位置：`.env` 里设 `GT_LAN_IP`，`docker-compose.yml` 的 `mcp` 服务已透传（默认空 = 走启发式）。注意它和 `GT_PUBLIC_HOST` 是两套不同场景——`GT_PUBLIC_HOST` 是远端探针跨 NAT 回连的公网/映射地址，`GT_LAN_IP` 是手机同 LAN 连代理的地址，一般填宿主机内网 IP 即可。
 
-> 端口侧提醒：gt-singbox-agent 的 CONNECT 端口段已映射——`docker-compose.yml` 的 `pipeline` 服务新增 `- "${GT_PROXY_PORTS:-12100-12199}:12100-12199"`（默认 `12100-12199`，可用 `.env` 的 `GT_PROXY_PORTS` 覆盖）；手机从宿主机 LAN IP:该端口即可连入。若改用 host 网络则无需此映射。
+> 端口侧提醒：gt-singbox-agent 的 CONNECT 端口段已映射——`docker-compose.yml` 的 `pipeline` 服务声明 `- "${GT_PROXY_PORTS:-12100-12199}:12100-12199"`（宿主段默认 `12100-12199`，可用 `.env` 的 `GT_PROXY_PORTS` 覆盖）；手机从宿主机 LAN IP:该端口即可连入。若改用 host 网络则无需此映射。
+>
+> **宿主段与容器段不一致时必须同步偏移**：右侧容器内段固定 `12100-12199`，一旦左侧宿主段改成别的（如 `22100-22199`），就要在 `.env` 里设 `GT_PROXY_PORT_OFFSET = 宿主段起始 - 12100`（本例 `10000`）。漏配的表现是手机扫码导入的 sing-box 配置里 `server_port` 仍是 `12100`，而宿主 `12100` 并无监听，手机连不上。保持默认的恒等映射则无需设置（默认 `0`）。同理，二维码里 profile 下载地址的端口取 `GT_MCP_PORT`（`docker-compose.yml` 自动注入 `GT_PUBLIC_MCP_PORT`），不要写成容器内的 `8781`。
 
 > 关键变更：下载探针时**不再需要指定抓包端口与解码插件**——这些参数不在下载/接入阶段确定，而是探针在线后由「开始抓包」在 Web 上下发。因此回连地址是唯一必须在下载阶段确保正确的项，集中由 `GT_PUBLIC_*` 解决。
 

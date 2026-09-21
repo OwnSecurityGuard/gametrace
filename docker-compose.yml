@@ -174,6 +174,17 @@ services:
       # 容器内 lanIP() 启发式会拿到 docker bridge 的 172.x / Hyper-V 等不可达网段，
       # 必须显式填宿主机在手机所在 LAN 内的可达 IPv4（例如 192.168.1.10），否则手机扫码连不上。
       GT_LAN_IP: "${GT_LAN_IP:?GT_LAN_IP is required - 手机扫码用，填宿主机在手机所在 LAN 内的可达 IPv4（与 GT_PUBLIC_HOST 同网段时可直接用同值）}"
+      # 对外端口映射声明：二维码（profile URL 的端口、sing-box 的 server_port）
+      # 一律写宿主端口——手机够不到容器内端口，写容器端口=写不可达地址。
+      #   GT_PUBLIC_MCP_PORT：本服务 HTTP 的宿主发布端口，必须与下面 ports 里的
+      #     GT_MCP_PORT 一致（默认已自动取同值，一般不用改）。
+      #   GT_PROXY_PORT_OFFSET：代理 CONNECT 端口段的宿主偏移 =
+      #     GT_PROXY_PORTS 起始端口 - 12100（容器内段起始）。
+      #     恒等映射（GT_PROXY_PORTS=12100-12199，默认）时为 0，无需设置；
+      #     非恒等映射（如 GT_PROXY_PORTS=22100-22199）时必须设为 10000，
+      #     否则手机扫码导入的 sing-box 配置里端口是容器内的 12100，连不上。
+      GT_PUBLIC_MCP_PORT: "${GT_MCP_PORT:-18781}"
+      GT_PROXY_PORT_OFFSET: "${GT_PROXY_PORT_OFFSET:-0}"
       # 存储后端：与 pipeline 保持一致（同一 PG 库）
       GT_DB_DRIVER: postgres
       GT_DB_DSN: postgres://${GT_PG_USER:-gametrace}:${GT_PG_PASSWORD:-gt_dev_pass}@postgres:5432/${GT_PG_DB:-gametrace}?sslmode=disable

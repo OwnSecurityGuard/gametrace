@@ -296,21 +296,40 @@ func (m *mcpCapture) callerToken(ctx context.Context) (string, string) {
 	return "", "anonymous"
 }
 
-// serviceToken 返回后台系统通道（WatchPlugins 等无调用方 ctx 的订阅流）
-// 使用的确定性服务凭证：env（tokensByOwner）按 owner 字典序取首个非空 token；
-// 无 env token 时退化查 users 表取首条。匿名模式返回空（服务端无拦截器，无需凭证）。
+// serviceToken 返回后台系统通道使用的确定性服务凭证。
+//
+// 使用方有两类：WatchPlugins 这类没有调用方 ctx 的订阅流；以及鉴权豁免端点
+// （/singbox/profile）内部反查 pipeline 资源——它们都没有调用方凭证可用。
+//
+// 优先返回 admin 身份的 token：这类通道需要跨 owner 可见。非 admin 凭证会被
+// pipeline 的 owner 作用域过滤（cmd/gt-pipeline/proxy_lease.go ListProxyLeases），
+// 结果是服务通道只能看到自己名下的插件/租约——表现就是别人的二维码 profile 反查
+// 恒 404、别人的插件事件不广播。没有 admin token 时退回 env 里按 owner 字典序
+// 的首个非空 token，再退 users 表首条。匿名模式返回空（服务端无拦截器，无需凭证）。
 func (m *mcpCapture) serviceToken() string {
-	if len(m.tokensByOwner) > 0 {
-		owners := make([]string, 0, len(m.tokensByOwner))
-		for o := range m.tokensByOwner {
-			owners = append(owners, o)
+	owners := make([]string, 0, len(m.tokensByOwner))
+	for o := range m.tokensByOwner {
+		owners = append(owners, o)
+	}
+	sort.Strings(owners)
+	fallback := ""
+	for _, o := range owners {
+		t := m.tokensByOwner[o]
+		if t == "" {
+			continue
 		}
-		sort.Strings(owners)
-		for _, o := range owners {
-			if t := m.tokensByOwner[o]; t != "" {
-				return t
-			}
+		if fallback == "" {
+			fallback = t
 		}
+		// envResolver 可能尚未注入（装配早期启动的 WatchPlugins）或为 nil；
+		// StaticResolver.Resolve 的 nil/匿名分支安全，此时 IsAdmin 恒 false，
+		// 行为与「退回首个 token」一致。
+		if p, ok := m.envResolver.Resolve(t); ok && p.IsAdmin {
+			return t
+		}
+	}
+	if fallback != "" {
+		return fallback
 	}
 	if m.users != nil {
 		if t, err := m.users.AnyToken(context.Background()); err == nil && t != "" {

@@ -20,6 +20,8 @@ import {
   ChevronDown,
   Copy,
   CopyCheck,
+  Download,
+  ExternalLink,
   MonitorSmartphone,
   PauseCircle,
   PlayCircle,
@@ -29,6 +31,58 @@ import {
   Wifi,
   X,
 } from "lucide-react";
+
+/** 手机端 sing-box 官方客户端下载地址（Project S 官方分发渠道）。 */
+const SINGBOX_CLIENTS = [
+  {
+    key: "android-play",
+    label: "Android · Google Play",
+    href: "https://play.google.com/store/apps/details?id=io.nekohasekai.sfa",
+    title: "sing-box for Android (SFA) · Google Play",
+  },
+  {
+    key: "android-apk",
+    label: "Android · APK",
+    href: "https://github.com/SagerNet/sing-box/releases",
+    title: "sing-box for Android (SFA) · GitHub Releases（含 APK / F-Droid）",
+  },
+  {
+    key: "ios",
+    label: "iOS · App Store",
+    href: "https://apps.apple.com/app/sing-box-vt/id6673731168",
+    title: "sing-box for Apple platforms (SFI) · 需使用非中国大陆区 Apple ID",
+  },
+] as const;
+
+/** sing-box 客户端下载入口：扫码前先让用户装上客户端。 */
+function SingboxDownloadHint() {
+  return (
+    <div className="w-full border-t border-border pt-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1">
+          <Download className="h-3.5 w-3.5" />
+          手机还没装 sing-box？
+        </span>
+        {SINGBOX_CLIENTS.map((c) => (
+          <a
+            key={c.key}
+            href={c.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={c.title}
+            className="inline-flex items-center gap-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          >
+            {c.label}
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        ))}
+      </div>
+      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+        用其他客户端（Clash 等）时，按下方「手机代理填」的地址手动配置 HTTP 代理即可。
+      </p>
+    </div>
+  );
+}
 
 interface ProxyConfigDialogProps {
   open: boolean;
@@ -469,6 +523,9 @@ function LeaseDetail({ lease, onNavigateToSession, onStart, onStop, onRelease, o
   const totalConns = lease.total_conns ?? 0;
   const totalBytes = lease.total_bytes ?? 0;
   const connectAddr = lease.connect_addr ?? "";
+  // 手机连的是宿主映射后的端口；public_port 是权威值，兜底旧的 agent_listen_port
+  //（非容器部署两者相同）。
+  const publicPort = lease.public_port || lease.agent_listen_port;
   const singboxUri = lease.singbox_uri ?? "";
   const phoneConnected = activeConns > 0;
   const captureCount = lease.capture_count ?? 0;
@@ -613,7 +670,7 @@ function LeaseDetail({ lease, onNavigateToSession, onStart, onStop, onRelease, o
               手机连接
             </span>
             <span className="truncate font-mono text-xs text-muted-foreground">
-              {lease.listen_addr || ""}
+              {connectAddr || (publicPort ? `${lease.lan_ip || "?"}:${publicPort}` : "")}
             </span>
           </div>
 
@@ -657,7 +714,7 @@ function LeaseDetail({ lease, onNavigateToSession, onStart, onStop, onRelease, o
             <div className="w-full rounded-md bg-muted/60 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
               手机代理软件（如 sing-box / Clash）添加 HTTP 代理，服务器填{" "}
               <code className="font-mono">{lease.lan_ip || "本机IP"}</code>，端口填{" "}
-              <code className="font-mono">{lease.agent_listen_port}</code>。
+              <code className="font-mono">{publicPort}</code>。
             </div>
           )}
 
@@ -669,6 +726,9 @@ function LeaseDetail({ lease, onNavigateToSession, onStart, onStop, onRelease, o
               </span>
             </div>
           </div>
+
+          {/* 客户端下载入口：装上 sing-box 才能扫码导入 */}
+          <SingboxDownloadHint />
         </div>
       </section>
     </>

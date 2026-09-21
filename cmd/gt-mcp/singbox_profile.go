@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"gametrace/pkg/auth"
 	pb "gametrace/pkg/internalipc/proto"
 )
 
@@ -61,6 +62,9 @@ func (m *mcpCapture) leasePortActive(ctx context.Context, port int) (found bool,
 // buildSingboxConfig 生成手机 sing-box 客户端可运行的完整配置：
 // TUN 入站接管手机流量，出站经 HTTP CONNECT 代理转发到 agent，
 // DNS 直连本地，最终路由走代理。
+//
+// server:port 是手机视角可达的地址——即宿主对外映射出来的地址与端口，
+// 不是容器内 agent 的监听地址。
 func buildSingboxConfig(server string, port int) map[string]any {
 	return map[string]any{
 		"log": map[string]any{
@@ -114,9 +118,17 @@ func buildSingboxConfig(server string, port int) map[string]any {
 // port 必填：租约二维码携带的 agent 监听端口；对应租约不活跃时 404（防陈旧二维码）。
 func (m *mcpCapture) handleSingboxProfile(w http.ResponseWriter, r *http.Request) {
 	portStr := strings.TrimSpace(r.URL.Query().Get("port"))
-	port, err := strconv.Atoi(portStr)
-	if err != nil || port <= 0 || port > 65535 {
-		http.Error(w, "missing or invalid required query param: port (the proxy lease's agent listen port)", http.StatusBadRequest)
+	publicPort, err := strconv.Atoi(portStr)
+	if err != nil || publicPort <= 0 || publicPort > 65535 {
+		http.Error(w, "missing or invalid required query param: port (the proxy lease's public CONNECT port)", http.StatusBadRequest)
+		return
+	}
+	// 二维码里带的是宿主对外端口（手机可达），pipeline 上报的是容器内 agent 端口，
+	// 按同一偏移反解后再比对；恒等映射时两者相同。
+	agentPort := m.agentPortFromPublic(publicPort)
+	if agentPort <= 0 || agentPort > 65535 {
+		http.Error(w, fmt.Sprintf("port %d does not map to a valid agent listen port (offset %d)",
+			publicPort, m.proxyPortOffset), http.StatusBadRequest)
 		return
 	}
 	server, ok := lanFromHost(r.Host)
@@ -128,17 +140,25 @@ func (m *mcpCapture) handleSingboxProfile(w http.ResponseWriter, r *http.Request
 		http.Error(w, "cannot determine proxy server address", http.StatusServiceUnavailable)
 		return
 	}
-	found, err := m.leasePortActive(r.Context(), port)
+	// 本端点刻意挂在鉴权链之外（SFA 扫码导入时无法携带 Bearer 头），所以
+	// r.Context() 里没有调用方凭证。但反查租约要走 pipeline 的 CaptureControl，
+	// mcp 的 gRPC 客户端拦截器只能从 ctx 取 token 附加 Bearer——取不到就不加
+	// header，pipeline 的 auth 拦截器直接 PermissionDenied，这里表现为 503
+	// 「pipeline unavailable」。故用进程内确定性服务凭证补上（与 WatchPlugins
+	// 的后台流同一条路径），且该凭证优先取 admin，才能跨 owner 查到别人的租约。
+	ctx := auth.WithToken(r.Context(), m.serviceToken())
+	found, err := m.leasePortActive(ctx, agentPort)
 	if err != nil {
-		slog.Warn("singbox profile: lease lookup failed", "port", port, "error", err)
+		slog.Warn("singbox profile: lease lookup failed", "port", publicPort, "agent_port", agentPort, "error", err)
 		http.Error(w, "pipeline unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if !found {
-		http.Error(w, fmt.Sprintf("no active proxy lease listening on port %d (released?)", port), http.StatusNotFound)
+		http.Error(w, fmt.Sprintf("no active proxy lease listening on port %d (released?)", publicPort), http.StatusNotFound)
 		return
 	}
-	cfg := buildSingboxConfig(server, port)
+	// 配置里写对外端口——手机连的是宿主机映射出来的那个端口。
+	cfg := buildSingboxConfig(server, publicPort)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	enc := json.NewEncoder(w)
@@ -148,5 +168,5 @@ func (m *mcpCapture) handleSingboxProfile(w http.ResponseWriter, r *http.Request
 		http.Error(w, fmt.Sprintf("encode failed: %v", err), http.StatusInternalServerError)
 		return
 	}
-	slog.Info("served singbox profile", "server", server, "port", port, "remote", r.RemoteAddr)
+	slog.Info("served singbox profile", "server", server, "port", publicPort, "remote", r.RemoteAddr)
 }
