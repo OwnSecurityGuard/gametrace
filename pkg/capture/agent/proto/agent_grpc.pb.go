@@ -139,7 +139,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type AgentControlClient interface {
-	// RegisterProbe 注册探针并换发长期凭证。鉴权：用户 token（claim 所得）。
+	// RegisterProbe 注册探针并换发长期凭证。鉴权：用户 token（下载产物内置）。
 	// 同一机器重复注册（token 丢失重接）携带 prev_probe_id 覆盖旧记录。
 	RegisterProbe(ctx context.Context, in *RegisterProbeRequest, opts ...grpc.CallOption) (*RegisterProbeAck, error)
 	// Connect 控制双向流。鉴权：probe_token。开流首包必须是 ProbeHello。
@@ -196,7 +196,7 @@ type AgentControl_UploadArchiveClient = grpc.ClientStreamingClient[ArchiveChunk,
 // All implementations must embed UnimplementedAgentControlServer
 // for forward compatibility.
 type AgentControlServer interface {
-	// RegisterProbe 注册探针并换发长期凭证。鉴权：用户 token（claim 所得）。
+	// RegisterProbe 注册探针并换发长期凭证。鉴权：用户 token（下载产物内置）。
 	// 同一机器重复注册（token 丢失重接）携带 prev_probe_id 覆盖旧记录。
 	RegisterProbe(context.Context, *RegisterProbeRequest) (*RegisterProbeAck, error)
 	// Connect 控制双向流。鉴权：probe_token。开流首包必须是 ProbeHello。

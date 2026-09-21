@@ -195,7 +195,7 @@ export default function App() {
     setProxyConfigOpen(false);
   }, []);
 
-  // 首页「本机抓包」：不带项目预填地打开开始抓包弹窗。
+  // 首页「开始抓包」：不带项目预填地打开开始抓包弹窗。
   const handleStartDefault = useCallback(() => {
     setProjectPrefill({});
     setStartOpen(true);
@@ -462,7 +462,7 @@ export default function App() {
               size="sm"
               className="h-8"
               onClick={() => setStartOpen(true)}
-              title="开始抓包（服务器网卡 / 抓包探针）"
+              title="开始抓包（探针机器）"
               aria-label="开始抓包"
             >
               <Play className="h-4 w-4" />
@@ -618,7 +618,7 @@ export default function App() {
           setActiveTab("overview");
         }}
       />
-      {/* 开始抓包弹窗（本机网卡 / 远程 agent 源） */}
+      {/* 开始抓包弹窗（探针 agent 源） */}
       <StartCaptureDialog
         open={startOpen}
         onClose={() => {

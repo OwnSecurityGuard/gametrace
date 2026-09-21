@@ -14,8 +14,6 @@ service CaptureControl {
   rpc GetCaptureStatus(GetCaptureStatusRequest) returns (GetCaptureStatusResponse);
   // ListCaptureSessions 列出当前活跃的抓包会话。
   rpc ListCaptureSessions(ListCaptureSessionsRequest) returns (ListCaptureSessionsResponse);
-  // ListInterfaces 列出可用网卡。
-  rpc ListInterfaces(ListInterfacesRequest) returns (ListInterfacesResponse);
   // DecodeRawPackets 用指定插件对离线会话的 raw_packets 批量解码，
   // 结果写入该 session 的 events 表。
   rpc DecodeRawPackets(DecodeRawPacketsRequest) returns (DecodeRawPacketsResponse);
@@ -223,13 +221,6 @@ message SampleBytesResponse {
   int64 audit_id = 10;                            // plugin_debug_access 行 id
 }
 
-message PcapLiveConfig {
-  string device = 1;
-  string bpf = 2;
-  int32 snap_len = 3;
-  bool promisc = 4;
-}
-
 message PcapFileConfig {
   string path = 1;
 }
@@ -245,13 +236,12 @@ message StartCaptureRequest {
   string plugin = 2;
   int32 port = 3;
   oneof source {
-    PcapLiveConfig live = 4;
     PcapFileConfig file = 5;
     MobileSourceConfig mobile = 6;
   }
   // agent 为 true 时本会话订阅 agent capture source（gt-agent 经 AgentIngest
-  // 按 session_id 推送原始帧）。可与 oneof source 组合（同时抓网卡等）；
-  // 单独为 true 且无 oneof source 时表示纯 agent 会话。
+  // 按 session_id 推送原始帧）。可与 oneof source 组合；单独为 true 且无
+  // oneof source 时表示纯 agent 会话（探针抓包）。
   bool agent = 7;
   // 调用方身份（gt-mcp 从 HTTP auth ctx 提取后透传，见 ListPluginsRequest）。
   // pipeline 用它记录会话归属（ControlStore SessionMeta.Owner / captureTask.owner）。
@@ -309,12 +299,6 @@ message GetCaptureStatusResponse {
   // agent_last_seen_unix：最近一次收到该会话 agent 数据包的 Unix 秒。
   // 0 表示从未收到过数据，用于区分"一直没流量"与"曾经有、现在停了"。
   int64 agent_last_seen_unix = 15;
-}
-
-message ListInterfacesRequest {}
-
-message ListInterfacesResponse {
-  repeated string names = 1;
 }
 
 message ListCaptureSessionsRequest {}

@@ -5,14 +5,11 @@ export type {
   ListRegisteredPluginsResult,
   SetSessionPluginResult,
   DeregisterPluginResult,
-  StartCaptureResult,
 } from "./registered-plugin";
 export type { DecodedEvent, ListDecodedDataResult } from "./event";
 export type { TestEventLite, TestErrorLite, TestPluginResult, TestPluginVars } from "./plugin-test";
 export type {
   SessionStatusResult,
-  InterfaceInfo,
-  ListInterfacesResult,
   DeleteSessionResult,
 } from "./session-extra";
 export type {

@@ -631,7 +631,7 @@ addr := sdk.ResolveRegistryAddr()
 | `sample_bytes_plugin` | **看首个包的字节**，确认 link_type 与帧结构（0 事件排查第一步） |
 | `verify_plugin` | 离线回放原始包 + 契约校验，给出 `pass\|warn\|fail` 判定与证据 |
 | `explain_plugin` | 对解码结果（含 0 事件）做归因与修复建议 |
-| `list_registered_plugins` | 列出已注册插件 |
+| `list_registered_plugins` | 列出已注册（运行中/离线）插件；Developer Plane 已连接时每条附 `artifact` 视图（`source_dir` 源目录 / `binary_path` 构建产物 / `binary_stale` 是否过期——源码比二进制新需重新 `build_plugin`），用于核对"当前运行实例到底跑的是哪个源码目录、哪份构建产物" |
 | `get_plugin_manifest` | 获取插件 manifest |
 | `deregister_plugin` | 注销插件 |
 | `set_session_plugin` | 运行时热切换会话绑定的解码插件（无需停抓） |

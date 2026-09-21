@@ -963,6 +963,23 @@ function PluginCard({
           </Badge>
         )}
       </div>
+
+      {plugin.artifact && plugin.artifact.state !== "unknown" && (
+        <div
+          className="mt-1 flex items-center gap-2 text-xs text-muted-foreground"
+          title={`源目录：${plugin.artifact.source_dir || "—"}\n构建产物：${plugin.artifact.binary_path || "—"}`}
+        >
+          <FileCode2 className="h-3 w-3 shrink-0" />
+          <span className="font-mono truncate min-w-0">{plugin.artifact.source_dir || "（非 Dev Plane 目录）"}</span>
+          {plugin.artifact.binary_stale ? (
+            <Badge variant="outline" className="shrink-0 text-amber-600 border-amber-300">
+              二进制过期
+            </Badge>
+          ) : (
+            <span className="truncate min-w-0">{plugin.artifact.binary_path || "未构建"}</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

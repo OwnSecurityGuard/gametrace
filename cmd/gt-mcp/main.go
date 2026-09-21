@@ -106,7 +106,6 @@ type captureReader interface {
 
 type mcpCapture struct {
 	mu          sync.Mutex
-	iface       string
 	pluginsDir  string
 	workDir     string
 	mcpServer   *server.MCPServer
@@ -410,7 +409,7 @@ func (sm *sessionManager) deleteSession(sessionID, owner string) error {
 	return os.RemoveAll(sessionDir)
 }
 
-func newMCPCapture(iface, pluginsDir, workDir, pipelineAddr, httpAddr string, mcpServer *server.MCPServer, enableRawDebug bool, dbDriver, dbDSN string) (*mcpCapture, error) {
+func newMCPCapture(pluginsDir, workDir, pipelineAddr, httpAddr string, mcpServer *server.MCPServer, enableRawDebug bool, dbDriver, dbDSN string) (*mcpCapture, error) {
 	// gRPC client 连接 gt-pipeline。
 	// 默认拨号 :9888（TCP），可通过 -pipeline-addr 覆盖。
 	// token 模式下 pipeline 的 CaptureControl 挂了 Bearer 拦截器：
@@ -487,8 +486,7 @@ func newMCPCapture(iface, pluginsDir, workDir, pipelineAddr, httpAddr string, mc
 	}
 
 	m := &mcpCapture{
-		iface:          iface,
-		pluginsDir:     pluginsDir,
+		pluginsDir: pluginsDir,
 		workDir:        workDir,
 		mcpServer:      mcpServer,
 		sessionMgr:     newSessionManager(workDir),
@@ -561,17 +559,17 @@ func (m *mcpCapture) handleStartCapture(ctx context.Context, req mcp.CallToolReq
 		pcapFile, _ = filepath.Abs(pcapFile)
 	}
 
-	// 抓包来源：nic（网卡，默认）| proxy（移动代理 gt-singbox-agent 推送）| agent（gt-agent 推流）
+	// 抓包来源：proxy（移动代理 gt-singbox-agent 推送）| agent（gt-agent 推流，默认）。
 	// "mobile" 是 proxy 的历史别名。
-	source := req.GetString("source", "nic")
+	source := req.GetString("source", "agent")
 	if source == "mobile" {
 		source = "proxy"
 	}
 	agentSource := false
 	switch source {
-	case "", "nic", "proxy", "agent":
+	case "proxy", "agent":
 	default:
-		return errorResult(fmt.Errorf("unsupported source %q (allowed: nic|proxy|agent)", source)), nil
+		return errorResult(fmt.Errorf("unsupported source %q (allowed: proxy|agent)", source)), nil
 	}
 	if source == "agent" {
 		agentSource = true
@@ -625,14 +623,6 @@ func (m *mcpCapture) handleStartCapture(ctx context.Context, req mcp.CallToolReq
 		}
 	case agentSource:
 		// 纯 agent source：不设置基础 source，pipeline 侧仅订阅 agent hub
-	default:
-		// Live capture：使用配置的网卡，若 Device 为空则由 pipeline 自动探测所有网卡
-		if port <= 0 {
-			return errorResult(fmt.Errorf("port is required for source=nic")), nil
-		}
-		grpcReq.Source = &pb.StartCaptureRequest_Live{
-			Live: &pb.PcapLiveConfig{Device: m.iface},
-		}
 	}
 
 	resp, err := m.pipelineClient.StartCapture(ctx, grpcReq)
@@ -652,7 +642,6 @@ func (m *mcpCapture) handleStartCapture(ctx context.Context, req mcp.CallToolReq
 		Status:     "running",
 		Port:       port,
 		Plugin:     pluginName,
-		Interface:  m.iface,
 		PCAPFile:   pcapFile,
 		Source:     source,
 		ListenAddr: listenAddr,
@@ -671,7 +660,6 @@ func (m *mcpCapture) handleStartCapture(ctx context.Context, req mcp.CallToolReq
 		"plugin":      pluginName,
 		"source":      source,
 		"db_path":     resp.GetDbPath(),
-		"interface":   m.iface,
 		"listen_addr": listenAddr,
 		"project_id":  projectID,
 	}), nil
@@ -889,7 +877,7 @@ func (m *mcpCapture) handleListRegisteredPlugins(ctx context.Context, req mcp.Ca
 	}
 	var plugins []map[string]any
 	for _, p := range resp.GetPlugins() {
-		plugins = append(plugins, map[string]any{
+		entry := map[string]any{
 			"instance_id":    p.GetInstanceId(),
 			"name":           p.GetName(),
 			"protocol":       p.GetProtocol(),
@@ -899,7 +887,16 @@ func (m *mcpCapture) handleListRegisteredPlugins(ctx context.Context, req mcp.Ca
 			"online":         p.GetOnline(),
 			"last_heartbeat": p.GetLastHeartbeatUnix(),
 			"owner":          p.GetOwner(),
-		})
+		}
+		// 制品透明化：运行中实例的源目录/构建产物/是否过期来自 Developer Plane
+		// 的磁盘视图（与 status_plugin 的 artifact 同源）。未配置 Dev Plane 或
+		// 查询失败时不挂载——运行实例列表不因磁盘视图缺失而失败。
+		if m.pdClient != nil {
+			if art := m.devPlaneArtifact(ctx, p.GetName()); art != nil {
+				entry["artifact"] = art
+			}
+		}
+		plugins = append(plugins, entry)
 	}
 	var failures []map[string]any
 	for _, f := range resp.GetRecentFailures() {
@@ -997,23 +994,6 @@ func (m *mcpCapture) handleSetSessionPlugin(ctx context.Context, req mcp.CallToo
 		"session_id": resp.GetSessionId(),
 		"plugin":     resp.GetPlugin(),
 	}), nil
-}
-
-func (m *mcpCapture) handleListInterfaces(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	if m.pipelineClient == nil {
-		return errorResult(fmt.Errorf("pipeline client not available")), nil
-	}
-	resp, err := m.pipelineClient.ListInterfaces(ctx, &pb.ListInterfacesRequest{})
-	if err != nil {
-		slog.Error("list_interfaces failed", "error", err)
-		return errorResult(fmt.Errorf("list interfaces: %w", err)), nil
-	}
-	var out []map[string]any
-	for _, name := range resp.GetNames() {
-		out = append(out, map[string]any{"name": name})
-	}
-	slog.Info("list_interfaces completed", "count", len(out))
-	return successResult(map[string]any{"interfaces": out}), nil
 }
 
 func (m *mcpCapture) handleListLiveSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -2288,7 +2268,6 @@ func main() {
 	// 统一配置（T10）：-config 指向 gametrace.yaml（可选）。优先级 flag > 环境变量 GT_* > 配置文件 > 默认值。
 	cfgPath := flag.String("config", "", "统一配置文件 gametrace.yaml 路径（可选；优先级 flag > 环境变量 GT_* > 配置文件 > 默认值）")
 	addr := flag.String("addr", ":8781", "SSE server address（支持 :0 动态分配，实际地址回写 <workdir>/addr.mcp.json）")
-	iface := flag.String("iface", "", "capture interface; empty means all available interfaces")
 	pluginsDir := flag.String("plugins-dir", "plugins", "plugins directory")
 	// 手机所在 LAN 中可达的本机 IPv4。docker / Hyper-V 环境下启发式探测容易被
 	// 虚拟网卡带偏（例如 docker bridge 172.18.x），此时必须显式覆盖——
@@ -2443,7 +2422,7 @@ func main() {
 	// *workDir 的 flag 默认值是 "."，直接传给 newMCPCapture 会让数据目录锚在进程
 	// CWD 上，从而完全绕过 GT_HOME（容器里 CWD=/ 时表现为
 	// "open control store: unable to open database file (14)"）。
-	capture, err := newMCPCapture(*iface, resolvedPluginsDir, absWorkDir, *pipelineAddr, *addr, s, *enableRawDebug, *dbDriver, *dbDSN)
+	capture, err := newMCPCapture(resolvedPluginsDir, absWorkDir, *pipelineAddr, *addr, s, *enableRawDebug, *dbDriver, *dbDSN)
 	if err != nil {
 		slog.Error("init mcp capture", "error", err)
 		os.Exit(1)
@@ -2491,11 +2470,11 @@ func main() {
 	}
 
 	s.AddTool(mcp.NewTool("start_capture",
-		mcp.WithDescription("Start capturing traffic. Capture sources: source=nic (default) captures on a network interface filtered by port; source=proxy starts the mobile proxy gRPC listener (gt-singbox-agent connects and pushes connection-level frames); source=agent subscribes to the agent hub (a running gt-agent pushes raw frames for this session_id). Sources can be combined where supported (e.g. agent with pcap_file). Packets are always captured and stored; an optional plugin enables protocol decoding."),
-		mcp.WithNumber("port", mcp.DefaultNumber(0), mcp.Description("Server port to capture or filter, e.g. 8080. Required for source=nic; ignored for source=proxy")),
+		mcp.WithDescription("Start capturing traffic. Capture sources: source=agent (default) subscribes to the agent hub (a running gt-agent / probe pushes raw frames for this session_id); source=proxy starts the mobile proxy gRPC listener (gt-singbox-agent connects and pushes connection-level frames). An optional pcap_file replays an offline capture instead. Packets are always captured and stored; an optional plugin enables protocol decoding."),
+		mcp.WithNumber("port", mcp.DefaultNumber(0), mcp.Description("Server port to capture or filter, e.g. 8080")),
 		mcp.WithString("plugin", mcp.Description("Optional plugin name for protocol decoding, e.g. http. If omitted or no matching plugin is found, only raw packets are stored.")),
 		mcp.WithString("pcap_file", mcp.Description("Optional pcap file to replay instead of live capture")),
-		mcp.WithString("source", mcp.DefaultString("nic"), mcp.Description("Capture source: nic (network interface, default), proxy (mobile proxy via gt-singbox-agent) or agent (raw frames pushed by gt-agent via the agent hub)")),
+		mcp.WithString("source", mcp.DefaultString("agent"), mcp.Description("Capture source: agent (raw frames pushed by gt-agent via the agent hub, default) or proxy (mobile proxy via gt-singbox-agent)")),
 		mcp.WithString("listen_addr", mcp.DefaultString("127.0.0.1:9090"), mcp.Description("For source=proxy: gRPC listen address that gt-singbox-agent connects to, e.g. 127.0.0.1:9090 or unix:///tmp/gt-mobile.sock")),
 	), capture.handleStartCapture)
 
@@ -2686,7 +2665,7 @@ func main() {
 	), capture.handleGetCapabilities)
 
 	s.AddTool(mcp.NewTool("list_registered_plugins",
-		mcp.WithDescription("List all plugins currently registered with the pipeline (active via gRPC PluginRegistry). Different from list_plugins which scans the plugins directory for binary files."),
+		mcp.WithDescription("List all plugins currently registered with the pipeline (active via gRPC PluginRegistry). Different from list_plugins which scans the plugins directory for binary files. When the Developer Plane is connected, each plugin also carries an artifact view (source_dir/binary_path/binary_stale) showing which source directory and build artifact produced the running instance."),
 	), capture.handleListRegisteredPlugins)
 
 	s.AddTool(mcp.NewTool("get_plugin_manifest",
@@ -2705,10 +2684,6 @@ func main() {
 		mcp.WithString("session_id", mcp.Required(), mcp.Description("Target capture session ID")),
 		mcp.WithString("plugin", mcp.Required(), mcp.Description("New decoder plugin name to bind (must be registered)")),
 	), capture.handleSetSessionPlugin)
-
-	s.AddTool(mcp.NewTool("list_interfaces",
-		mcp.WithDescription("List available pcap capture interfaces"),
-	), capture.handleListInterfaces)
 
 	s.AddTool(mcp.NewTool("list_live_sessions",
 		mcp.WithDescription("List currently active capture sessions from the pipeline"),

@@ -12,7 +12,7 @@ import (
 
 // agentOnly=true 且 hub 未配置：明确报错，而不是静默开出一个空会话。
 func TestOpenCaptureSourcesAgentOnlyNoHub(t *testing.T) {
-	_, err := openCaptureSources(context.Background(), "", 0, "", nil, nil, nil, "s1", true)
+	_, err := openCaptureSources(context.Background(), 0, "", nil, nil, "s1", true)
 	if err == nil {
 		t.Fatal("agentOnly without agent hub should fail")
 	}
@@ -21,7 +21,7 @@ func TestOpenCaptureSourcesAgentOnlyNoHub(t *testing.T) {
 // agentOnly=true + hub：只打开 agent source，不打开任何基础（网卡）source。
 func TestOpenCaptureSourcesAgentOnlyWithHub(t *testing.T) {
 	hub := agent.NewHub()
-	sources, err := openCaptureSources(context.Background(), "", 0, "", nil, nil, hub, "s1", true)
+	sources, err := openCaptureSources(context.Background(), 0, "", nil, hub, "s1", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,12 +32,12 @@ func TestOpenCaptureSourcesAgentOnlyWithHub(t *testing.T) {
 }
 
 // agentOnly=false（既有行为）：hub 存在时在基础 source 之外追加 agent source——
-// 这里用无 hub + 空 iface 的错误路径验证基础 source 分支未被跳过。
+// 这里用无 hub + 无基础配置的错误路径验证基础 source 分支未被跳过。
 func TestOpenCaptureSourcesBasePathUnchanged(t *testing.T) {
 	// agentOnly=false 且无任何可用配置：走基础 source 路径（无 hub 时不追加 agent）。
-	// 空 iface + 无设备时 openCaptureSourcesBase 尝试枚举网卡，CI 环境通常失败——
+	// 无 pcap_file/mobile 配置时 openCaptureSourcesBase 返回明确错误——
 	// 无论哪种错误，都不应出现 agent source 相关信息。
-	_, err := openCaptureSources(context.Background(), "", 0, "", nil, nil, nil, "s1", false)
+	_, err := openCaptureSources(context.Background(), 0, "", nil, nil, "s1", false)
 	if err == nil {
 		return // 意外成功也可接受（环境有可用网卡时的 fallback 行为未变）
 	}

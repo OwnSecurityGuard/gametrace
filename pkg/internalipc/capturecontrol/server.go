@@ -1,5 +1,5 @@
 // Package capturecontrol 实现 CaptureControl gRPC server。
-// 由 gt-pipeline 嵌入使用，处理 start/stop/status/list_interfaces 控制命令。
+// 由 gt-pipeline 嵌入使用，处理 start/stop/status 控制命令。
 // 实际抓包逻辑由 gt-pipeline 的 captureEngine 提供，server 仅做 RPC 适配。
 package capturecontrol
 
@@ -26,8 +26,6 @@ type CaptureEngine interface {
 	GetStatus(ctx context.Context, sessionID string) (StatusResult, error)
 	// ListSessions 列出当前活跃的抓包会话。
 	ListSessions(ctx context.Context) ([]SessionSummary, error)
-	// ListInterfaces 列出可用网卡。
-	ListInterfaces(ctx context.Context) ([]string, error)
 	// DecodeRawPackets 用指定插件对离线会话的 raw_packets 批量解码，
 	// 结果写入该 session 的 events 表。
 	DecodeRawPackets(ctx context.Context, req DecodeRawPacketsRequest) (DecodeRawPacketsResult, error)
@@ -238,7 +236,6 @@ type StartSessionRequest struct {
 	SessionID string
 	Plugin    string
 	Port      int
-	Live      *LiveConfig
 	File      *FileConfig
 	Mobile    *MobileConfig
 	// Agent 为 true 时会话订阅 agent capture source（可与其他 source 组合，
@@ -252,14 +249,6 @@ type StartSessionRequest struct {
 	// Metadata 是会话创建时的来源标记（落 SessionMeta.Extra，JSON 存 sessions.extra 列）。
 	// 探针链路用：source=probe-archive + probe_id/probe_name/时间窗（离线导入溯源）。
 	Metadata map[string]string
-}
-
-// LiveConfig 对应 proto PcapLiveConfig。
-type LiveConfig struct {
-	Device  string
-	BPF     string
-	SnapLen int32
-	Promisc bool
 }
 
 // FileConfig 对应 proto PcapFileConfig。
@@ -368,13 +357,6 @@ func (s *Server) StartCapture(ctx context.Context, req *pb.StartCaptureRequest) 
 		ProjectID: req.GetProjectId(),
 	}
 	switch src := req.GetSource().(type) {
-	case *pb.StartCaptureRequest_Live:
-		engineReq.Live = &LiveConfig{
-			Device:  src.Live.GetDevice(),
-			BPF:     src.Live.GetBpf(),
-			SnapLen: src.Live.GetSnapLen(),
-			Promisc: src.Live.GetPromisc(),
-		}
 	case *pb.StartCaptureRequest_File:
 		engineReq.File = &FileConfig{Path: src.File.GetPath()}
 	case *pb.StartCaptureRequest_Mobile:
@@ -454,15 +436,6 @@ func (s *Server) ListCaptureSessions(ctx context.Context, req *pb.ListCaptureSes
 		})
 	}
 	return &pb.ListCaptureSessionsResponse{Sessions: out}, nil
-}
-
-// ListInterfaces 处理网卡列表 RPC。
-func (s *Server) ListInterfaces(ctx context.Context, req *pb.ListInterfacesRequest) (*pb.ListInterfacesResponse, error) {
-	names, err := s.engine.ListInterfaces(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return &pb.ListInterfacesResponse{Names: names}, nil
 }
 
 // DecodeRawPackets 处理离线解码 RPC。

@@ -3,9 +3,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import {
-  useStartCapture,
   useRegisteredPlugins,
-  useListInterfaces,
   useSessionStatus,
   useListProbes,
   useProbeStartCapture,
@@ -13,7 +11,7 @@ import {
 import { groupParsers, GROUP_LABEL } from "@/lib/parsers";
 import { toast } from "@/components/ui/toast";
 import type { ProbeInfo } from "@/types/probe";
-import { X, Check, Play, Network, ChevronDown, Loader2, Server, MonitorSmartphone } from "lucide-react";
+import { X, Check, Play, Loader2, Server, MonitorSmartphone, ChevronDown } from "lucide-react";
 
 /** 可选项「已选中」的统一醒目样式：主色边框 + 浅底 + 外圈 ring + 轻投影，配合 Check 角标。 */
 const SELECT_ACTIVE =
@@ -89,7 +87,7 @@ function ProbeStateChip({ p }: { p: ProbeInfo }) {
   }
 }
 
-/** 开始抓包对话框：本机网卡抓包 / 选一台探针机器抓包（探针是基础设施，管理见「探针」入口）。 */
+/** 开始抓包对话框：选一台探针机器抓包（探针是基础设施，管理见「探针」入口）。 */
 export function StartCaptureDialog({
   open,
   onClose,
@@ -99,7 +97,6 @@ export function StartCaptureDialog({
   initialProjectId,
   initialProbeId,
 }: StartCaptureDialogProps) {
-  const [source, setSource] = useState<"nic" | "agent">("nic");
   const [probeId, setProbeId] = useState("");
   // 探针抓包选卡：空数组 = 自动选卡（探针按出口 IP 挑默认网卡）；可多选并发抓。
   const [probeIfaces, setProbeIfaces] = useState<string[]>([]);
@@ -112,15 +109,11 @@ export function StartCaptureDialog({
   const [started, setStarted] = useState(false);
   // 探针/agent 源启动成功后保持弹窗打开：轮询会话状态直到推流到达。
   const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
-  // 高级设置折叠：Interface/BPF 等技术细节默认收起，普通用户只看 端口 + 解析器。
+  // 高级设置折叠：多网卡等技术细节默认收起，普通用户只看 端口 + 解析器。
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const start = useStartCapture();
   // 已注册且在线才能用于抓包解码；离线插件无法建立解码流，故置灰禁用但保留可见，便于排查。
   const { data: pluginsData } = useRegisteredPlugins();
   const plugins = pluginsData?.plugins ?? [];
-  // list_interfaces：本机抓包的网卡列表（仅供参考——当前一次 MCP 服务实例只绑一个 -iface）。
-  const { data: ifacesData } = useListInterfaces();
-  const interfaces = ifacesData?.interfaces ?? [];
   // 已注册插件归组（Godot/Unity/HTTP/自定义），供普通用户以卡片而非下拉选择解析器。
   const pluginGroups = groupParsers(plugins);
 
@@ -146,9 +139,8 @@ export function StartCaptureDialog({
       if (initialPort && initialPort > 0) setPort(String(initialPort));
       if (initialPlugin) setPlugin(initialPlugin);
       setProjectId(initialProjectId ?? "");
-      // 从「下载探针」接入闭环带入探针 id：自动切到探针机器源并预选，免手动找。
+      // 从「下载探针」接入闭环带入探针 id：自动预选，免手动找。
       if (initialProbeId) {
-        setSource("agent");
         setProbeId(initialProbeId);
       }
     }
@@ -168,60 +160,32 @@ export function StartCaptureDialog({
 
   function handleStart() {
     const p = parseInt(port, 10);
-    // 本机网卡抓包要求端口（BPF 过滤用）；探针抓包由探针侧按端口过滤，可留空。
-    if (source === "nic" && (!p || p <= 0)) return;
-    if (source === "agent") {
-      // 探针抓包：建会话 + AssignCapture 一体（probe_start_capture）。
-      const target = probes.find((x) => x.probe_id === probeId);
-      if (!target) {
-        toast.error("请选择一台探针机器");
-        return;
-      }
-      probeStart.mutate(
-        {
-          probeId,
-          ports: p > 0 ? [p] : undefined,
-          ifaces: probeIfaces.length > 0 ? probeIfaces : undefined,
-          plugin: plugin || undefined,
-          projectId: projectId || undefined,
-          protocol,
-        },
-        {
-          onSuccess: (data) => {
-            const sessionId = data?.session_id ?? "";
-            if (sessionId) onStarted?.(sessionId);
-            toast.success("抓包已下发", `${target.name} · 会话 ${sessionId}`);
-            // 进入「等待推流」闭环：探针收到指令开网卡 → 推流到达。
-            setStarted(true);
-            setAgentSessionId(sessionId);
-          },
-          onError: (err) => {
-            toast.error("下发失败", err.message);
-          },
-        },
-      );
+    // 探针抓包：建会话 + AssignCapture 一体（probe_start_capture）。
+    const target = probes.find((x) => x.probe_id === probeId);
+    if (!target) {
+      toast.error("请选择一台探针机器");
       return;
     }
-    start.mutate(
+    probeStart.mutate(
       {
-        port: p > 0 ? p : 0,
+        probeId,
+        ports: p > 0 ? [p] : undefined,
+        ifaces: probeIfaces.length > 0 ? probeIfaces : undefined,
         plugin: plugin || undefined,
-        source,
         projectId: projectId || undefined,
+        protocol,
       },
       {
         onSuccess: (data) => {
           const sessionId = data?.session_id ?? "";
           if (sessionId) onStarted?.(sessionId);
-          const detail = [port ? `端口 ${port}` : null, plugin ? `插件 ${plugin}` : null]
-            .filter(Boolean)
-            .join(" · ");
-          toast.success("抓包会话已启动", detail);
+          toast.success("抓包已下发", `${target.name} · 会话 ${sessionId}`);
+          // 进入「等待推流」闭环：探针收到指令开网卡 → 推流到达。
           setStarted(true);
-          setTimeout(() => {
-            setStarted(false);
-            onClose();
-          }, 800);
+          setAgentSessionId(sessionId);
+        },
+        onError: (err) => {
+          toast.error("下发失败", err.message);
         },
       },
     );
@@ -241,7 +205,7 @@ export function StartCaptureDialog({
       onClose={handleClose}
       icon={<Play className="h-5 w-5" />}
       title="开始抓包"
-      description="本机网卡抓包，或选一台探针机器开始抓包；移动代理抓包为常驻服务，请在「代理服务器配置」中查看连接二维码。"
+      description="选一台探针机器开始抓包；移动代理抓包为常驻服务，请在「代理服务器配置」中查看连接二维码。"
       footer={
         <>
           <Button variant="outline" onClick={handleClose}>
@@ -251,9 +215,10 @@ export function StartCaptureDialog({
           <Button
             onClick={handleStart}
             disabled={
-              start.isPending ||
               probeStart.isPending ||
-              (source === "agent" && (!probeId || !selectedProbe || !probeSelectable(selectedProbe)))
+              !probeId ||
+              !selectedProbe ||
+              !probeSelectable(selectedProbe)
             }
           >
             {started ? (
@@ -261,7 +226,7 @@ export function StartCaptureDialog({
                 <Check className="h-4 w-4" />
                 已启动
               </>
-            ) : start.isPending || probeStart.isPending ? (
+            ) : probeStart.isPending ? (
               "启动中…"
             ) : (
               "启动"
@@ -306,45 +271,7 @@ export function StartCaptureDialog({
       ) : (
         <div className="space-y-3">
           <div>
-            <label className="text-sm font-medium">抓包源</label>
-            <div
-              role="radiogroup"
-              aria-label="抓包源"
-              className="mt-1.5 flex items-center gap-1 rounded-lg bg-muted p-1"
-            >
-              {(
-                [
-                  { id: "nic", label: "本机网卡" },
-                  { id: "agent", label: "探针机器" },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={source === opt.id}
-                  onClick={() => setSource(opt.id)}
-                  className={
-                    "flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-[background-color,color] " +
-                    (source === opt.id
-                      ? "bg-card text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground")
-                  }
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-            {source === "agent" && (
-              <p className="mt-1.5 text-xs text-muted-foreground">
-                选择一台你有权限的探针机器，抓包会话将自动指派给它；探针的接入与留存在「探针」入口管理。
-              </p>
-            )}
-          </div>
-
-          {source === "agent" ? (
-            <div>
-              <label className="text-sm font-medium">选择机器</label>
+            <label className="text-sm font-medium">选择机器</label>
               {probes.length === 0 ? (
                 <div className="mt-1.5 rounded-lg border border-dashed border-border bg-muted/40 px-3 py-4 text-center text-xs text-muted-foreground">
                   还没有可用的探针机器。通过顶部「接入设备」下载探针，
@@ -385,7 +312,6 @@ export function StartCaptureDialog({
                 </div>
               )}
             </div>
-          ) : null}
 
           <div>
             <label className="text-sm font-medium">端口</label>
@@ -394,13 +320,12 @@ export function StartCaptureDialog({
               onChange={(e) => setPort(e.target.value)}
               aria-label="监听端口"
               inputMode="numeric"
-              placeholder={source === "nic" ? "8080" : "可留空（全抓）"}
+              placeholder="可留空（全抓）"
               className="mt-1.5 font-mono"
             />
           </div>
-          {source === "agent" && (
-            <div>
-              <label className="text-sm font-medium">端口协议</label>
+          <div>
+            <label className="text-sm font-medium">端口协议</label>
               <div className="mt-1.5 flex items-center gap-1 rounded-lg bg-muted p-1">
                 {(
                   [
@@ -429,8 +354,7 @@ export function StartCaptureDialog({
               <p className="mt-1 text-xs text-muted-foreground">
                 端口非空时按所选协议在探针侧过滤；UDP/TCP+UDP 需要探针 Npcap 支持。
               </p>
-            </div>
-          )}
+          </div>
           {/* 高级设置（默认收起）：Interface 等技术细节，普通用户只需选端口 + 解析器。 */}
           <button
             type="button"
@@ -444,35 +368,10 @@ export function StartCaptureDialog({
           {showAdvanced && (
             <div>
               <label className="flex items-center gap-1.5 text-sm font-medium">
-                {source === "nic" ? (
-                  <>
-                    <Network className="h-3.5 w-3.5 text-muted-foreground" />
-                    可用网卡（参考）
-                  </>
-                ) : (
-                  <>
-                    <MonitorSmartphone className="h-3.5 w-3.5 text-muted-foreground" />
-                    探针侧网卡
-                  </>
-                )}
+                <MonitorSmartphone className="h-3.5 w-3.5 text-muted-foreground" />
+                探针侧网卡
               </label>
-              {source === "nic" ? (
-                interfaces.length === 0 ? (
-                  <p className="mt-1 text-xs text-muted-foreground">暂无可列举的网卡。</p>
-                ) : (
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {interfaces.map((iface) => (
-                      <span
-                        key={iface.name}
-                        className="rounded-md border border-border bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground"
-                        title={iface.name}
-                      >
-                        {iface.name}
-                      </span>
-                    ))}
-                  </div>
-                )
-              ) : !selectedProbe || (selectedProbe.interfaces?.length ?? 0) === 0 ? (
+              {!selectedProbe || (selectedProbe.interfaces?.length ?? 0) === 0 ? (
                 <p className="mt-1 text-xs text-muted-foreground">
                   {selectedProbe
                     ? "探针未上报网卡清单（未装 Npcap 或版本过旧），将自动选择默认网卡。"
@@ -512,11 +411,6 @@ export function StartCaptureDialog({
                       : `已选 ${probeIfaces.length} 张网卡，多选时各卡并发抓、汇入同一会话。`}
                   </p>
                 </>
-              )}
-              {source === "nic" && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  网卡在 MCP 启动时由 <code className="font-mono">-iface</code> 固定，本对话框不切换网卡。
-                </p>
               )}
             </div>
           )}
@@ -564,9 +458,9 @@ export function StartCaptureDialog({
         </div>
       )}
 
-      {(start.isError || probeStart.isError) && (
+      {probeStart.isError && (
         <p className="mt-3 text-xs text-destructive">
-          启动失败：{probeStart.error?.message ?? start.error?.message}
+          启动失败：{probeStart.error?.message}
         </p>
       )}
     </Dialog>

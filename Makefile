@@ -31,10 +31,11 @@ LDFLAGS := -s -w \
 # 说明：pcap 采集层是 cgo 依赖（github.com/gopacket/gopacket/pcap），交叉编译
 # 无法携带目标平台的 libpcap，因此 release 矩阵统一 CGO_ENABLED=0，且**不带**
 # -tags pcap：
-#   - cmd/gt-agent 与 cmd/gt-pipeline 的实时抓包（gopacket/pcap、pcaplive）
-#     均按 pcap / !pcap 构建标签门控，无标签构建可编译，运行时给出明确错误；
-#   - pcap 文件源（pcapgo，纯 Go）与 agent 推流（gRPC）不受影响；
-#   - 需要"能本机抓包"的服务端产物用 Docker 镜像（见 Dockerfile，带 libpcap）。
+#   - 仅 cmd/gt-agent（探针）依赖 pcap：其网卡实时抓包按 pcap / !pcap 构建标签
+#     门控，无标签构建可编译，运行时给出明确错误；
+#   - pcap 文件源（pcapgo，纯 Go）、gt-pipeline 抓包源（agent 推流 / 移动代理）
+#     不受影响；gt-pipeline 自身已无本机网卡抓包（pcaplive 已移除）；
+#   - 需要探针网卡抓包的产物用 Docker 镜像（见 Dockerfile，带 libpcap）。
 # windows/amd64 产物带 .exe 后缀，其余不带。
 # 本 target 只用 POSIX sh 语法（$$ 转义 + for/if），无 GNU make 扩展。
 # ============================================================================

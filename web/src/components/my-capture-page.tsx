@@ -338,7 +338,7 @@ export function MyCapturePage({
             className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground"
           >
             <Server className="h-3.5 w-3.5" />
-            在服务器网卡上直接抓包
+            用探针机器开始抓包
           </button>
         )}
       </div>

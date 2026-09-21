@@ -20,13 +20,11 @@ import type {
   ListRegisteredPluginsResult,
   SetSessionPluginResult,
   DeregisterPluginResult,
-  StartCaptureResult,
   StopCaptureResult,
 } from "@/types/registered-plugin";
 import type { TestPluginResult, TestPluginVars } from "@/types/plugin-test";
 import type {
   SessionStatusResult,
-  ListInterfacesResult,
   DeleteSessionResult,
 } from "@/types/session-extra";
 import type {
@@ -331,34 +329,6 @@ export function useDeregisterPlugin() {
   });
 }
 
-/** 启动一次抓包会话（可指定来源与解码插件）。 */
-export function useStartCapture() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (vars: {
-      port: number;
-      plugin?: string;
-      pcapFile?: string;
-      /** nic | proxy */
-      source?: string;
-      listenAddr?: string;
-      /** 从项目一键抓包时绑定的项目 id，抓包会话归属到该项目 */
-      projectId?: string;
-    }) =>
-      mcpClient.callTool<StartCaptureResult>("start_capture", {
-        port: vars.port,
-        plugin: vars.plugin ?? "",
-        pcap_file: vars.pcapFile,
-        source: vars.source ?? "nic",
-        project_id: vars.projectId ?? "",
-        listen_addr: vars.source === "proxy" ? (vars.listenAddr ?? "127.0.0.1:9090") : undefined,
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
-    },
-  });
-}
-
 /** 停止指定 session 的抓包 */
 export function useStopCapture() {
   const queryClient = useQueryClient();
@@ -437,15 +407,6 @@ export function useSessionStatus(sessionId: string | null, refetchInterval = 500
       }),
     enabled: !!sessionId,
     refetchInterval,
-  });
-}
-
-/** list_interfaces：列出可用抓包网卡。 */
-export function useListInterfaces() {
-  return useQuery({
-    queryKey: ["interfaces"],
-    queryFn: () => mcpClient.callTool<ListInterfacesResult>("list_interfaces"),
-    staleTime: 5 * 60_000,
   });
 }
 

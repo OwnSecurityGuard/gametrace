@@ -1,6 +1,6 @@
 ---
 name: "decoder-plugin-guide"
-description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gametrace/sdk）接入 GameTrace 平台：协议分析、插件骨架、TCP 重组与握手处理、plugin.yaml、测试与验证。semantic_rules 的选取标准、约束、校验机制与验收标准见 §5.2–§5.6。当用户要为新协议编写解码插件、接入自定义游戏协议、解析网络协议为业务事件，或要编写/审查/修正 semantic_rules 时调用。"
+description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gametrace/sdk）接入 GameTrace 平台：协议分析、编码前必交的数据包处理链路、Event 字段与持久化声明、插件骨架、TCP 重组与握手处理、plugin.yaml、decode 诊断指标、兜底判断、必交材料清单、测试与验证。semantic_rules 的选取标准、约束、校验机制与验收标准见 §5.2–§5.6。当用户要为新协议编写解码插件、接入自定义游戏协议、解析网络协议为业务事件，或要编写/审查/修正 semantic_rules 时调用。"
 ---
 
 # GameTrace 解码插件开发指南
@@ -103,6 +103,26 @@ func loadDotEnv(path string) {
 5. 语义证据：候选 semantic_rules 的出处（哪个消息、哪个字段、哪一侧；双向都发的标签单独标记）。
 
 协议笔记写进插件注释与 plugin.yaml 的 `hints`；另产出一份**语义规则证据表**（每条候选规则标注依据来源；证据不足的标「待确认」），它是 §5.3 四道准入门的输入——写 plugin.yaml 前与用户对齐，不猜。
+
+#### 1.1 编码前必交：Packet 处理链路（先写链路，再写解析器）
+
+**禁止**用 protobuf/默认结构体推导代替协议分析——"proto 长什么样就默认怎么解"是实际踩过的最常见坑。开始写 `decode.go` **之前**，必须先产出一份**数据包处理链路**（口头跟用户过一遍不算，要写下来进插件目录，如 `docs/packet-line.md`），把"拿到一个包，接下来每一步做什么"完整想清楚：
+
+1. **包头字段表**：每个字段的偏移、长度、字节序、取值范围、含义。逐字段列出，不跳。形式：
+   ```markdown
+   | 偏移 | 长度 | 字节序 | 字段 | 含义 |
+   |------|------|--------|------|------|
+   | 0    | 1    | —      | kind  | 消息类型（1=心跳/2=登录/3=移动）|
+   | 1    | 4    | BE     | body_len | 负载长度（含 body 头）|
+   | 5    | 1    | —      | flags | 位标志（bit0=推送/pull，bit1=压缩）|
+   | 6    | n    | —      | body  | 负载体，按 kind 分型解析 |
+   ```
+2. **转化链路**：原始字节 → 剥头 → 重组 → 解析 → `event.Value` JSON，每步用什么、产出什么。明确"哪一帧/哪一段字节对应哪个 JSON 字段"。
+3. **JSON 化规则**：如何变成人类可读 JSON（字段名映射、枚举→字符串还是留数字、嵌套对象拆分）。让测试人员看完 JSON 能还原业务的真实含义。
+4. **服务端推送的处理**：推送类数据（无请求对应、服务器主动下发）怎么识别、怎么处理——是单独消息类型，还是复用同一类型加 `is_push` 语义？**在链路上先写清楚**再决定 `pair` 规则与 `annotate` 怎么写（推送不参与 `pair`，见 §5.4）。
+5. **不知道的字段**：标明"待确认"，与用户对齐后再定，不猜。
+
+链路文档是交付必交材料之一（见 §8 必交材料清单）；写不清链路 = 协议分析没过，不允许进入编码。
 
 ### 2. 插件骨架
 
@@ -210,6 +230,34 @@ type Event struct {
 	CorrelationKey string         // 业务会话/操作标识（battle_id / txn_id 等）；不是连接标识
 }
 ```
+
+#### 3.0 Event 字段与持久化声明（解码产物落库口径，写之前先读）
+
+解码器发出去的事件最终落进宿主数据库。**插件作者必须知道"我发的每个字段去哪了、后面能不能查回来"**——否则会默认 proto 字段直接落库、设计出无法持久化的事件。宿主 `pkg/store` 的 `events` 表实际列如下（SQLite/PG 同一套）：
+
+| events 列 | 来源 | 说明 |
+|---|---|---|
+| `id` | 宿主 Identity | 自动生成 UUIDv7，解码器不指定 |
+| `session_id` | 宿主赋值 | 来自会话上下文 |
+| `type` | `event_type` | 形如 `http.request`，解码器返回 |
+| `source` | 宿主赋值 | 抓包来源标识 |
+| `timestamp` | 宿主赋值 | 纳秒时间戳，解码器不指定 |
+| `causation_id` | Trace | 宿主按 pair 规则写 `causation_id` |
+| `correlation_id` | pair 规则 / `correlation_key` | 配对成功后覆盖为请求方事件 id；未配对时保留 `CorrelationKey` |
+| `origin_id` | Trace | 派生事件链，当前解码器可忽略 |
+| `context` | Context | `flow_id` / `raw_packet_id` / `message_ordinal` / `direction` 的 MsgPack |
+| `payload` | Payload + Meta + Analysis **合并** | 见下方"存储口径" |
+| `created_at` | 宿主赋值 | 入库时间 |
+| `scenario_id` / `replay_id` | 宿主赋值 | 重放链路用，解码器不指定 |
+
+**存储口径（关键）**：`payload` 列存的是 Payload/Meta/Analysis **三段合并后的扁平 MsgPack**（`event.MergeReservedKeys(Payload, Meta, Analysis)`），读取时宿主用 `event.SplitReservedKeys` 拆回 —— 因此：
+
+- 解码器发的 Meta 键（如 `direction`）会以保留键形式落进 `payload` 列，**前端用 `list_decoded_data` 查回来的行，`meta` 字段是从 payload 拆出的**；
+- **Meta / Analysis 不存在独立列**，不要假设"改了 Meta 就能单独更新某列"——事件是不可变、追加写入的；
+- 协议业务字段与平台字段分属不同 PATH 空间（`data.*` 与 `_meta.*`），落库后 json path 互不污染；
+- 状态类数据走 `_state_changes`（Analysis 通道保留键），宿主投影进独立的 `state_changes` 表；解码器**不能**直接写 `state_changes` 表。
+
+对插件作者的实际约束：**你返回的事件上每个字段（event_type / payload 键 / meta 键）都要能在落库后通过 `list_decoded_data` 原样查回**。验收时用真实抓包会话查一遍（§7 宿主侧验证），对照这里的列映射确认没有字段丢在"只进日志不出库"的地方。
 
 解码核心骨架：
 
@@ -638,9 +686,50 @@ go test -count=1 ./...   # 必须 -count=1：go test 缓存会掩盖问题
 - 宿主侧验证：把插件 `--registry=` 指向宿主，观察宿主日志 `semantic rules:` 无 error 级问题；用 `list_decoded_data` 核对事件的 `payload`（业务字段）与 `meta.msg_name`（消息名）。
 - 前端验证：协议数据页应显示业务 payload 为主、消息名正确、请求/响应按 `causation_id` 配对并排。
 
+### 7.1 decode 诊断指标（跑起来后如何判断解码质量）
+
+解码质量不是"切到页面看有没有数据"就能判断的。宿主把"解不开"的事实落库并暴露，插件作者必须会用这几个指标，不能只看成功数自我感觉良好：
+
+| 指标 | 在哪里看 | 含义 | 常见误读 |
+|---|---|---|---|
+| 会话 `decode_errors` 计数 | `get_session_status` 的 `decode_errors` | 该会话累计解码失败次数（插件主动报错 + 链路层失败合计） | `0` 只代表没有报错，不代表每条包都解出了事件——**还要看事件数** |
+| 解码失败分组 | `list_decoded_data` 的 `decode_error_groups` / 宿主 `ReplaceDecodeErrorGroups` 落库表 | 按**归一化错误模板**聚合 `ErrorCollector`：每条含 `kind`（`plugin`=插件主动报错，`transport`=链路层失败）、`template`（模板，如 `unknown message type <n>`）、`count`、`sample`（首条原始错误） | 「有计数但看不到原因」= 没有用模板归一化，写错误时参数化了每次变化的部分 |
+| 插件 `kind=plugin` 报错 | 错误响应的 `Error` 字段 | 解码器在 `done=true` 时附带 `Error` 即视为插件主动报错 | 把"这条解不了"当 `Error` 返回会让**整帧算失败**；能恢复的坏消息应跳过并继续，只有整帧不可解时才报错 |
+| 事件产出数 | 会话 `raw_packets` vs `events` | 原始包 vs 解码事件 | 事件数远小于包数是正常的（ACK/握手/推送过滤），但**长期为 0 且无错误** = 链路分析没做对（最常见的 framing 坑） |
+
+**decode_errors 与 template 归一的验收要求**：错误消息必须参数稳定——固定前缀 + `<n>` 占位符（如 `unexpected EOF at offset <n>`），让大量同类失败聚合到同一 `template`；把每次不同的明文直接写进错误（如 `unexpected EOF at offset 12345`）会导致 `decode_error_groups` 每帧一条、`count` 永远 1，前端无法归因。SDK 的 `ErrorCollector` 已按模板哈希聚合并限量，插件只需按上面规范产错。
+
+### 7.2 解码插件的兜底判断（坏包/未知协议不 panic，还要有明确去向）
+
+解码器运行在宿主热路径上，**一个 panic / 死循环 / 无限内存增长会拖垮整条抓包链路**。兜底不是"try 一下"而是分层设计，四层缺一不可：
+
+1. **帧解析层**（每个请求入口）：`recover()` 兜底——坏包不 panic（示例骨架已有）；`framing.ExtractL7` 返回 `!ok` 时直接 `done=true` 返回，不算错误。
+2. **消息级容错**（解析循环内）：非法长度 / 截断 / 校验失败 → 跳过（`Consume` 部分或 `Forget` 整流）继续，不中断后续包；**不要**把"一条坏消息"升级为整帧错误（见 7.1 的 plugin 报错误读）。
+3. **流状态兜底**：重并发/攻击性流量下,`Reassembler` 必须设上限（参考插件 4 MiB / 流），失步时 `Forget` 丢弃流状态让下一段重新自同步（§3 坑 3）；不会无限增长。
+4. **协议覆盖兜底**：就是不认识的字节——**先喂现场抓包**（`sample_bytes_plugin`）确认协议范围，编码时对"未识别消息"要么**不产出事件仅 done**，要么**仅当用户确认后**产出事件并附 `Meta` 标注（如 `unknown`），绝不臆造 payload 字段。
+5. **超时/迟到兜底**：宿主侧对无响应对应用侧兜底——`pair` 待配对 30s TTL（F7）；插件侧对**长轮询/异步**响应不声明 `pair`（无法在 30s 内配对）。
+
+### 7.3 协议插件必交材料（交付清单，逐项验收）
+
+插件交付 = 能跑的程序 + **能让人独立复核的证据链**。以下材料缺一不可，按序逐个核对（§1.1 链路、§5.5 覆盖率表在交付时要有最终版）：
+
+| # | 材料 | 出处/要求 |
+|---|---|---|
+| 1 | `docs/packet-line.md`（或插件目录内同义文档） | §1.1：包头字段表 + 转化链路 + JSON 化规则 + 服务端推送处理 |
+| 2 | 语义规则证据表 | §1：每条候选规则的依据（哪个消息/字段/哪一侧，源码还是抓包） |
+| 3 | 覆盖率回放表 + 用户判定结果 | §5.5：逐条命中数 + name 实际生效，0 命中规则已处理 |
+| 4 | `plugin.yaml` | `contract.NewPluginChecker().Check(m)` 零 violation |
+| 5 | 单测 + 固件 | §6：跨段重组、多连接、5-tuple 复用、manifest 一致性、畸形输入 |
+| 6 | 真实抓包样例（可选但强烈建议） | `sample_bytes_plugin` 采样，供 reviewer 直接用 `list_decoded_data` 复核 |
+| 7 | 宿主侧验证结果 | §7：`semantic rules:` 无 error；`list_decoded_data` 字段能原样查回（§3.0 约束） |
+| 8 | 诊断指标自查 | §7.1：会话 `decode_errors`、`decode_error_groups` 分组合理、模板参数稳定 |
+
+**评审红线**：缺 §1.1 链路或 §5.5 覆盖率表的插件==协议分析未完成，不允许进入上线。
+
 ## 踩坑清单（完成前逐条自查）
 
 - [ ] go.mod 为 `go 1.26`（与宿主对齐）
+- [ ] **编码前已产出 Packet 处理链路文档**（§1.1：包头字段表 + 转化链路 + JSON 化规则 + 服务端推送处理）并进插件目录
 - [ ] SYN/RST 空 payload 段 Push 给了 Reassembler（坑 2）
 - [ ] SYN/RST 重置了握手簿记（坑 1；仅 TCP 需要，UDP 跳过）
 - [ ] 长度字段字节序正确（wesnoth 为 big-endian）
@@ -662,5 +751,9 @@ go test -count=1 ./...   # 必须 -count=1：go test 缓存会掩盖问题
 - [ ] 双向都发的消息 `annotate` 已留空（不标错方向/角色）；标错比不标更糟
 - [ ] 已跑覆盖率回放并产出覆盖率表交用户判定，0 命中规则已删除或写明原因（§5.5）
 - [ ] 测试覆盖：跨段重组、多连接、5-tuple 复用、manifest 一致性（UDP 插件加：分包独立、无握手）
+- [ ] **诊断指标已核对**（§7.1）：会话 `decode_errors`、`decode_error_groups` 分组合理、错误模板参数稳定（`<n>` 占位符）
+- [ ] **兜底判断四层齐备**（§7.2）：recover + ExtractL7 !ok 回 done；消息级跳过；Reassembler 上限 + Forget；未识别消息不臆造 payload
+- [ ] **必交材料齐全**（§7.3）：packet-line 文档、语义证据表、覆盖率回放表、plugin.yaml、测试与固件
+- [ ] **运行实例 ↔ 制品一致**（§7.3）：`list_registered_plugins` 返回的 `artifact.source_dir/binary_path` 与改动目录一致；`binary_stale=true` 说明源码改过没重新 `build_plugin`（跑的是旧产物）
 - [ ] `go vet` + `go build` + `go test -count=1` 全过
 - [ ] 宿主日志无 semantic rules error；前端消息名正确显示

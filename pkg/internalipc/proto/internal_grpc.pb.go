@@ -23,7 +23,6 @@ const (
 	CaptureControl_StopCapture_FullMethodName         = "/gametrace.internalipc.CaptureControl/StopCapture"
 	CaptureControl_GetCaptureStatus_FullMethodName    = "/gametrace.internalipc.CaptureControl/GetCaptureStatus"
 	CaptureControl_ListCaptureSessions_FullMethodName = "/gametrace.internalipc.CaptureControl/ListCaptureSessions"
-	CaptureControl_ListInterfaces_FullMethodName      = "/gametrace.internalipc.CaptureControl/ListInterfaces"
 	CaptureControl_DecodeRawPackets_FullMethodName    = "/gametrace.internalipc.CaptureControl/DecodeRawPackets"
 	CaptureControl_ListPlugins_FullMethodName         = "/gametrace.internalipc.CaptureControl/ListPlugins"
 	CaptureControl_GetPluginManifest_FullMethodName   = "/gametrace.internalipc.CaptureControl/GetPluginManifest"
@@ -67,8 +66,6 @@ type CaptureControlClient interface {
 	GetCaptureStatus(ctx context.Context, in *GetCaptureStatusRequest, opts ...grpc.CallOption) (*GetCaptureStatusResponse, error)
 	// ListCaptureSessions 列出当前活跃的抓包会话。
 	ListCaptureSessions(ctx context.Context, in *ListCaptureSessionsRequest, opts ...grpc.CallOption) (*ListCaptureSessionsResponse, error)
-	// ListInterfaces 列出可用网卡。
-	ListInterfaces(ctx context.Context, in *ListInterfacesRequest, opts ...grpc.CallOption) (*ListInterfacesResponse, error)
 	// DecodeRawPackets 用指定插件对离线会话的 raw_packets 批量解码，
 	// 结果写入该 session 的 events 表。
 	DecodeRawPackets(ctx context.Context, in *DecodeRawPacketsRequest, opts ...grpc.CallOption) (*DecodeRawPacketsResponse, error)
@@ -181,16 +178,6 @@ func (c *captureControlClient) ListCaptureSessions(ctx context.Context, in *List
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListCaptureSessionsResponse)
 	err := c.cc.Invoke(ctx, CaptureControl_ListCaptureSessions_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *captureControlClient) ListInterfaces(ctx context.Context, in *ListInterfacesRequest, opts ...grpc.CallOption) (*ListInterfacesResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListInterfacesResponse)
-	err := c.cc.Invoke(ctx, CaptureControl_ListInterfaces_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -481,8 +468,6 @@ type CaptureControlServer interface {
 	GetCaptureStatus(context.Context, *GetCaptureStatusRequest) (*GetCaptureStatusResponse, error)
 	// ListCaptureSessions 列出当前活跃的抓包会话。
 	ListCaptureSessions(context.Context, *ListCaptureSessionsRequest) (*ListCaptureSessionsResponse, error)
-	// ListInterfaces 列出可用网卡。
-	ListInterfaces(context.Context, *ListInterfacesRequest) (*ListInterfacesResponse, error)
 	// DecodeRawPackets 用指定插件对离线会话的 raw_packets 批量解码，
 	// 结果写入该 session 的 events 表。
 	DecodeRawPackets(context.Context, *DecodeRawPacketsRequest) (*DecodeRawPacketsResponse, error)
@@ -572,9 +557,6 @@ func (UnimplementedCaptureControlServer) GetCaptureStatus(context.Context, *GetC
 }
 func (UnimplementedCaptureControlServer) ListCaptureSessions(context.Context, *ListCaptureSessionsRequest) (*ListCaptureSessionsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListCaptureSessions not implemented")
-}
-func (UnimplementedCaptureControlServer) ListInterfaces(context.Context, *ListInterfacesRequest) (*ListInterfacesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListInterfaces not implemented")
 }
 func (UnimplementedCaptureControlServer) DecodeRawPackets(context.Context, *DecodeRawPacketsRequest) (*DecodeRawPacketsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DecodeRawPackets not implemented")
@@ -743,24 +725,6 @@ func _CaptureControl_ListCaptureSessions_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CaptureControlServer).ListCaptureSessions(ctx, req.(*ListCaptureSessionsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _CaptureControl_ListInterfaces_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListInterfacesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(CaptureControlServer).ListInterfaces(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: CaptureControl_ListInterfaces_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CaptureControlServer).ListInterfaces(ctx, req.(*ListInterfacesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1248,10 +1212,6 @@ var CaptureControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListCaptureSessions",
 			Handler:    _CaptureControl_ListCaptureSessions_Handler,
-		},
-		{
-			MethodName: "ListInterfaces",
-			Handler:    _CaptureControl_ListInterfaces_Handler,
 		},
 		{
 			MethodName: "DecodeRawPackets",

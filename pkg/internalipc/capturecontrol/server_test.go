@@ -19,8 +19,6 @@ type fakeEngine struct {
 	statusErr     error
 	listSessions  []SessionSummary
 	listSessErr   error
-	ifaceNames    []string
-	ifaceErr      error
 	decodeResult  DecodeRawPacketsResult
 	decodeErr     error
 	decodeLastReq DecodeRawPacketsRequest
@@ -48,9 +46,6 @@ func (f *fakeEngine) GetStatus(ctx context.Context, sessionID string) (StatusRes
 }
 func (f *fakeEngine) ListSessions(ctx context.Context) ([]SessionSummary, error) {
 	return f.listSessions, f.listSessErr
-}
-func (f *fakeEngine) ListInterfaces(ctx context.Context) ([]string, error) {
-	return f.ifaceNames, f.ifaceErr
 }
 func (f *fakeEngine) DecodeRawPackets(ctx context.Context, req DecodeRawPacketsRequest) (DecodeRawPacketsResult, error) {
 	f.decodeLastReq = req
@@ -160,18 +155,6 @@ func TestServer_GetCaptureStatus(t *testing.T) {
 	}
 	if resp.GetState() != "Running" || resp.GetRawCount() != 5 || resp.GetEventCount() != 3 {
 		t.Errorf("unexpected response: %+v", resp)
-	}
-}
-
-func TestServer_ListInterfaces(t *testing.T) {
-	engine := &fakeEngine{ifaceNames: []string{"eth0", "lo"}}
-	srv := NewServer(engine)
-	resp, err := srv.ListInterfaces(context.Background(), &pb.ListInterfacesRequest{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(resp.GetNames()) != 2 || resp.GetNames()[0] != "eth0" {
-		t.Errorf("unexpected names: %v", resp.GetNames())
 	}
 }
 

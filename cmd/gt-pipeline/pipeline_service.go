@@ -171,8 +171,7 @@ func (s *pipelineService) removeTask(sessionID string) (*captureTask, bool) {
 
 // StartSession 创建 captureTask，注入 onFinalize 回调，Start()，注册。
 func (s *pipelineService) StartSession(ctx context.Context, req capturecontrol.StartSessionRequest) (capturecontrol.StartSessionResult, error) {
-	var iface, pcapFile, sourceName string
-	var liveCfg *capturecontrol.LiveConfig
+	var pcapFile, sourceName string
 	var mobileCfg *capturecontrol.MobileConfig
 	switch {
 	case req.File != nil && req.File.Path != "":
@@ -181,10 +180,6 @@ func (s *pipelineService) StartSession(ctx context.Context, req capturecontrol.S
 			pcapFile, _ = filepath.Abs(pcapFile)
 		}
 		sourceName = "pcap-file"
-	case req.Live != nil:
-		iface = req.Live.Device
-		sourceName = "pcap-live"
-		liveCfg = req.Live
 	case req.Mobile != nil:
 		sourceName = "mobile"
 		mobileCfg = req.Mobile
@@ -235,7 +230,7 @@ func (s *pipelineService) StartSession(ctx context.Context, req capturecontrol.S
 		Status:           "running",
 		Port:             req.Port,
 		Plugin:           req.Plugin,
-		Interface:        iface,
+		Interface:        "",
 		PCAPFile:         pcapFile,
 		DBPath:           dbPath,
 		ManifestSnapshot: manifestSnapshot,
@@ -254,13 +249,11 @@ func (s *pipelineService) StartSession(ctx context.Context, req capturecontrol.S
 		port:         req.Port,
 		plugin:       req.Plugin,
 		pluginOwners: req.PluginOwners,
-		iface:        iface,
 		pcapFile:     pcapFile,
 		sourceName:   sourceName,
-		liveCfg:      liveCfg,
 		mobileCfg:    mobileCfg,
 		agentHub:     s.agentHub,
-		agentOnly:    req.Agent && liveCfg == nil && mobileCfg == nil && pcapFile == "",
+		agentOnly:    req.Agent && mobileCfg == nil && pcapFile == "",
 		start:        startTime,
 		reresolve:    make(chan struct{}, 1),
 		registry:     s.registry,
@@ -288,7 +281,7 @@ func (s *pipelineService) StartSession(ctx context.Context, req capturecontrol.S
 
 	s.logger.Info("capture session started",
 		"session_id", sessionID, "port", req.Port, "plugin", req.Plugin,
-		"interface", iface, "pcap_file", pcapFile, "db_path", dbPath)
+		"pcap_file", pcapFile, "db_path", dbPath)
 
 	return capturecontrol.StartSessionResult{
 		SessionID: sessionID,
@@ -370,18 +363,11 @@ func (s *pipelineService) ListSessions(ctx context.Context) ([]capturecontrol.Se
 			SourceName: task.sourceName,
 			Port:       task.port,
 			Plugin:     task.getPlugin(),
-			Interface:  task.iface,
 			PCAPFile:   task.pcapFile,
 			Start:      task.start,
 		})
 	}
 	return out, nil
-}
-
-// ListInterfaces 列出可用网卡名称（实时抓包能力按 -tags pcap 门控，
-// 见 pcap_live_pcap.go / pcap_live_nopcap.go）。
-func (s *pipelineService) ListInterfaces(ctx context.Context) ([]string, error) {
-	return listInterfaces()
 }
 
 // finalizeTask 是 captureTask run 退出时的回调（自动结束或显式停止都会触发）。
@@ -399,7 +385,7 @@ func (s *pipelineService) finalizeTask(task *captureTask) {
 		Status:       "stopped",
 		Port:         task.port,
 		Plugin:       task.getPlugin(),
-		Interface:    task.iface,
+		Interface:    "",
 		PCAPFile:     task.pcapFile,
 		RawPackets:   snap.RawCount,
 		Events:       snap.EventCount,

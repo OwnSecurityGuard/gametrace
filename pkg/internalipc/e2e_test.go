@@ -51,16 +51,7 @@ func TestCaptureControlE2E(t *testing.T) {
 	defer conn.Close()
 	client := pb.NewCaptureControlClient(conn)
 
-	// 4. 调 ListInterfaces
-	resp, err := client.ListInterfaces(ctx, &pb.ListInterfacesRequest{})
-	if err != nil {
-		t.Fatalf("ListInterfaces: %v", err)
-	}
-	if len(resp.GetNames()) != 2 {
-		t.Errorf("names = %v, want 2", resp.GetNames())
-	}
-
-	// 5. 调 StartCapture（file source）
+	// 4. 调 StartCapture（file source）
 	startResp, err := client.StartCapture(ctx, &pb.StartCaptureRequest{
 		SessionId: "e2e-test",
 		Plugin:    "tcp",
@@ -109,9 +100,6 @@ func (f *fakeCaptureEngine) GetStatus(ctx context.Context, sessionID string) (ca
 }
 func (f *fakeCaptureEngine) ListSessions(ctx context.Context) ([]capturecontrol.SessionSummary, error) {
 	return nil, nil
-}
-func (f *fakeCaptureEngine) ListInterfaces(ctx context.Context) ([]string, error) {
-	return []string{"eth0", "lo"}, nil
 }
 func (f *fakeCaptureEngine) DecodeRawPackets(ctx context.Context, req capturecontrol.DecodeRawPacketsRequest) (capturecontrol.DecodeRawPacketsResult, error) {
 	return capturecontrol.DecodeRawPacketsResult{}, nil

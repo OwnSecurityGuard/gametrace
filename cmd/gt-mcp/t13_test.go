@@ -69,8 +69,8 @@ func TestStartCaptureAgentSource(t *testing.T) {
 	}
 }
 
-// source=nic（默认）行为不变：agent=false 且走 live source。
-func TestStartCaptureNicSourceUnchanged(t *testing.T) {
+// source=agent（默认）行为：agent=true 且不设置基础 source。
+func TestStartCaptureDefaultSourceIsAgent(t *testing.T) {
 	fc := &fakeCaptureClient{dbDir: t.TempDir()}
 	m := &mcpCapture{pipelineClient: fc, sessionMgr: newSessionManager(t.TempDir())}
 
@@ -80,11 +80,11 @@ func TestStartCaptureNicSourceUnchanged(t *testing.T) {
 	if _, err := m.handleStartCapture(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
-	if fc.startReq == nil || fc.startReq.GetAgent() {
-		t.Error("nic source must not set agent=true")
+	if fc.startReq == nil || !fc.startReq.GetAgent() {
+		t.Error("default source must set agent=true")
 	}
-	if fc.startReq.GetLive() == nil {
-		t.Error("nic source must set live source")
+	if fc.startReq.GetSource() != nil {
+		t.Error("agent session must not set a base source")
 	}
 }
 

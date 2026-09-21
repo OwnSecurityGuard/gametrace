@@ -213,17 +213,6 @@ func TestPipelineService_GetStatusNotActive(t *testing.T) {
 	}
 }
 
-// TestPipelineService_ListInterfaces 验证 ListInterfaces 不报错。
-func TestPipelineService_ListInterfaces(t *testing.T) {
-	s, _, _ := newTestPipelineService(t)
-	ctx := context.Background()
-	names, err := s.ListInterfaces(ctx)
-	if err != nil {
-		t.Fatalf("ListInterfaces: %v", err)
-	}
-	t.Logf("found %d interfaces: %v", len(names), names)
-}
-
 // TestPipelineService_MultiSessionConcurrent 验证多会话并发启动，各自有独立 sessionID，
 // 且全部能自动 finalize 为 stopped。
 //

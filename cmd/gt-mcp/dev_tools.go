@@ -435,6 +435,23 @@ func (m *mcpCapture) handleStatusPlugin(ctx context.Context, req mcp.CallToolReq
 	return successResult(out), nil
 }
 
+// devPlaneArtifact 返回 Developer Plane 对指定插件制品的磁盘视图
+// （源目录/构建产物/是否过期），与 handleStatusPlugin 的 artifact 字段同源。
+// 查询失败或插件不在 Dev Plane 目录（如远端部署）时返回 nil，不阻断调用方。
+func (m *mcpCapture) devPlaneArtifact(ctx context.Context, name string) map[string]any {
+	ps, err := m.pdClient.Status(ctx, name)
+	if err != nil || ps == nil || ps.GetArtifact() == nil {
+		return nil
+	}
+	a := ps.GetArtifact()
+	return map[string]any{
+		"state":        a.GetState(),
+		"source_dir":   a.GetSourceDir(),
+		"binary_path":  a.GetBinaryPath(),
+		"binary_stale": a.GetBinaryStale(),
+	}
+}
+
 // latestRegisterFailure 查询 Runtime Plane 注册失败 ring buffer 中同名插件的最近记录。
 func (m *mcpCapture) latestRegisterFailure(ctx context.Context, name string) map[string]any {
 	if m.pipelineClient == nil {

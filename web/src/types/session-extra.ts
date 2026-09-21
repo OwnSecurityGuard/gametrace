@@ -38,17 +38,6 @@ export interface SessionStatusResult {
   agent_last_seen_unix?: number;
 }
 
-/** list_interfaces 返回的单条网卡 */
-export interface InterfaceInfo {
-  name: string;
-}
-
-/** list_interfaces 完整响应 */
-export interface ListInterfacesResult {
-  ok?: boolean;
-  interfaces: InterfaceInfo[];
-}
-
 /** delete_session 完整响应 */
 export interface DeleteSessionResult {
   ok?: boolean;

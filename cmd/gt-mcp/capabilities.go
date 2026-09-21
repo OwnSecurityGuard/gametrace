@@ -34,7 +34,7 @@ func buildCapabilityCatalog() capabilityDoc {
 				Description: "抓包与会话生命周期",
 				Tools: []string{
 					"start_capture", "stop_capture", "get_session_status",
-					"list_interfaces", "list_live_sessions", "set_session_plugin",
+					"list_live_sessions", "set_session_plugin",
 					"list_all_sessions", "delete_session",
 				},
 			},
