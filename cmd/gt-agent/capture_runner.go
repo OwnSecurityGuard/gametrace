@@ -79,6 +79,13 @@ func (p CaptureParams) ifaceList() []string {
 //   - tcp  → "tcp port <port>"
 //   - udp  → "udp port <port>"
 //   - both → "tcp port <port> or udp port <port>"
+//
+// ports 与 hosts 是两个独立筛选维度：维度内用 or 合并（端口集合 / 服务端
+// 地址集合），维度之间用 and 取交集——例如 ports=8080 + host=api.x.com 最终
+// 为 "tcp port 8080 and host api.x.com"，只抓 api.x.com:8080 的流量。
+// 仅单维度存在时保持原样（不加括号）；双维度并存且组内含顶层 or 时加括号，
+// 否则 and 优先级高于 or，会把 "(tcp or udp) and host" 误解析成
+// "tcp or (udp and host)"。
 func deriveBPF(p CaptureParams) string {
 	if p.BPF != "" {
 		return p.BPF
@@ -89,25 +96,43 @@ func deriveBPF(p CaptureParams) string {
 	default:
 		p.Protocol = "tcp"
 	}
-	var parts []string
+	var portParts []string
 	for _, port := range p.Ports {
 		if port > 0 && port <= 65535 {
 			switch p.Protocol {
 			case "udp":
-				parts = append(parts, fmt.Sprintf("udp port %d", port))
+				portParts = append(portParts, fmt.Sprintf("udp port %d", port))
 			case "both":
-				parts = append(parts, fmt.Sprintf("tcp port %d or udp port %d", port, port))
+				portParts = append(portParts, fmt.Sprintf("tcp port %d or udp port %d", port, port))
 			default:
-				parts = append(parts, fmt.Sprintf("tcp port %d", port))
+				portParts = append(portParts, fmt.Sprintf("tcp port %d", port))
 			}
 		}
 	}
+	var hostParts []string
 	for _, h := range p.Hosts {
 		if h = strings.TrimSpace(h); h != "" {
-			parts = append(parts, "host "+h)
+			hostParts = append(hostParts, "host "+h)
 		}
 	}
-	return strings.Join(parts, " or ")
+	// 组内以 or 合并；双维度并存时给含 or 的组加括号。
+	portExpr := strings.Join(portParts, " or ")
+	hostExpr := strings.Join(hostParts, " or ")
+	both := len(portParts) > 0 && len(hostParts) > 0
+	parts := make([]string, 0, 2)
+	if len(portParts) > 0 {
+		if both && strings.Contains(portExpr, " or ") {
+			portExpr = "(" + portExpr + ")"
+		}
+		parts = append(parts, portExpr)
+	}
+	if len(hostParts) > 0 {
+		if both && strings.Contains(hostExpr, " or ") {
+			hostExpr = "(" + hostExpr + ")"
+		}
+		parts = append(parts, hostExpr)
+	}
+	return strings.Join(parts, " and ")
 }
 
 // captureRunner 是并发安全的抓包状态机。所有字段经 mu 读写；
@@ -381,6 +406,7 @@ func (r *captureRunner) stopLocked() {
 
 // UpdateFilter 热更新过滤（running 下 SetBPFFilter，不断流）。
 // 空 ports/hosts/bpf = 清除过滤（全抓）。protocol 影响端口派生（tcp/udp/both）。
+// ports 与 hosts 同时设置时取交集（组内 or、组间 and）。
 func (r *captureRunner) UpdateFilter(ports []int32, hosts []string, protocol, bpf string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

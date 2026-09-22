@@ -103,6 +103,9 @@ export function StartCaptureDialog({
   const [port, setPort] = useState("8080");
   // 端口过滤协议：tcp/udp/both（默认 tcp）。仅探针抓包生效（探针侧派生 BPF）。
   const [protocol, setProtocol] = useState<"tcp" | "udp" | "both">("tcp");
+  // 服务端地址筛选（非必填）：IP 或域名，多个用逗号/空格/换行分隔；
+  // 探针侧派生 BPF host 过滤，与端口同时填写时取交集。
+  const [hostFilter, setHostFilter] = useState("");
   const [plugin, setPlugin] = useState("");
   // 从项目一键抓包时带入的项目 id（本次抓包会话归属到此项目）。
   const [projectId, setProjectId] = useState("");
@@ -135,6 +138,7 @@ export function StartCaptureDialog({
       setAgentSessionId(null);
       setProbeId("");
       setProbeIfaces([]);
+      setHostFilter("");
       // 打开时应用项目预填：有初始端口/插件才覆盖默认值，否则回到默认。
       if (initialPort && initialPort > 0) setPort(String(initialPort));
       if (initialPlugin) setPlugin(initialPlugin);
@@ -160,6 +164,11 @@ export function StartCaptureDialog({
 
   function handleStart() {
     const p = parseInt(port, 10);
+    // 服务端地址非必填：逗号(中英文)/空格/换行分隔，探针侧派生 host 过滤。
+    const hosts = hostFilter
+      .split(/[\s,，]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
     // 探针抓包：建会话 + AssignCapture 一体（probe_start_capture）。
     const target = probes.find((x) => x.probe_id === probeId);
     if (!target) {
@@ -170,6 +179,7 @@ export function StartCaptureDialog({
       {
         probeId,
         ports: p > 0 ? [p] : undefined,
+        hosts: hosts.length > 0 ? hosts : undefined,
         ifaces: probeIfaces.length > 0 ? probeIfaces : undefined,
         plugin: plugin || undefined,
         projectId: projectId || undefined,
@@ -354,6 +364,22 @@ export function StartCaptureDialog({
               <p className="mt-1 text-xs text-muted-foreground">
                 端口非空时按所选协议在探针侧过滤；UDP/TCP+UDP 需要探针 Npcap 支持。
               </p>
+          </div>
+          <div>
+            <label htmlFor="capture-host-filter" className="text-sm font-medium">
+              服务端 IP/域名（可选）
+            </label>
+            <Input
+              id="capture-host-filter"
+              value={hostFilter}
+              onChange={(e) => setHostFilter(e.target.value)}
+              placeholder="如 10.0.0.8 或 api.example.com；多个用逗号或空格分隔"
+              className="mt-1.5 font-mono"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              按连接的服务端地址筛选抓包；与端口同时填写时取交集（只抓该服务的对应端口）。
+              域名需探针侧可解析，解析失败会导致抓包启动失败。
+            </p>
           </div>
           {/* 高级设置（默认收起）：Interface 等技术细节，普通用户只需选端口 + 解析器。 */}
           <button
