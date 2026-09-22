@@ -111,9 +111,6 @@ Do not manually create a gRPC server or manually implement registration unless a
 start process
     |
     v
-start DecodeV2 listener          (skipped in tunnel mode)
-    |
-    v
 read + validate plugin.yaml
     |
     v
@@ -126,12 +123,22 @@ Register(socket_path, manifest[, tunnel])
 receive instance_id + heartbeat interval
     |
     v
-heartbeat
+[standard mode only] start DecodeV2 listener   <- skipped in tunnel mode
     |
-    +---- registry connection lost ----> retry with backoff (1s .. 30s)
+    v
+[tunnel mode] open Connect stream with
+              instance_id in metadata          <- host binds by instance_id,
+    |                                             rejects unknown/absent id
+    v
+heartbeat (+ tunnel serving concurrently)
+    |
+    +---- registry connection lost / tunnel closed / heartbeat lost ---->
+              retry with backoff (1s .. 30s)
 ```
 
-Two modes, selected by `RegisterOptions`:
+Two modes, selected by `RegisterOptions`. **The platform runs plugins in tunnel mode**:
+gt-agent managed plugins and Developer Plane `activate_plugin` both inject `GT_TUNNEL=1`.
+Plugin code should pass the switch through, never branch on it.
 
 ```go
 sdk.RunRegisterLoopWithOptions(decode, sdk.RegisterOptions{
@@ -139,6 +146,16 @@ sdk.RunRegisterLoopWithOptions(decode, sdk.RegisterOptions{
     AuthToken: tok,           // adds `authorization: Bearer <tok>` metadata
 })
 ```
+
+In tunnel mode the heartbeat keeps running **concurrently with** the tunnel: a half-open TCP
+connection never makes `Recv` return, so the heartbeat is the only application-level liveness
+probe. Whichever fails first — tunnel closed or heartbeat lost — triggers the same
+reconnection path. The SDK also enables gRPC keepalive (30s/10s, `PermitWithoutStream=true`)
+so the transport layer probes idle tunnels.
+
+> Breaking change: the host now requires `instance_id` on the tunnel's `Connect` stream.
+> Plugins built with an older SDK are rejected at stream setup (registered but never online);
+> rebuild with the current SDK.
 
 Registration retry uses exponential backoff from 1 second up to 30 seconds. Heartbeat
 default is 10s; the host marks a plugin offline after 30s. After a successful
@@ -158,6 +175,11 @@ pipes (`npipe:`). For development and integration tests, prefer setting `GT_REGI
 explicitly.
 
 ## 6. Decoder endpoint configuration
+
+> **Standard (non-tunnel) mode only.** The platform runs plugins in tunnel mode, where the
+> host never dials back and these two variables do not participate in the connection. They
+> are documented here for the legacy fallback path only — do not treat them as required when
+> debugging a tunnel plugin.
 
 The decoder endpoint is controlled by:
 

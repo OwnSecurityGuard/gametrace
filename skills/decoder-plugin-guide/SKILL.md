@@ -1,6 +1,6 @@
 ---
 name: "decoder-plugin-guide"
-description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gametrace/sdk）接入 GameTrace 平台：协议分析、编码前必交的数据包处理链路、Event 字段与持久化声明、插件骨架、TCP 重组与握手处理、plugin.yaml、decode 诊断指标、兜底判断、必交材料清单、测试与验证。semantic_rules 的选取标准、约束、校验机制与验收标准见 §5.2–§5.6。当用户要为新协议编写解码插件、接入自定义游戏协议、解析网络协议为业务事件，或要编写/审查/修正 semantic_rules 时调用。"
+description: "指引用户或 AI Agent 用 Go 编写解码插件（gt.decoder/v2，基于 gametrace/sdk）接入 GameTrace 平台：协议分析、编码前必交的数据包处理链路、Event 字段与持久化声明、插件骨架、TCP 重组与握手处理、plugin.yaml、decode 诊断指标、兜底判断、必交材料清单、测试与验证；§0 为 Agent 执行工作流——GameTrace MCP 工具时序（create/build/activate/test/verify 的两阶段验证、落库验证路径、本地托管与远程运行两条路、binary_stale 不可作免构建依据）。semantic_rules 的选取标准、约束、校验机制与验收标准见 §5.2–§5.6。当用户要为新协议编写解码插件、接入自定义游戏协议、解析网络协议为业务事件，要编写/审查/修正 semantic_rules，或 Agent 要经 MCP 开发/运行/验证解码插件时调用。"
 ---
 
 # GameTrace 解码插件开发指南
@@ -21,35 +21,88 @@ description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gam
 - 用户询问如何让自定义协议在平台中解码、显示、配对
 - 参考插件：`examples/http-decoder`、`examples/ws-decoder`、`examples/lp-decoder`（本仓库 TCP 模板，plugin.yaml 每条语义规则均先陈述协议事实）；wesnoth 解码器的规则注释是"证据注解"范式（§5.2 有摘录）
 
-## 平台契约（先读，避免返工）
+## 0. Agent 执行工作流（MCP 工具优先，先读再动）
 
-- **事件三分离**：Payload（业务字段）/ Meta（方向、msg_name 等平台元信息）/ Analysis（配对、状态变更分析）。解码器只产 Payload；Meta 由宿主写；Analysis 由宿主按 semantic_rules 生成。
-- **消息名称**由 `name` 语义规则从 payload 提取（宿主写入 `meta.msg_name`），解码器不硬编码。
-- **方向**：解码器可在事件上标注方向，宿主按端口/连接补齐。
-- **配对**：宿主按 `correlation_id`（同一连接会话）与 `causation_id`（请求-响应）配对，前端左右并排展示。
-- **Payload 必须是 JSON 可表达结构**：平台的语义规则（semantic_rules）、查询、前端展示全部基于 JSON path 提取，因此无论线格式是二进制、文本还是 key=value，解码器都**必须**把业务字段解析为 JSON 对象（string / int / bool / 数组 / 嵌套对象）。
-- **硬约束（无论什么情况）**：Payload 只允许包含**原本游戏协议真实存在**的字段——字段名与协议属性名一致（或与用户确认的映射名），值是协议中实际传输的内容。**禁止**添加协议不存在的字段：解码器推导值、平台时间戳、内部 ID、原始文本副本等一律不得进入 Payload；这类辅助信息走 Meta（方向等平台字段）或 `_raw`（仅当用户确认保留原文时，且声明为 optional）。
+本节不是协议开发知识，而是通过 GameTrace MCP 完成插件开发的**实际执行协议**：什么阶段调用哪个工具、什么结果代表成功、什么情况下不要调用。
 
-## 工作流程
+### 0.1 两类工具别混
 
-### 0. 确认平台连接信息（第一步必做，别猜）
+- **GameTrace MCP 工具**：抓包/会话、插件生命周期、运行验证、事件查询（`create_plugin` / `build_plugin` / `activate_plugin` / `test_plugin` / `verify_plugin` / `sample_bytes_plugin` / `list_decoded_data` 等）。
+- **Agent 自身工具**：读源码、写文件、跑 `go test` / `go vet`、访问协议官方文档。写代码、跑单测是 Agent 自己的事，不走 MCP。
 
-插件通过环境变量连接平台。**先与用户确认要连哪个平台、怎么连**，再写代码。4 个变量**全部自动获取**：调一次平台工具 `get_plugin_env`，把返回的 `env_file` 原样写入 `.env` 即可，无需任何手填。
+本 skill 本身会注册为 MCP resource（`gametrace://skills/decoder-plugin-guide`），MCP 初始化即可读；`get_plugin_dev_guide` 是开发指南的 MCP 版本，本 skill 已含工作流时不必重复拉取整份文档——需要核对 SDK/平台最新契约细节时再读。
+
+### 0.2 工具时序（按插件推进阶段）
+
+| 阶段 | 该做什么 | 不要做什么 |
+|---|---|---|
+| 协议分析 | 优先找**已有抓包**：`get_session_status` / `list_all_sessions` 确定可用 session → `sample_bytes_plugin` 拿字节事实（≤20 包、每包 ≤64 字节）→ 需要**连接级事实**（重组后的完整帧）再 `list_connection_frames` | 不为"写插件"默认 `start_capture`；`sample_bytes_plugin` 只能形成协议**假设**，不构成帧结构/握手已确认的证据——确认靠协议源码/文档/`test_plugin` |
+| 编码 | `create_plugin` 拿最小骨架 → 补齐 decode.go / 解析器 / 测试 / `.gitignore`（见 0.3）→ Agent 自己跑 `go test` / `go vet` | 不反复 `get_capabilities` 探索工具（只在不确定工具职责时调一次） |
+| 构建 | `build_plugin`；失败优先看返回的 file/line/col/message 直接修 | 普通编译错误不调 `explain_plugin`（它做的是运行期归因，不是编译器） |
+| 运行 | `get_plugin_env` → 把 `env_file` 原样写入插件目录 `.env` → `activate_plugin` | `get_plugin_env` **只在准备实际启动/注册时调**；协议分析阶段不需要 |
+| 验证 | `test_plugin` → `verify_plugin`（见 0.5 两层语义） | 把 `verify_plugin` 当成"事件已落库" |
+
+### 0.3 `create_plugin` 只是最小骨架
+
+`create_plugin` 当前**只生成 3 个文件**：`go.mod`、`main.go`、`plugin.yaml`。`decode.go`、解析器文件、`docs/packet-line.md`、单测、`.env`、`.gitignore` 都是 **Agent 自行补齐**的交付物（清单见 §2 / §7.3），不要误判"骨架已完整"。
+
+**🚫 禁忌：不要传 `output_dir`。** `build_plugin` / `activate_plugin` / `status_plugin` 一律按 Developer Plane plugins root 下的 `<plugins_root>/<name>` 定位插件，而 `create_plugin` 会**严格尊重**你传入的 `output_dir`——两者不是同一套路径语义。传了不在 root 下的目录，后续三个工具全都找不到刚生成的插件，你会卡在"文件明明生成了但 build 说找不到"。
+
+- 默认**省略该参数**（此时 create 写入 `<plugins_root>/<name>`，与后续工具一致）。
+- 唯一例外：你明确知道该目录就是 plugins root 下的 `<root>/<name>`。
+- **这不是平台 bug，不要试图"修"工具或绕过它**——按约定省略参数即可。
+
+### 0.4 插件运行的两条路
+
+- **本机 Developer Plane 托管**：`build_plugin` → `get_plugin_env` → 写 `.env` → `activate_plugin`。activate 成功 ≠ 接入完成；返回里 `registered + online + manifest_present` 全真（`integrated=true`）才算。`integrated=false` 才进入 `status_plugin` → `explain_plugin` 诊断；注册失败带地址类提示时优先检查 `.env` 的 `GT_DECODER_PUBLIC_ADDR`。
+- **远程机器运行**：`activate_plugin` 只管理 Developer Plane 自己启动的本地进程。远程插件 = 本地写码构建 → 部署到远端 → `get_plugin_env(host=远端可达地址)` → 远端自行启动 → `list_registered_plugins` / `get_plugin_manifest` 确认注册。不要把本地 activate 当远程启动器。
+
+### 0.5 验证分两层（关键：哪些工具不落库）
+
+- **第一层 快速验证（离线回放，不落库）**：`test_plugin`——看"到底解出了什么"（`decoded` / `decode_errors` / `type_histogram` / `sample_events` / `error_samples`）；再 `verify_plugin`——看整体质量（contract violations + quality + verdict）。两者都是对离线会话的隔离回放，**不修改 session events**。连 `sample_events` 都没看就直接 verify，容易陷入"verdict=warn 但不知道改哪"。
+- **第二层 持久化验证（真实落库）**：要看 `list_decoded_data` 的真实宿主结果，必须先产生持久化事件——要么 live capture（插件 `integrated=true` 后在测试 session 使用该插件并产生流量），要么 `decode_raw_packets`（**raw-debug 能力，服务端 `-enable-raw-debug` 才注册，默认不存在**）→ 然后 `list_decoded_data` 下钻、`get_protocol_catalog` 做解码成功后的协议索引。
+
+`get_protocol_catalog` 是**成功解码后的索引**（msg_name 分布、字段、pair 覆盖），不是未知协议的分析入口；`unnamed_events > 0` 优先查 name 规则或 payload，不是猜协议。
+
+### 0.6 `binary_stale` 不是免构建依据
+
+`status_plugin` 的 `binary_stale` 只对比 `*.go` / `go.mod` / `plugin.yaml` 与 binary 的 mtime，是**辅助信号**。原则：**只要改过任何插件源码，一律重新 `build_plugin`**，不得因 `binary_stale=false` 跳过构建。
+
+### 0.7 最小默认链（本机新插件）
+
+```
+读本 skill → create_plugin → 编码+单测 → build_plugin
+→ get_plugin_env → 写 .env → activate_plugin
+→ test_plugin → verify_plugin
+→ （需要真实落库时）live capture / decode_raw_packets
+→ list_decoded_data → get_protocol_catalog
+```
+
+问题路径才加：`status_plugin` / `explain_plugin` / `get_registry_addr` / `sample_bytes_plugin` / `list_connection_frames`。不要为"完整"把所有工具调一遍。
+
+### 0.8 插件运行环境详情（4 变量 / .env / 加载器 / 注册排错）
+
+插件通过环境变量连接平台。**准备让插件实际运行时**，变量**全部自动获取**：调一次平台工具 `get_plugin_env`，把返回的 `env_file` 原样写入 `.env` 即可，无需任何手填。协议分析、编码、单测阶段都不需要调它（时序见 §0.2）。
+
+**平台统一以隧道模式运行插件**：`activate_plugin` 与 gt-agent 托管都注入 `GT_TUNNEL=1`，
+插件不起本地端口、宿主不回拨，解码流量与注册/心跳共用同一条连接 —— 插件在 NAT / 容器 / 手机
+后面也能直接接入。插件代码只透传 `GT_TUNNEL`，**不要**在代码里分支判断模式。
 
 | 变量 | 含义 | 获取方式 |
 |---|---|---|
-| `GT_REGISTRY_ADDR` | registry 端点（插件注册） | **自动**：`get_plugin_env` 的 `registry_addr` |
-| `GT_AUTH_TOKEN` | 注册鉴权 Bearer token | **自动**：`get_plugin_env` 返回调用者自己的 token；agent 托管（`GT_TUNNEL=1`）下平台自动注入，可留空 |
-| `GT_DECODER_ADDR` | 解码器本地监听地址 | **自动**：`get_plugin_env` 的 `decoder_addr`（默认 `0.0.0.0:61887`） |
-| `GT_DECODER_PUBLIC_ADDR` | 注册时上报、宿主回拨的地址 | **自动**：`get_plugin_env` 的 `decoder_public_addr`（外部可达 host + 端口） |
+| `GT_REGISTRY_ADDR` | registry 端点（注册 + 心跳 + 隧道帧都走它） | **自动**：`get_plugin_env` 的 `registry_addr` |
+| `GT_TUNNEL` | 非空即隧道模式；由**运行方**注入 | `activate_plugin` / gt-agent 注入 `1`，插件代码只读透传 |
+| `GT_AUTH_TOKEN` | 注册鉴权 Bearer token | **自动**：`get_plugin_env` 返回调用者自己的 token；agent 托管下平台自动注入，可留空 |
+| `GT_DECODER_ADDR` | 解码器本地监听地址 | **仅非隧道回退模式需要**；隧道下宿主不回拨，设了也不参与连接 |
+| `GT_DECODER_PUBLIC_ADDR` | 注册时上报、宿主回拨的地址 | **仅非隧道回退模式需要**；同上 |
 
 确认步骤：
 
 1. 问用户平台部署形态：**本机单机** / **Docker 局域网** / **远端公网**。
 2. 调 `get_plugin_env`（跨机部署、插件与调用方不在同一台机器时，参数 `host` 传插件所在机器视角的可达主机；平台已配 `GT_PUBLIC_HOST` 的公网/Docker 部署可省略）→ 把返回的 `env_file` 原样写入插件目录 `.env`。匿名模式（平台未配 token）下 `auth_token` 为空属正常。
-3. 写错了也不怕：注册失败时平台会记录诊断（含注册连接来源 IP 建议值），`status_plugin` 返回的 `register_failure` 字段可查，按其提示修正 `.env` 后重新 `activate_plugin`。
+3. 写错了也不怕：注册失败时平台会记录诊断（含注册连接来源 IP 建议值），`status_plugin` 返回的 `register_failure` 字段可查，按其提示修正 `.env` 后重新 `activate_plugin`。隧道模式下「注册成功但一直不在线」的典型原因是 Connect 没建起来（插件用旧 SDK 编译、缺 `instance_id`，宿主拒流）——升级 SDK 重新 `build_plugin`。
 
-#### 0.1 用 `.env` 集中管理连接配置（推荐）
+#### 0.8.1 用 `.env` 集中管理连接配置（推荐）
 
 不要在代码里写死地址；插件目录放 `.env`（**直接生成，不再用 `.env.example` 占位模板**），main.go 启动时加载。
 
@@ -60,11 +113,13 @@ description: "指引用户用 Go 编写解码插件（gt.decoder/v2，基于 gam
 #        同名环境变量优先于本文件。
 GT_REGISTRY_ADDR=<get_plugin_env 的 registry_addr>
 GT_AUTH_TOKEN=<get_plugin_env 的 auth_token；agent 托管 GT_TUNNEL 下可留空>
-GT_DECODER_ADDR=0.0.0.0:61887
-GT_DECODER_PUBLIC_ADDR=<registry_addr 的 host 段>:61887
+GT_TUNNEL=1                     # 由运行方注入；activate_plugin / gt-agent 都会注入
+# 以下两项仅非隧道回退模式需要，隧道下不参与连接：
+# GT_DECODER_ADDR=0.0.0.0:61887
+# GT_DECODER_PUBLIC_ADDR=<registry_addr 的 host 段>:61887
 ```
 
-> 提醒：`.env` 含用户 token，**不提交 git**——插件骨架自带 `.gitignore`（内容一行 `.env`），生成时一并创建，不要省略。
+> 提醒：`.env` 含用户 token，**不提交 git**——`create_plugin` 不生成 `.gitignore`，Agent 自行创建（内容一行 `.env`），不要省略。
 
 main.go 顶部加轻量加载器（不覆盖已存在的环境变量，无文件时静默跳过，不引第三方依赖）：
 
@@ -91,6 +146,17 @@ func loadDotEnv(path string) {
 	}
 }
 ```
+
+## 平台契约（先读，避免返工）
+
+- **事件三分离**：Payload（业务字段）/ Meta（方向、msg_name 等平台元信息）/ Analysis（配对、状态变更分析）。Payload 由插件负责；Meta / Analysis 插件**可以提供**（协议元信息、`_state_changes` 等分析 hint，见 SDK `event.Draft`），宿主会补齐/规范化——方向判不了就留空由宿主按端口补齐，别猜；Analysis 的配对/投影最终由宿主执行。
+- **消息名称**由 `name` 语义规则从 payload 提取（宿主写入 `meta.msg_name`），解码器不硬编码；解码器也可在 Meta 里提供 `msg_name`（有真实依据时），规则提取优先。
+- **方向**：解码器可在事件上标注方向，宿主按端口/连接补齐。
+- **配对**：宿主按 `correlation_id`（同一连接会话）与 `causation_id`（请求-响应）配对，前端左右并排展示。
+- **Payload 必须是 JSON 可表达结构**：平台的语义规则（semantic_rules）、查询、前端展示全部基于 JSON path 提取，因此无论线格式是二进制、文本还是 key=value，解码器都**必须**把业务字段解析为 JSON 对象（string / int / bool / 数组 / 嵌套对象）。
+- **硬约束（无论什么情况）**：Payload 只允许包含**原本游戏协议真实存在**的字段——字段名与协议属性名一致（或与用户确认的映射名），值是协议中实际传输的内容。**禁止**添加协议不存在的字段：解码器推导值、平台时间戳、内部 ID、原始文本副本等一律不得进入 Payload；这类辅助信息走 Meta（方向等平台字段）或 `_raw`（仅当用户确认保留原文时，且声明为 optional）。
+
+## 工作流程
 
 ### 1. 协议分析（必做，占一半工作量）
 
@@ -122,9 +188,11 @@ func loadDotEnv(path string) {
 4. **服务端推送的处理**：推送类数据（无请求对应、服务器主动下发）怎么识别、怎么处理——是单独消息类型，还是复用同一类型加 `is_push` 语义？**在链路上先写清楚**再决定 `pair` 规则与 `annotate` 怎么写（推送不参与 `pair`，见 §5.4）。
 5. **不知道的字段**：标明"待确认"，与用户对齐后再定，不猜。
 
-链路文档是交付必交材料之一（见 §8 必交材料清单）；写不清链路 = 协议分析没过，不允许进入编码。
+链路文档是交付必交材料之一（见 §7.3 必交材料清单）；写不清链路 = 协议分析没过，不允许进入编码。
 
 ### 2. 插件骨架
+
+**`create_plugin` 只生成其中 3 个文件**（`go.mod` / `main.go` / `plugin.yaml`），其余（decode.go、解析器、`.env`、`.gitignore`、单测、docs/）都是 Agent 自行补齐的交付物（§0.3）。最终目录形态：
 
 目录：`plugins/<protocol>-decoder/`，文件清单：
 
@@ -135,18 +203,18 @@ plugins/<protocol>-decoder/
 ├── decode.go       # 核心：Decode(req) → []*Event
 ├── <fmt>.go        # 负载解析器（解压/解帧/解文本）
 ├── plugin.yaml     # manifest：semantic_rules
-├── .env            # 连接配置：内容按「步骤 0」调 get_plugin_env 的 env_file 原样写入，零手填
+├── .env            # 连接配置：内容按「§0.8」调 get_plugin_env 的 env_file 原样写入，零手填
 ├── .gitignore      # 一行 .env——token 是用户凭证，不入库
 ├── <fmt>_test.go   # 解析器单测
 └── decode_test.go  # 全链路解码测试 + manifest 一致性
 ```
 
-go.mod：
+go.mod（go 指令 ≥ SDK 模块要求——当前 SDK v0.9.0 对应 **`go 1.25`**（模板值）/ `go 1.25.5`（SDK go.mod 值）。**别写成 1.26**：插件是独立进程/独立 module，宿主 gt-pipeline 用 1.26.8 与插件作者无关）：
 
 ```go
 module your.org/plugins/foo-decoder
 
-go 1.26
+go 1.25
 
 require github.com/OwnSecurityGuard/gametrace/sdk v0.9.0
 ```
@@ -166,13 +234,15 @@ import (
 )
 
 func main() {
-	// 连接配置优先 .env（见「步骤 0」）；同名环境变量（如 agent 托管注入的
+	// 连接配置优先 .env（见「§0.8」）；同名环境变量（如 agent 托管注入的
 	// GT_AUTH_TOKEN）优先于文件。
 	loadDotEnv(".env")
 
 	d := newDecoder()
-	// GT_REGISTRY_ADDR / GT_DECODER_ADDR / GT_DECODER_PUBLIC_ADDR 由 SDK 原生
-	// 读取；这里只需显式传入鉴权 token 与隧道开关。
+	// GT_REGISTRY_ADDR 由 SDK 原生读取（隧道模式下注册/心跳/解码帧都走它）；
+	// GT_DECODER_ADDR / GT_DECODER_PUBLIC_ADDR 仅非隧道回退模式用到。
+	// 这里只需显式传入鉴权 token 与隧道开关。模式由运行方决定：
+	// activate_plugin 与 gt-agent 都会注入 GT_TUNNEL=1，代码只透传不判断。
 	sdk.RunRegisterLoopWithOptions(d.decodePacket, sdk.RegisterOptions{
 		Tunnel:    os.Getenv("GT_TUNNEL") != "",
 		AuthToken: os.Getenv("GT_AUTH_TOKEN"),
@@ -259,7 +329,7 @@ type Event struct {
 
 对插件作者的实际约束：**你返回的事件上每个字段（event_type / payload 键 / meta 键）都要能在落库后通过 `list_decoded_data` 原样查回**。验收时用真实抓包会话查一遍（§7 宿主侧验证），对照这里的列映射确认没有字段丢在"只进日志不出库"的地方。
 
-解码核心骨架：
+解码核心骨架（注意 panic 边界的分层：**stream 发送层（`decodePacket`）不要写吞掉 panic 的 recover**——SDK 的 `Decoder.DecodeV2` 外层已把 panic 转成该 input 的 `Error+Done:true`，插件内吞掉反而漏发 done、丢错误信息；内部 Decode 层的 recover 是把坏包降级为"空事件"的兜底，可留可去，但别在 stream 层吞）：
 
 ```go
 import (
@@ -580,9 +650,14 @@ for _, ent := range snapshot.Ents {
 
 #### 5.5 覆盖率回放（诊断产出，人工判定）
 
-声明合法 ≠ 运行期生效。规则写完后**必须**用真实抓包固件（或固件解码出的 payload + meta）回放并产出覆盖率表，**把表交给用户逐条判定**。0 命中的规则不得静默保留：删除 / 修正 / 在注释写明"已知未覆盖 + 原因 + 判定人"，三选一。
+声明合法 ≠ 运行期生效。覆盖率验证分**两层**，工具和判据都不同：
 
-两个指标，判据不同（示例代码可直接放进 `decode_test.go`）：
+- **A. 规则可命中性**（本节，离线可跑）：用真实抓包固件解码出的 payload + meta 回放 `rule.Evaluate`，验证 path 存在、value 真实出现、side 能命中、类型一致。这只证明**规则本身具备命中能力**（G3/G4 的机器验证），**不证明平台真的完成了配对**——pair 的运行期行为（ConnID 分片、pending 池、30s TTL、flush）是 Runtime Plane 的，`rule.Evaluate` 触碰不到。
+- **B. 平台实际效果**（落库后）：真实宿主运行（live capture / `decode_raw_packets`）后用 `list_decoded_data` 检查 `meta.msg_name` / `meta.semantic` / `correlation_id` / `causation_id`。**pair 只有在真实事件上看到正确的 `causation_id`（响应方→请求方）与一致的 `correlation_id`，才算运行期配对成功**——A 层全绿但 B 层没配上，说明问题在规则声明之外的运行期语义（如 key 连接内不唯一、往返超 30s）。
+
+规则写完后**必须**先跑 A 层产出覆盖率表，**把表交给用户逐条判定**；涉及 pair 的规则在有机会落库时补跑 B 层。0 命中的规则不得静默保留：删除 / 修正 / 在注释写明"已知未覆盖 + 原因 + 判定人"，三选一。
+
+A 层两个指标，判据不同（示例代码可直接放进 `decode_test.go`）：
 
 ```go
 // 指标一：逐条孤立回放 —— 该规则在固件上是否具备命中能力（G3/G4 的机器验证）。
@@ -596,7 +671,7 @@ func ruleHits(t *testing.T, m *sdk.Manifest, views []sdkevent.Value) map[string]
 			if err != nil {
 				t.Fatalf("rule %s evaluate: %v", r.ID, err)
 			}
-			if len(res.Names)+len(res.Pairs)+len(res.Children)+len(res.Semantics) > 0 {
+			if len(res.Names)+len(res.Pairs)+len(res.Semantics) > 0 {
 				hits[r.ID]++
 			}
 		}
@@ -668,7 +743,7 @@ func effectiveNameRules(t *testing.T, m *sdk.Manifest, views []sdkevent.Value) m
 6. **多连接**：两条独立连接互不干扰（连接隔离由宿主 `ConnID` 保证，pair 池已按连接分片，见 F6）。
 7. **5-tuple 复用（重连，TCP）**：SYN 后新连接握手被再次正确消费（回归坑 1/坑 2）。
 8. manifest 一致性：`semantic_rules` 引用的 payload 路径（`when.path`/`effect.key`/`effect.source`）能实际解析；`contract.NewPluginChecker().Check(m)` 零 violation。
-9. **规则覆盖率回放（§5.5，必做）**：用真实抓包固件跑 `rule.Evaluate`，产出「逐条命中数 + name 实际生效」覆盖率表并**交用户判定**；0 命中规则不得静默保留。声明期校验（`gt.semantic.*`）不查语义事实，只过它不能证明规则有效。
+9. **规则覆盖率回放（§5.5 A 层，必做）**：用真实抓包固件跑 `rule.Evaluate`，产出「逐条命中数 + name 实际生效」覆盖率表并**交用户判定**；0 命中规则不得静默保留。声明期校验（`gt.semantic.*`）不查语义事实，只过它不能证明规则有效。pair 规则在事件落库后补跑 §5.5 B 层（`list_decoded_data` 核对 `causation_id`/`correlation_id`）。
 10. **Payload 纯度**：断言 payload 中不含协议外字段（对照 4.2 硬约束）。
 
 固件构造用 `gopacket` 拼以太网 + IPv4 + TCP 帧，使 `framing.ExtractL7` 能读出端口（用于方向判定）；测试内对压缩负载直接预压缩后写入。
@@ -683,8 +758,9 @@ go build -o foo-decoder.exe .
 go test -count=1 ./...   # 必须 -count=1：go test 缓存会掩盖问题
 ```
 
-- 宿主侧验证：把插件 `--registry=` 指向宿主，观察宿主日志 `semantic rules:` 无 error 级问题；用 `list_decoded_data` 核对事件的 `payload`（业务字段）与 `meta.msg_name`（消息名）。
-- 前端验证：协议数据页应显示业务 payload 为主、消息名正确、请求/响应按 `causation_id` 配对并排。
+- **第一层 快速验证（不落库）**：`test_plugin`（session_id + plugin）看 `decoded` / `decode_errors` / `type_histogram` / `sample_events`——先确认"到底解出了什么"；再 `verify_plugin` 看 contract violations + quality + verdict。这两个工具是离线隔离回放，**不写 events 表**。
+- **第二层 持久化验证（真实落库）**：live capture 使用该插件产生流量（或 `decode_raw_packets`，需服务端 `-enable-raw-debug`）后，`list_decoded_data` 是 **machine-readable 验收面**——Agent 先按工具返回值核对 `payload`（业务字段）、`meta.msg_name`、`correlation_id` / `causation_id` 配对（pair 规则的运行期效果，§5.5 B 层）再下结论；同时观察宿主日志 `semantic rules:` 无 error 级问题。
+- 前端协议数据页只作最终人工视觉确认，不作 Agent 的判定依据。
 
 ### 7.1 decode 诊断指标（跑起来后如何判断解码质量）
 
@@ -703,7 +779,7 @@ go test -count=1 ./...   # 必须 -count=1：go test 缓存会掩盖问题
 
 解码器运行在宿主热路径上，**一个 panic / 死循环 / 无限内存增长会拖垮整条抓包链路**。兜底不是"try 一下"而是分层设计，四层缺一不可：
 
-1. **帧解析层**（每个请求入口）：`recover()` 兜底——坏包不 panic（示例骨架已有）；`framing.ExtractL7` 返回 `!ok` 时直接 `done=true` 返回，不算错误。
+1. **帧解析层**（每个请求入口）：panic 边界交给 SDK 的 `Decoder.DecodeV2` 外层（panic → 该 input 的 `Error+Done:true`）——stream 层**不要**写吞 panic 的 recover，吞掉会漏发 done；`framing.ExtractL7` 返回 `!ok` 时直接 `done=true` 返回，不算错误。
 2. **消息级容错**（解析循环内）：非法长度 / 截断 / 校验失败 → 跳过（`Consume` 部分或 `Forget` 整流）继续，不中断后续包；**不要**把"一条坏消息"升级为整帧错误（见 7.1 的 plugin 报错误读）。
 3. **流状态兜底**：重并发/攻击性流量下,`Reassembler` 必须设上限（参考插件 4 MiB / 流），失步时 `Forget` 丢弃流状态让下一段重新自同步（§3 坑 3）；不会无限增长。
 4. **协议覆盖兜底**：就是不认识的字节——**先喂现场抓包**（`sample_bytes_plugin`）确认协议范围，编码时对"未识别消息"要么**不产出事件仅 done**，要么**仅当用户确认后**产出事件并附 `Meta` 标注（如 `unknown`），绝不臆造 payload 字段。
@@ -728,12 +804,14 @@ go test -count=1 ./...   # 必须 -count=1：go test 缓存会掩盖问题
 
 ## 踩坑清单（完成前逐条自查）
 
-- [ ] go.mod 为 `go 1.26`（与宿主对齐）
+- [ ] go.mod 的 go 指令 ≥ SDK 要求（当前 **1.25**；宿主用 1.26.8 与插件无关，勿写 1.26）
 - [ ] **编码前已产出 Packet 处理链路文档**（§1.1：包头字段表 + 转化链路 + JSON 化规则 + 服务端推送处理）并进插件目录
 - [ ] SYN/RST 空 payload 段 Push 给了 Reassembler（坑 2）
 - [ ] SYN/RST 重置了握手簿记（坑 1；仅 TCP 需要，UDP 跳过）
 - [ ] 长度字段字节序正确（wesnoth 为 big-endian）
-- [ ] 解析器不 panic：recover 兜底 + 宽容解析
+- [ ] 解析器不 panic：宽容解析 + 消息级跳过；stream 层（decodePacket）**没有**吞 panic 的 recover（panic 边界归 SDK 外层，吞掉会漏发 done）
+- [ ] `create_plugin` 只给了 3 个文件，decode.go / 解析器 / `.env` / `.gitignore` / 单测 / docs 已自行补齐（§0.3）
+- [ ] `create_plugin` **没有传 `output_dir`**（§0.3 禁忌：否则 build/activate/status 按 `<plugins_root>/<name>` 找不到插件）
 - [ ] 续行拼接补了 `\n`，注释跳过了整行
 - [ ] 没有臆造转义（反引号等以源码为准）
 - [ ] Payload 全部字段可在协议中找到出处（硬约束：无协议外字段）
@@ -754,6 +832,6 @@ go test -count=1 ./...   # 必须 -count=1：go test 缓存会掩盖问题
 - [ ] **诊断指标已核对**（§7.1）：会话 `decode_errors`、`decode_error_groups` 分组合理、错误模板参数稳定（`<n>` 占位符）
 - [ ] **兜底判断四层齐备**（§7.2）：recover + ExtractL7 !ok 回 done；消息级跳过；Reassembler 上限 + Forget；未识别消息不臆造 payload
 - [ ] **必交材料齐全**（§7.3）：packet-line 文档、语义证据表、覆盖率回放表、plugin.yaml、测试与固件
-- [ ] **运行实例 ↔ 制品一致**（§7.3）：`list_registered_plugins` 返回的 `artifact.source_dir/binary_path` 与改动目录一致；`binary_stale=true` 说明源码改过没重新 `build_plugin`（跑的是旧产物）
+- [ ] **运行实例 ↔ 制品一致**（§7.3）：`list_registered_plugins` 返回的 `artifact.source_dir/binary_path` 与改动目录一致；**改过任何插件源码（decode.go / parser.go 等）就重新 `build_plugin`**——`binary_stale=true` 一定是旧产物，但 `binary_stale=false` 不是免构建依据（mtime 辅助信号，§0.6）
 - [ ] `go vet` + `go build` + `go test -count=1` 全过
 - [ ] 宿主日志无 semantic rules error；前端消息名正确显示

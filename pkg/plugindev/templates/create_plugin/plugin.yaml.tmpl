@@ -11,11 +11,7 @@ hints:
   - {{.}}
 {{- end }}
 {{- end }}
-event:
-  fields:
-    direction: { type: string, enum: [client_to_server, server_to_client, unknown] }
-    msg_name:  { type: string }
-  data:
-    schema:
-      fields:
-        # TODO: 填写业务字段
+# semantic_rules 是接入平台语义能力的入口（effect 闭集：name / annotate / pair）。
+# 每条规则必须先过四道准入门（证据 / 路径 / 取值 / 效果），不虚构、不猜——
+# 详见 decoder-plugin-guide §5.3。
+# TODO: 填写本协议有证据支撑的语义规则

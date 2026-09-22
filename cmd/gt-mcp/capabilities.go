@@ -82,10 +82,14 @@ func buildCapabilityCatalog() capabilityDoc {
 			},
 		},
 		TypicalFlow: []string{
-			"接入新协议: get_plugin_dev_guide -> create_plugin -> build_plugin -> start_capture(plugin=...) -> activate_plugin -> verify_plugin -> list_decoded_data",
+			"接入新协议: get_plugin_dev_guide -> create_plugin(仅生成 go.mod/main.go/plugin.yaml，其余交付物自行补齐) -> 编码 + 单测 -> build_plugin -> get_plugin_env(写入 .env) -> activate_plugin -> test_plugin(看解码结果，不落库) -> verify_plugin(契约+质量 verdict，不落库)",
+			"真实落库验证: live capture 使用该插件 或 decode_raw_packets(需 -enable-raw-debug) -> list_decoded_data -> get_protocol_catalog",
 			"定位解码为空: status_plugin -> get_registry_addr -> sample_bytes_plugin -> explain_plugin",
 		},
-		Notes:       []string{},
+		Notes: []string{
+			"test_plugin / verify_plugin 都是对离线会话的隔离回放，结果不写 events 表；要看真实落库数据必须走 live capture 或 decode_raw_packets",
+			"status_plugin 的 binary_stale 只对目录内 *.go / go.mod / plugin.yaml 的 mtime 做辅助判断；改过任何插件源码就重新 build_plugin，别拿 binary_stale=false 当免构建依据",
+		},
 	}
 }
 

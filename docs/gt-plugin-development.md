@@ -459,7 +459,7 @@ func main() {
 2. **确认是否用了 `framing.ExtractL7`。** 任何 pcap 来源都必须先 `ExtractL7`；不要手写 `payload[14:]`。只有 `ProxyPayload`/`TLSPlaintext` 才无需剥头。
 3. **TCP 类协议必须接 `Reassembler`。** 典型症状：HTTP body 恒为空、只解到第一条不完整消息、或 `Bytes()` 始终为空（乱序/缺口）。这是 `tcp-reassembly-required`(warn) 直接对应的坑。
 4. **回环流量**最容易踩：127.0.0.1 通信在 Npcap 上走回环接口，帧带 4 字节头。纯 L7 解码器会逐字节错位，整条流解析失败 → 0 事件。
-5. **`verify_plugin`** 会把离线会话的原始包喂给你的解码器，并对照 contract.yaml 规则（含 `payload-framing-by-link-type`/`link-type-selects-framing`）给出 `pass|warn|fail` 判定与证据。0 事件时优先跑它。
+5. **`test_plugin` / `verify_plugin`** 会把离线会话的原始包喂给你的解码器：`test_plugin` 先告诉你解出了什么（`decoded` / `decode_errors` / `sample_events`），`verify_plugin` 再对照 contract.yaml 规则（含 `payload-framing-by-link-type`/`link-type-selects-framing`）给出 `pass|warn|fail` 判定与证据。0 事件时优先跑这两个。注意两者都是**隔离回放、不落库**（不写 events 表）。
 6. **`explain_plugin`** 对 0 事件给出归因与修复建议（已修正：不再误导"payload 已是 L7"）。
 
 > 踩坑实录：曾有人坚信"payload 已是 L7"（这条经证伪的旧规则原叫 `payload-is-l7`，现行 SSOT 规则为 `payload-framing-by-link-type`(error)：必须按 link_type 剥头），写出纯 L7 解码器，回环帧导致 0 事件，转而用 Python 手剥字节定位，再补 TCP 重组——耗费大量调试 token。正确做法是开发前先读契约，0 事件先 `sample_bytes_plugin`，回环解码器直接内置 `ExtractL7` + `Reassembler`。
@@ -468,15 +468,19 @@ func main() {
 
 ## 8. 离线 pcap 回放循环（不抓包也能开发/验证）
 
-无需真实网卡，用 `start_capture(pcap_file=...)` 把离线 pcap 灌入 pipeline，再用 `verify_plugin` 跑解码。推荐开发闭环：
+无需真实网卡，用 `start_capture(pcap_file=..., plugin=...)` 把离线 pcap 灌入 pipeline。这是一个**真实的 capture session**（包落库、带 plugin 时解码落库），所以能直接用 `list_decoded_data` 查真实事件；而 `test_plugin` / `verify_plugin` 是**隔离回放，不写 events 表**。推荐开发闭环：
 
 ```
 1. 准备一份真实抓包帧（含链路层头），覆盖回环与以太网两种 link_type。
-2. MCP: start_capture(pcap_file="fixtures/http_loop.pcap")   # 离线回放
-3. MCP: verify_plugin(name="my-http")                        # 解码 + 契约校验
-4. 看 unknown 比例 / 0 事件 / 重组缺口提示，回到代码修 framing。
-5. 反复 2-4，直到 verify 通过、list_decoded_data 能看到业务事件。
+2. MCP: start_capture(pcap_file="fixtures/http_loop.pcap", plugin="my-http")  # 离线回放 + 解码落库
+3. MCP: list_decoded_data(session_id=...)                    # 真实落库结果：业务事件 / 消息名 / 配对
+4. MCP: test_plugin(session_id=..., plugin="my-http")        # 不落库：看 decoded / 错误 / sample_events
+5. MCP: verify_plugin(session_id=..., plugin="my-http")      # 不落库：契约 + 质量 verdict
+6. 看 unknown 比例 / 0 事件 / 重组缺口提示，回到代码修 framing。
+7. 反复 2-6，直到 verify 通过、list_decoded_data 能看到业务事件。
 ```
+
+> `list_decoded_data` 能看到事件是因为 **start_capture 那个 session 真实解码落库**，不是因为跑过 `verify_plugin`——后者只读回放，不产生事件。第 2 步漏掉 `plugin=` 会导致整条链路没有解码事件（`start_capture` 的 plugin 是可选的，不传就只存原始包）。
 
 要点：
 - fixture 必须**保留链路层头**（契约 `real-fixture-required`）。用 `tcpdump -w` / Wireshark 导出的原始帧即可，不要用已"Follow TCP Stream"导出的纯文本（那已经是 L7，掩盖了剥头问题）。
@@ -488,23 +492,42 @@ func main() {
 
 ### 插件启动流程
 
+平台**统一以隧道模式运行插件**（gt-agent 托管与 Developer Plane `activate_plugin` 都注入
+`GT_TUNNEL=1`）：插件不监听本地 Decode 端口，注册后在同一条 gRPC 连接上开 `Connect` 双向流，
+解码请求经隧道帧往返，宿主**不回拨**插件。
+
 ```
 1. 读取当前目录 plugin.yaml → manifest bytes
 2. 端点发现：GT_REGISTRY_ADDR > --registry= > 默认 :9091
 3. 建立 gRPC 连接到 RegistryServer
-4. 调用 Register RPC（携带 manifest）
-5. 注册成功 → 启动心跳循环（默认 5s）
-6. Pipeline 发送 Decode RPC → 插件处理
-7. 插件异常退出 → 心跳超时 → Registry 自动清理
+4. 调用 Register RPC（携带 manifest、tunnel=true）
+5. 注册成功 → 拿到 instance_id
+6. 打开 Connect 流，把 instance_id 放进 metadata → 宿主据此精确绑定该实例
+   （缺 instance_id 或实例未知：宿主直接拒绝建流）
+7. 心跳循环与隧道服务并发运行；隧道断 / 心跳失联任一发生 → 退避重连（1s..30s）
+8. Pipeline 经隧道发 Decode 帧 → 插件处理 → 回帧
+9. 插件异常退出 → 心跳超时或流断 → Registry 自动清理
 ```
+
+隧道期间心跳**照发**：TCP 半开时流的 `Recv` 不会报错，心跳是唯一的应用层存活探测。宿主侧
+同样按心跳超时判隧道实例离线，且已死隧道实例的心跳会被拒绝（不会被残留心跳"复活"）。SDK 与
+宿主两端都开了 gRPC keepalive，在传输层兜底探测半开连接。
+
+一条隧道复用多个逻辑流（`stream_id`）；某条流卡住时**只 abort 那一条**，不阻塞整条隧道。
 
 ### 环境变量
 
 | 变量 | 说明 | 示例 |
 |------|------|------|
 | `GT_REGISTRY_ADDR` | 注册中心地址（env > `--registry=` > 默认 `:9091`；显式设置可避免连到非预期地址） | 见下方说明 |
-| `GT_DECODER_ADDR` | 插件 Decode 服务监听地址（跨机器设 TCP `host:port`；留空=本地 socket） | `0.0.0.0:9092` |
-| `GT_DECODER_PUBLIC_ADDR` | pipeline 回拨插件的可达地址（跨机器必填，填插件真实 IP） | `10.12.34.57:9092` |
+| `GT_TUNNEL` | 非空即隧道模式。由**运行方**注入，插件代码只透传不判断 | `1` |
+| `GT_AUTH_TOKEN` | 注册鉴权 Bearer token（`GT_AUTH_TOKENS` 非空时必填；agent 托管下平台自动注入） | `gt_tok_xxx` |
+| `GT_DECODER_ADDR` | 插件 Decode 服务监听地址——**仅非隧道回退模式需要**，隧道下宿主不回拨 | `0.0.0.0:9092` |
+| `GT_DECODER_PUBLIC_ADDR` | pipeline 回拨插件的可达地址——**仅非隧道回退模式需要** | `10.12.34.57:9092` |
+
+> **隧道插件排障**：注册成功但一直不在线，基本只有两种原因——Connect 没建起来（用旧 SDK
+> 编译，缺 `instance_id`，宿主拒流），或心跳/隧道断连。此时**不要**去调
+> `GT_DECODER_ADDR` / `GT_DECODER_PUBLIC_ADDR`，它们在隧道下不参与连接。
 
 > **`GT_REGISTRY_ADDR` 的真实取值**：由 gt-pipeline 启动时打印在日志 `GT_REGISTRY_ADDR` 字段中；MCP 工具 `get_registry_addr` 亦可直接获取。
 > - Windows（命名管道）：`npipe:\\.\pipe\gt-registry`
@@ -517,16 +540,16 @@ func main() {
 
 三个进程（gt-pipeline / 插件 / gt-mcp）**不要求共享 workDir**，全部通过显式网络地址互联：
 
-- **插件 → registry（注册/心跳）**：`GT_REGISTRY_ADDR=host:port`（pipeline 用 `-registry-addr :9091` 监听 TCP）。
-- **pipeline → 插件 Decode（实际解码）**：插件用 `GT_DECODER_ADDR=0.0.0.0:9092` 监听 TCP，并用 `GT_DECODER_PUBLIC_ADDR=10.12.34.57:9092` 上报 pipeline 实际可达地址。
+- **插件 → registry（注册 / 心跳 / 隧道帧）**：`GT_REGISTRY_ADDR=host:port`（pipeline 用 `-registry-addr :9091` 监听 TCP）。**隧道模式下这是唯一必需的地址**——解码流量也走这条连接，插件不需要任何可入站端口，因此 NAT / 防火墙 / 容器后面都能直接接入。
+- **pipeline → 插件 Decode**：仅在非隧道回退模式下需要，插件用 `GT_DECODER_ADDR=0.0.0.0:9092` 监听 TCP，并用 `GT_DECODER_PUBLIC_ADDR=10.12.34.57:9092` 上报 pipeline 实际可达地址。
 - **gt-mcp → pipeline（控制面）**：gt-pipeline 用 `-control-addr :9888` 监听 TCP，gt-mcp 用 `-pipeline-addr host:port` 连接。
 
 地址支持形式：`host:port`（TCP）、`unix:/path`、`npipe:\\.\pipe\name`、裸路径（按 Unix socket 处理）。
 
 ### 退出处理
 
-- **正常退出**：插件进程 exit → Registry 心跳超时（默认 15s）→ 自动注销
-- **异常退出**：同理，无需手动 deregister
+- **正常退出**：插件进程 exit → 隧道流断 / Registry 心跳超时（默认 15s）→ 自动注销
+- **异常退出**：同理，无需手动 deregister；进程被 kill -9 时由心跳超时与 gRPC keepalive 兜底发现
 - **优雅关闭**：建议捕获 SIGTERM，停止接收新包后退出
 
 ---
@@ -627,11 +650,13 @@ addr := sdk.ResolveRegistryAddr()
 |------|------|
 | `get_plugin_contract` | 获取 SDK `contract/contract.yaml` 全文（**SSOT**，写/审插件代码前必读） |
 | `get_plugin_dev_guide` | 获取本开发指南 |
-| `create_plugin` | 生成插件项目骨架 |
-| `sample_bytes_plugin` | **看首个包的字节**，确认 link_type 与帧结构（0 事件排查第一步） |
-| `verify_plugin` | 离线回放原始包 + 契约校验，给出 `pass\|warn\|fail` 判定与证据 |
+| `create_plugin` | 生成最小插件骨架（**仅 `go.mod` / `main.go` / `plugin.yaml` 三个文件**，decode.go / 解析器 / 测试 / `.env` / `.gitignore` 由开发者补齐）。🚫 **不要传 `output_dir`**：后续 `build_plugin` / `activate_plugin` / `status_plugin` 按 `<plugins_root>/<name>` 定位插件，传了不在 root 下的目录会让它们找不到刚生成的插件 |
+| `sample_bytes_plugin` | **看首个包的字节**，确认 link_type 与帧结构（0 事件排查第一步）。有硬上限（≤20 包 / 每包 ≤64 字节），只能形成假设，不是帧结构已确认的证据 |
+| `test_plugin` | 离线回放解码并采样：`decoded` / `decode_errors` / `type_histogram` / `sample_events`——回答"到底解出了什么"。**不落库** |
+| `verify_plugin` | 离线回放 + 契约校验，给出 `pass\|warn\|fail` 判定与证据。**不落库**，不是"事件已写库"的信号 |
+| `list_connection_frames` | 查询连接内的原始帧（需 `conn_id`），用于看**连接级/重组后**的事实，补 `sample_bytes_plugin` 只看首 64 字节的不足 |
 | `explain_plugin` | 对解码结果（含 0 事件）做归因与修复建议 |
-| `list_registered_plugins` | 列出已注册（运行中/离线）插件；Developer Plane 已连接时每条附 `artifact` 视图（`source_dir` 源目录 / `binary_path` 构建产物 / `binary_stale` 是否过期——源码比二进制新需重新 `build_plugin`），用于核对"当前运行实例到底跑的是哪个源码目录、哪份构建产物" |
+| `list_registered_plugins` | 列出已注册（运行中/离线）插件；Developer Plane 已连接时每条附 `artifact` 视图（`source_dir` 源目录 / `binary_path` 构建产物 / `binary_stale` 是否过期），用于核对"当前运行实例到底跑的是哪个源码目录、哪份构建产物"。注意 `binary_stale` 只是 mtime 辅助信号（比对目录内 `*.go` / `go.mod` / `plugin.yaml`）：**改过任何插件源码就重新 `build_plugin`**，不要拿 `binary_stale=false` 当免构建依据 |
 | `get_plugin_manifest` | 获取插件 manifest |
 | `deregister_plugin` | 注销插件 |
 | `set_session_plugin` | 运行时热切换会话绑定的解码插件（无需停抓） |
@@ -643,6 +668,8 @@ addr := sdk.ResolveRegistryAddr()
 > 约定速记：
 > - **payload 是完整帧**，先 `ExtractL7` 再 `Reassembler`。
 > - 只有 `ProxyPayload`(1001) / `TLSPlaintext`(1002) 是纯 L7。
-> - 0 事件先 `sample_bytes_plugin`，再 `verify_plugin`。
+> - 0 事件先 `sample_bytes_plugin`，再 `test_plugin`（看解出了什么），最后 `verify_plugin`（看整体质量）。
+> - `test_plugin` / `verify_plugin` 都是离线隔离回放、**不写 events 表**；要看真实落库事件必须走
+>   `start_capture(plugin=...)` 的真实 session 或 `decode_raw_packets`（需 `-enable-raw-debug`）。
 > - v2 事件用 `event.Draft` + MsgPack，**Payload ≠ Meta ≠ Analysis 三段分离**：业务字段进 `Value`，
 >   元信息（direction/msg_name/role/is_push）进 `Meta`，状态变更/实体投影进 `Analysis`，不要混写。

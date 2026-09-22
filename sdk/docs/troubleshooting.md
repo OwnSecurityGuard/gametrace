@@ -273,7 +273,14 @@ rather than mixing old and new decoder behavior in one dataset.
 
 ## 12. Decoder endpoint troubleshooting
 
-If registration succeeds but decoding does not happen, check:
+**First determine the mode.** The platform runs plugins in tunnel mode (`GT_TUNNEL=1`,
+injected by gt-agent and by Developer Plane `activate_plugin`): the host never dials back,
+so items 1–5 below do not apply. In tunnel mode, "registered but never online / no decoding"
+means the `Connect` stream failed — almost always a plugin built with an older SDK that does
+not send `instance_id` in the stream metadata (the host rejects it), or the tunnel/heartbeat
+dropped. Rebuild with the current SDK and check the plugin log for a rejected stream.
+
+Standard (non-tunnel) mode only — if registration succeeds but decoding does not happen, check:
 
 1. the decoder listener is still alive;
 2. `GT_DECODER_ADDR` is what you intended;

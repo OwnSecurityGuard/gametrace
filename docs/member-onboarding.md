@@ -23,7 +23,7 @@ zip 已内置回连地址与凭证（`config.embedded.json` 与探针在同一�
 gt-agent --token gt_tok_xxxx --server <服务器IP>:9091
 ```
 
-gt-agent 会自动发现 `plugins/` 下的插件进程并拉起，以**隧道模式**注册到服务器。插件（官方脚手架 `create_plugin` 生成的模板原生支持）经 gRPC 连到 `:9091`，崩溃会被自动按退避重启。此后服务器侧 `list_registered_plugins` 就能看到你的插件。
+gt-agent 会自动发现 `plugins/` 下的插件进程并拉起，以**隧道模式**注册到服务器——这是平台唯一受支持的运行方式：插件不起本地端口、服务器不回拨，注册/心跳/解码帧共用同一条到 `:9091` 的连接，所以成员机器在 NAT 后面也不需要开放入站端口。插件崩溃会被自动按退避重启。此后服务器侧 `list_registered_plugins` 就能看到你的插件。
 
 ## 3. 手动抓包（高级）
 

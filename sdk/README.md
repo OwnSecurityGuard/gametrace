@@ -110,12 +110,15 @@ SDK 侧当前承载语义契约层：
 
 - **标准模式**：启动本地 DecodeV2 gRPC server，注册后上报拨号地址，宿主回拨；
 - **隧道模式**（`opts.Tunnel=true`）：跳过本地监听，`Register(tunnel=true)` 后在同一连接上
-  打开 `Connect` 双向流，DecodeV2 经隧道帧完成，宿主不回拨。
+  打开 `Connect` 双向流，DecodeV2 经隧道帧完成，宿主不回拨。建流时插件把 Register 返回的
+  `instance_id` 放入 metadata（`sdk.TunnelInstanceIDKey`），宿主据此精确绑定，不按到达顺序
+  猜测配对；**隧道期间心跳照发**——TCP 半开时流的 `Recv` 不会报错，心跳是唯一的应用层探测。
   设置 `opts.AuthToken` 后所有 RPC 附带 `authorization: Bearer <token>` metadata。
 
 注册端点发现顺序：`GT_REGISTRY_ADDR` 环境变量 > `--registry=` 参数 > 默认 `:9091`。
 注册端点支持 TCP、Unix socket（`unix:` 或裸路径）与 Windows 命名管道（`npipe:`）。
-心跳默认 10s，注册/心跳失败按指数退避重试（首次 1s，上限 30s）。
+心跳默认 10s，注册/心跳失败按指数退避重试（首次 1s，上限 30s）；SDK 侧对 registry 连接
+启用 gRPC keepalive（30s / 10s，允许无流时探测），用于发现半开连接。
 
 ## 环境变量速查
 
@@ -124,10 +127,15 @@ SDK 侧当前承载语义契约层：
 | 环境变量 | 作用 | 典型值 |
 |---|---|---|
 | `GT_REGISTRY_ADDR` | 宿主 registry 的监听地址，插件据此注册（发现顺序最高） | `127.0.0.1:19091` |
-| `GT_DECODER_ADDR` | 插件 DecodeV2 的监听地址；不设则监听 `:0` 随机端口 | `0.0.0.0:61888` |
-| `GT_DECODER_PUBLIC_ADDR` | 上报给宿主回连的地址（宿主侧必须能拨到）；不设则自动取监听地址，通配符替换为本机非回环 IPv4 | `192.168.31.87:61888` |
+| `GT_TUNNEL` | 非空即隧道模式。由**运行方**注入（gt-agent / `activate_plugin` 都注入 `1`），插件代码只透传不判断 | `1` |
+| `GT_DECODER_ADDR` | 插件 DecodeV2 的监听地址；不设则监听 `:0` 随机端口。**仅标准（非隧道）回退模式需要** | `0.0.0.0:61888` |
+| `GT_DECODER_PUBLIC_ADDR` | 上报给宿主回连的地址（宿主侧必须能拨到）；不设则自动取监听地址，通配符替换为本机非回环 IPv4。**仅标准（非隧道）回退模式需要**——隧道下宿主不回拨，设了也不参与连接 | `192.168.31.87:61888` |
 
-本地/同机开发的最简完整配置：
+> **以下「回连地址」整节只适用于标准（非隧道）回退模式。** 平台统一以隧道模式运行插件：
+> 宿主不回拨，插件不需要任何入站端口，**只需 `GT_REGISTRY_ADDR`（+ `GT_AUTH_TOKEN`）**。
+> 隧道模式下如果发现自己在调 `GT_DECODER_PUBLIC_ADDR`，方向已经错了 —— 那不是故障点。
+
+本地/同机开发的最简完整配置（标准模式）：
 
 ```bash
 export GT_REGISTRY_ADDR=127.0.0.1:19091           # 宿主 registry 端口

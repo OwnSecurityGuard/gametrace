@@ -2650,7 +2650,7 @@ func main() {
 	), capture.handleGetRegistryAddr)
 
 	s.AddTool(mcp.NewTool("get_plugin_env",
-		mcp.WithDescription("Return the complete .env for a decoder plugin: GT_REGISTRY_ADDR/GT_AUTH_TOKEN/GT_DECODER_ADDR/GT_DECODER_PUBLIC_ADDR plus a ready-to-write env_file block. The token is the caller's own registration token (anonymous mode returns empty). Scaffold a plugin, call this once, write env_file to .env — zero manual fill."),
+		mcp.WithDescription("Return the complete .env for a decoder plugin: GT_REGISTRY_ADDR/GT_AUTH_TOKEN/GT_DECODER_ADDR/GT_DECODER_PUBLIC_ADDR plus a ready-to-write env_file block. The token is the caller's own registration token (anonymous mode returns empty). Scaffold a plugin, call this once, write env_file to .env — zero manual fill. Note: the platform runs plugins in tunnel mode (GT_TUNNEL=1 is injected by activate_plugin and by gt-agent); the host never dials back, so GT_DECODER_ADDR/GT_DECODER_PUBLIC_ADDR belong to the legacy non-tunnel fallback and must not be tuned when debugging a tunnel plugin."),
 		mcp.WithString("host", mcp.Description("Explicit externally reachable host, same semantics as get_registry_addr (used when the plugin runs on a different machine than this caller)")),
 		mcp.WithNumber("decoder_port", mcp.Description("Decoder listen port, default 61887")),
 	), capture.handleGetPluginEnv)

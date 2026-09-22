@@ -5,13 +5,34 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
-// sourceFiles are the files whose modification time is compared against the
-// compiled binary to decide staleness (design §2.2: binary_stale from main.go
-// vs *.exe mtime). go.mod is included because a dependency change also requires
-// a rebuild.
-var sourceFiles = []string{"main.go", "go.mod", "plugin.yaml"}
+// fixedSourceFiles are the non-Go files whose modification time is compared
+// against the compiled binary to decide staleness. go.mod is included because
+// a dependency change also requires a rebuild; plugin.yaml because the
+// manifest is validated at registration.
+var fixedSourceFiles = []string{"go.mod", "plugin.yaml"}
+
+// listSourceFiles returns every staleness-relevant source file in the plugin
+// directory: all *.go files plus fixedSourceFiles. The earlier hard-coded
+// {main.go, go.mod, plugin.yaml} missed decode.go / parser.go — editing those
+// left binary_stale=false while the running binary was outdated.
+func listSourceFiles(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fixedSourceFiles
+	}
+	files := make([]string, 0, len(entries)+len(fixedSourceFiles))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+			continue
+		}
+		files = append(files, e.Name())
+	}
+	files = append(files, fixedSourceFiles...)
+	return files
+}
 
 // ArtifactStateOf derives the Developer Plane's view of a plugin's code purely
 // from disk: unknown → scaffolded → compiled. The validated promotion (which
@@ -33,7 +54,7 @@ func ArtifactStateOf(root, name string) *ArtifactState {
 		binMod := binInfo.ModTime()
 		// Compare against the newest source file; a newer source means the
 		// binary is stale and must be rebuilt.
-		for _, sf := range sourceFiles {
+		for _, sf := range listSourceFiles(dir) {
 			if si, se := os.Stat(filepath.Join(dir, sf)); se == nil {
 				if si.ModTime().After(binMod) {
 					binaryStale = true

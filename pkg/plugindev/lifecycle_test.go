@@ -62,6 +62,39 @@ func TestArtifactStateTransitions(t *testing.T) {
 	}
 }
 
+// TestArtifactStateStaleCoversAllGoFiles 回归：staleness 必须覆盖目录下所有
+// *.go 文件。旧实现硬编码 {main.go, go.mod, plugin.yaml}，改 decode.go /
+// parser.go 后 binary_stale 仍为 false，Agent 会被误导跳过 rebuild。
+func TestArtifactStateStaleCoversAllGoFiles(t *testing.T) {
+	root := t.TempDir()
+	name := "demo2"
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-time.Hour)
+	writeFile(t, filepath.Join(dir, "main.go"), "package main", past)
+	writeFile(t, filepath.Join(dir, "go.mod"), "module demo2", past)
+	writeFile(t, filepath.Join(dir, "plugin.yaml"), "api_version: gt.decoder/v2", past)
+	writeFile(t, filepath.Join(dir, "decode.go"), "package main", past)
+
+	binName := name
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	writeFile(t, filepath.Join(dir, binName), "BIN", time.Now())
+
+	if got := plugindev.ArtifactStateOf(root, name); got.BinaryStale {
+		t.Fatalf("expected not stale when binary is newest")
+	}
+
+	// decode.go 比 binary 新 → 必须 stale（旧实现在这里漏报）。
+	writeFile(t, filepath.Join(dir, "decode.go"), "package main // changed", time.Now().Add(time.Minute))
+	if got := plugindev.ArtifactStateOf(root, name); !got.BinaryStale {
+		t.Fatalf("expected stale when decode.go is newer than binary")
+	}
+}
+
 func TestArtifactStateUnknownForMissingDir(t *testing.T) {
 	root := t.TempDir()
 	got := plugindev.ArtifactStateOf(root, "ghost")

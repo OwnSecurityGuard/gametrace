@@ -1,15 +1,28 @@
 # Runtime Connection
 
+> **Read this first.** The platform runs plugins in **tunnel mode** (`GT_TUNNEL=1`, injected by
+> gt-agent and by Developer Plane `activate_plugin`). In tunnel mode the plugin opens no
+> listener and the host never dials back — registration, heartbeat and every decode frame share
+> the single connection to `GT_REGISTRY_ADDR`. `GT_DECODER_ADDR` and
+> `GT_DECODER_PUBLIC_ADDR` are **not used** in that mode; the "Pipeline -> Decoder" hop below
+> only exists in the legacy standard (non-tunnel) fallback path.
+
 ## Overview
 
 ```
+        tunnel mode (what the platform uses)
+
+        register | heartbeat | Connect stream (decode frames)
+
+Plugin <=================================================> Registry
+        (one outbound connection; no inbound port needed)
+
+
+        standard mode (legacy fallback)
+
                  register
-
 Plugin --------------------> Registry
-
-
                  connect
-
 Pipeline ------------------> Decoder
 ```
 
@@ -21,7 +34,7 @@ Plugin registration target:
 Plugin -> Registry
 ```
 
-## GT_DECODER_ADDR
+## GT_DECODER_ADDR  (standard / non-tunnel mode only)
 
 Decoder listener address:
 
