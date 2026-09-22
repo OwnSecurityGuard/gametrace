@@ -127,13 +127,9 @@ type RegistryServer struct {
 	// tunnelHub 处理 PluginRegistry.Connect 反向隧道流（见 tunnel.go）。
 	// NewRegistryServer 时随注册表一起创建，Connect RPC 委托给它；
 	// 隧道建流/断开钩子回调 bindTunnelClient / tunnelDisconnected 完成绑定与下线。
+	// 绑定按 Connect metadata 里的 instance_id 精确匹配，注册表不再保存
+	// 任何「等待配对」的 FIFO 状态。
 	tunnelHub *TunnelHub
-	// tunnelPending 记录「Connect 已建立但尚未绑定到任何 tunnel 注册」的
-	// 隧道客户端，按 owner 分桶、FIFO（与 tunnelAwaiting 按到达顺序一一配对）。
-	tunnelPending map[string][]pb.DecoderClient
-	// tunnelAwaiting 记录「已 tunnel=true 注册但尚未绑定隧道」的实例 ID，
-	// 按 owner 分桶、FIFO；与 tunnelPending 保证 Connect↔Register 按到达顺序配对。
-	tunnelAwaiting map[string][]string
 
 	// 注册失败 ring buffer（register_failed 事件源数据）：容量 20、TTL 15min、
 	// name+socket_path+error 同 key 5min 去重。
@@ -155,13 +151,11 @@ func NewRegistryServer(heartbeatSec int32) *RegistryServer {
 		heartbeatSec = 10
 	}
 	s := &RegistryServer{
-		plugins:        map[string]*RegisteredPlugin{},
-		byName:         map[string]string{},
-		heartbeatSec:   heartbeatSec,
-		listeners:      map[int64]chan PluginEvent{},
-		tunnelPending:  map[string][]pb.DecoderClient{},
-		tunnelAwaiting: map[string][]string{},
-		failLastSeen:   map[string]time.Time{},
+		plugins:      map[string]*RegisteredPlugin{},
+		byName:       map[string]string{},
+		heartbeatSec: heartbeatSec,
+		listeners:    map[int64]chan PluginEvent{},
+		failLastSeen: map[string]time.Time{},
 	}
 	// Connect 反向隧道：owner 从流上下文解析（gRPC auth 拦截器注入 Principal；
 	// 未接入认证时 OwnerFrom 返回 ""，即匿名/本地语义）。
@@ -238,16 +232,14 @@ func (s *RegistryServer) emit(event PluginEvent) {
 // 同一 owner 的同名重复注册替换旧实例（崩溃重启场景），不同 owner 的同名插件共存。
 //
 // 隧道分支：req.Tunnel == true 时插件没有可回拨的 Decode socket，跳过拨号验证；
-// 解码用 pb.DecoderClient 由 Connect 反向隧道提供（见 tunnel.go）。绑定时序：
-// SDK 侧 RunRegisterLoop 是「先 Register 再 Connect」，但两者是独立 RPC，先后到达
-// 顺序不保证，因此做双向 pending 匹配——
-//   - Register 先到：实例以 Online=false（等待隧道）入表；
-//   - Connect 先到：bindTunnelClient 把隧道 client 放进 tunnelPending[owner]；
-//   - 两边齐了即绑定：取该 owner 的 FIFO pending client（同一插件进程一次
-//     Connect 对应一次 tunnel 注册；同 owner 多插件时按到达顺序一一配对）。
+// 解码用 pb.DecoderClient 由 Connect 反向隧道提供（见 tunnel.go）。绑定方式（④）：
+// 本 RPC 返回 instance_id，插件随后带着它打开 Connect（metadata
+// sdk.TunnelInstanceIDKey），宿主按 id 精确绑定——不做任何到达顺序推断。
+// 绑定前实例 Online=false、不参与 Find/FindByName（Client 为 nil 不可用）。
 //
-// 绑定前实例不参与 Find/FindByName（Client 为 nil 不可用）；存活完全跟随
-// Connect 流，不参与 CheckOffline 心跳超时（Tunnel=true 跳过）。
+// 存活：隧道实例同样受心跳超时约束（CheckOffline）。断开的隧道由断开钩子
+// 立即下线；心跳只是兜底——半开连接下 Connect 流不会报错，只有心跳超时能
+// 发现插件已消失（①）。
 func (s *RegistryServer) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
 	// 1. 解析 manifest
 	m, err := ParseManifest(req.Manifest)
@@ -319,39 +311,30 @@ func (s *RegistryServer) Register(ctx context.Context, req *pb.RegisterRequest) 
 	rp.Online.Store(!tunnel) // 隧道实例等 Connect 绑定后才算在线
 
 	nameKey := pluginKey(owner, m.Name)
-	bound := false
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("registry is closed")
 	}
-	// 若同名插件已注册（同 owner 作用域内），关闭旧连接（崩溃后重启场景）
+	// 若同名插件已注册（同 owner 作用域内），删除旧实例（崩溃后重启场景）。
+	// 旧实例的隧道若仍存活，其断开钩子因 plugins 里已无该 instance_id 而为
+	// no-op —— 不会误伤接替它的新实例（④ 精确绑定的直接收益）。
 	if oldID, ok := s.byName[nameKey]; ok {
 		if old, ok := s.plugins[oldID]; ok {
 			if old.Conn != nil {
 				_ = old.Conn.Close()
 			}
 			delete(s.plugins, oldID)
-			removeAwaitingLocked(s, owner, oldID)
 		}
 	}
 	s.plugins[instanceID] = rp
 	s.byName[nameKey] = instanceID
-	boundID := ""
-	boundName := ""
-	if tunnel {
-		// 入 awaiting FIFO；若该 owner 已有 pending 隧道（Connect 先到），
-		// 按到达顺序配对绑定（可能绑到更早 await 的实例，见 bindNextTunnelLocked）。
-		s.tunnelAwaiting[owner] = append(s.tunnelAwaiting[owner], instanceID)
-		if id, name, ok := s.bindNextTunnelLocked(owner); ok {
-			bound = id == instanceID
-			boundID, boundName = id, name
-		}
-	}
+	// 隧道实例此刻尚未绑定：等插件用本返回的 instance_id 打开 Connect（见
+	// tunnel.go 的 bindTunnelClient），由它推 online 事件。
 	s.mu.Unlock()
 
 	slog.Info("plugin registered", "name", m.Name, "instance_id", instanceID, "protocol", m.Protocol,
-		"owner", owner, "tunnel", tunnel, "tunnel_bound", bound)
+		"owner", owner, "tunnel", tunnel)
 
 	s.emit(PluginEvent{
 		Type:       PluginEventRegister,
@@ -360,15 +343,6 @@ func (s *RegistryServer) Register(ctx context.Context, req *pb.RegisterRequest) 
 		Online:     rp.Online.Load(),
 		Timestamp:  time.Now(),
 	})
-	if bound {
-		s.emit(PluginEvent{
-			Type:       PluginEventOnline,
-			InstanceID: boundID,
-			Name:       boundName,
-			Online:     true,
-			Timestamp:  time.Now(),
-		})
-	}
 
 	return &pb.RegisterResponse{
 		InstanceId:           instanceID,
@@ -501,12 +475,14 @@ func (s *RegistryServer) Heartbeat(ctx context.Context, req *pb.HeartbeatRequest
 	wasOnline := rp.Online.Load()
 	name := rp.Manifest.Name
 	instanceID := req.InstanceId
-	if rp.Tunnel {
-		// 隧道插件的存活跟随 Connect 流：忽略心跳，避免断开的隧道实例
-		// 被残留心跳「复活」回在线状态。
+	if rp.Tunnel && rp.Client != nil && tunnelClientClosed(rp.Client) {
+		// 隧道已断但插件还在发心跳：拒绝，而不是让该实例「复活」回在线。
+		// SDK 收到错误即判定心跳失联 → 退避重连并重新 Register（新 instance_id）。
 		s.mu.Unlock()
-		return &pb.HeartbeatResponse{}, nil
+		return nil, fmt.Errorf("tunnel closed for instance %q: re-register required", instanceID)
 	}
+	// ① 隧道插件同样记录心跳：TCP 半开时 Connect 流的 Recv 不会报错，
+	// 心跳超时是宿主侧唯一能发现「插件已死但连接还在」的信号。
 	rp.LastHeartbeat = time.Now()
 	rp.Online.Store(true)
 	s.mu.Unlock()
@@ -539,7 +515,6 @@ func (s *RegistryServer) Deregister(ctx context.Context, req *pb.DeregisterReque
 	}
 	delete(s.plugins, instanceID)
 	delete(s.byName, pluginKey(rp.Owner, name))
-	removeAwaitingLocked(s, rp.Owner, instanceID)
 	s.mu.Unlock()
 
 	slog.Info("plugin deregistered", "instance_id", instanceID, "name", name)
@@ -557,7 +532,9 @@ func (s *RegistryServer) Deregister(ctx context.Context, req *pb.DeregisterReque
 
 // CheckOffline 扫描注册表，将心跳超时的插件标记下线。
 // 应由外部定时调用（如每秒）。
-// 隧道插件不参与心跳超时（无心跳，存活跟随 Connect 流），但：
+//
+// 隧道插件同样参与心跳超时判定（①）：半开连接下 Connect 流不会报错，
+// 只有心跳超时能发现插件已经消失。此外隧道还有两条自己的规则：
 //   - 已绑定的隧道插件若其 Connect 会话已关闭（断开钩子丢失的兜底）→ 判离线；
 //   - 一直未绑定隧道的注册（插件崩溃在 Connect 前/从未 Connect）超过
 //     2×timeout 宽限 → 从注册表移除（SDK 重启后会重新 Register）。
@@ -578,12 +555,12 @@ func (s *RegistryServer) CheckOffline(timeout time.Duration) {
 					Online:     false,
 					Timestamp:  now,
 				})
+				continue
 			}
 			// 从未绑定的注册超过宽限期则回收
 			if rp.Client == nil && now.Sub(rp.LastHeartbeat) > 2*timeout {
 				delete(s.plugins, id)
 				delete(s.byName, pluginKey(rp.Owner, rp.Manifest.Name))
-				removeAwaitingLocked(s, rp.Owner, id)
 				reaped = append(reaped, PluginEvent{
 					Type:       PluginEventDeregister,
 					InstanceID: id,
@@ -591,8 +568,8 @@ func (s *RegistryServer) CheckOffline(timeout time.Duration) {
 					Online:     false,
 					Timestamp:  now,
 				})
+				continue
 			}
-			continue
 		}
 		if now.Sub(rp.LastHeartbeat) > timeout && rp.Online.Load() {
 			rp.Online.Store(false)
@@ -903,8 +880,7 @@ func (s *RegistryServer) WatchOffline(timeout time.Duration) context.CancelFunc 
 	return cancel
 }
 
-// Close 关闭所有插件连接。置位 closed 后，隧道钩子不再绑定/清理
-// （防止 Close 之后迟到的 Connect 钩子重新填充 tunnelPending），
+// Close 关闭所有插件连接。置位 closed 后，隧道钩子拒绝绑定/下线，
 // Register 也拒绝新注册。
 func (s *RegistryServer) Close() error {
 	s.mu.Lock()
@@ -917,8 +893,6 @@ func (s *RegistryServer) Close() error {
 		delete(s.plugins, id)
 	}
 	s.byName = map[string]string{}
-	s.tunnelPending = map[string][]pb.DecoderClient{}
-	s.tunnelAwaiting = map[string][]string{}
 	return nil
 }
 

@@ -19,6 +19,9 @@ const activateLivenessWait = 1500 * time.Millisecond
 // Activate launches the local plugin binary for Name with GT_REGISTRY_ADDR
 // injected, so it can register with the runtime (design §1.4: the Developer
 // Plane owns the process it launches; production uses systemd/k8s instead).
+//
+// GT_TUNNEL=1 一并注入：注册模式统一为隧道（与 gt-agent 托管一致），
+// 宿主不再回拨插件端点。
 // The spawned process deliberately outlives the gRPC call — its lifecycle is
 // managed by Deactivate, not by the request context.
 func Activate(ctx context.Context, req *ActivateRequest) (*ActivateResponse, error) {
@@ -51,7 +54,12 @@ func Activate(ctx context.Context, req *ActivateRequest) (*ActivateResponse, err
 
 	cmd := exec.Command(binary)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GT_REGISTRY_ADDR="+req.RegistryAddr)
+	// 只保留隧道模式：本地托管的插件同样以 GT_TUNNEL=1 注册（与 gt-agent 托管
+	// 一致），宿主不再回拨，因此也不需要 GT_DECODER_ADDR / GT_DECODER_PUBLIC_ADDR。
+	cmd.Env = append(os.Environ(),
+		"GT_REGISTRY_ADDR="+req.RegistryAddr,
+		"GT_TUNNEL=1",
+	)
 	if logFile != nil {
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile

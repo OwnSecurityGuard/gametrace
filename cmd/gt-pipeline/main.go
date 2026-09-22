@@ -33,7 +33,22 @@ import (
 	"gametrace/pkg/version"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 )
+
+// registry 侧的 keepalive 参数（②）。TCP 半开（对端消失但无 RST/FIN）时
+// 连接与流都不会报错，服务端周期性 PING 是传输层发现死连接的手段。
+// MinTime 必须 <= SDK 侧 ClientParameters.Time（sdk.registryKeepaliveTime=30s），
+// 否则服务端判定客户端过于激进并回 RST 断流。
+var registryKeepalive = keepalive.ServerParameters{
+	Time:    60 * time.Second,
+	Timeout: 20 * time.Second,
+}
+
+var registryKeepalivePolicy = keepalive.EnforcementPolicy{
+	MinTime:             15 * time.Second,
+	PermitWithoutStream: true,
+}
 
 func main() {
 	// 统一配置（T10）：-config 指向 gametrace.yaml（可选）。每个设置项的优先级：
@@ -209,12 +224,16 @@ func main() {
 	// 进入 Register/Connect（TunnelHub），决定插件键 owner/name 与会话归属。
 	// 仅在配置了 token 时挂拦截器：匿名模式注入的 "local" owner 会让插件键
 	// 变成 local/name，破坏空 owner=裸 name 的单机回归语义（见 pluginKey）。
-	registryGrpc := grpc.NewServer()
+	registryOpts := []grpc.ServerOption{
+		grpc.KeepaliveParams(registryKeepalive),
+		grpc.KeepaliveEnforcementPolicy(registryKeepalivePolicy),
+	}
+	registryGrpc := grpc.NewServer(registryOpts...)
 	if authResolver.Required() {
-		registryGrpc = grpc.NewServer(
+		registryGrpc = grpc.NewServer(append(registryOpts,
 			grpc.ChainUnaryInterceptor(auth.UnaryInterceptor(authResolver)),
 			grpc.ChainStreamInterceptor(auth.StreamInterceptor(authResolver)),
-		)
+		)...)
 	}
 	pluginpb.RegisterPluginRegistryServer(registryGrpc, registry)
 

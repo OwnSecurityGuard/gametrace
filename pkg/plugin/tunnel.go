@@ -12,6 +12,8 @@ package plugin
 //
 // 流的开启是隐式的：某 stream_id 的第一个 request 帧即开流；
 // half_close = 请求侧 EOF；插件回 end（error 空 = 正常结束）或 reset 取消。
+//
+// 隧道归属由 Connect 的 metadata（instance_id）确定，不是按建流顺序推断。
 
 import (
 	"context"
@@ -23,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
 	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 
 	"google.golang.org/grpc"
@@ -30,11 +33,25 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// 隧道默认参数（背压：有界队列 + 超时）。
-const (
-	defaultTunnelRespQueueSize = 16
-	defaultTunnelEnqueueWait   = 5 * time.Second
-)
+// 隧道默认参数（背压：有界队列，溢出即弃该流）。
+const defaultTunnelRespQueueSize = 64
+
+// instanceIDFromContext 读取插件在 Connect 时上报的 instance_id（④）。
+//
+// Register 与 Connect 是独立 RPC，仅凭连接无法判断隧道归属；插件把 Register
+// 返回的 instance_id 放进 metadata，宿主据此精确绑定到注册实例。取不到即
+// 拒绝建流（老插件/协议错误会被明确暴露，而不是被猜测配对掩盖）。
+func instanceIDFromContext(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	vals := md.Get(sdk.TunnelInstanceIDKey)
+	if len(vals) == 0 {
+		return ""
+	}
+	return vals[0]
+}
 
 // ErrTunnelSessionClosed 表示 Connect 隧道已断开（逻辑流随之一并结束）。
 // errors.Is 可用于识别该类错误。
@@ -44,16 +61,16 @@ var ErrTunnelSessionClosed = errors.New("tunnel: session closed")
 // 每条 Connect 流对应一个 tunnelSession，session 暴露的 tunnelClient
 // 实现 pb.DecoderClient，可直接交给 NewDispatcher。
 type TunnelHub struct {
-	// onDisconnect 在任一隧道断开时被调用（owner 为建流时解析出的属主标识，
-	// 通常是 instance_id；T4 用它触发 PluginEventOffline）。不可为空时才回调。
-	onDisconnect func(owner string)
-	// onConnect 在 Connect 隧道建立时被调用（owner 为属主标识，client 为
-	// 该隧道的 DecoderClient；T4 用它把隧道插件挂到注册表）。
-	onConnect func(owner string, client pb.DecoderClient)
+	// onDisconnect 在任一隧道断开时被调用（owner 为建流时解析出的属主标识；
+	// instanceID 是插件 Connect 时上报的 instance_id，用于精确下线该实例）。
+	onDisconnect func(owner, instanceID string)
+	// onConnect 在 Connect 隧道建立时被调用（instanceID 为该隧道精确绑定的
+	// 注册实例；注册表据此把 client 挂到对应实例，不再按到达顺序猜测）。
+	// 返回非 nil 错误时 Connect 直接失败，避免留下无人认领的孤儿隧道。
+	onConnect func(owner, instanceID string, client pb.DecoderClient) error
 	// ownerResolver 在 Connect 建流时从流上下文解析属主（T4/T5 接入认证后注入）。
 	ownerResolver func(ctx context.Context) string
 	respQueueSize int
-	enqueueWait   time.Duration
 
 	mu sync.Mutex
 	// sessions 记录所有活跃隧道会话（key: 自增会话 ID）。
@@ -66,9 +83,10 @@ type TunnelHub struct {
 // TunnelHubOption 配置 TunnelHub。
 type TunnelHubOption func(*TunnelHub)
 
-// WithTunnelDisconnectHook 设置隧道断开回调（owner 为建流时解析的属主标识）。
+// WithTunnelDisconnectHook 设置隧道断开回调（owner 为建流时解析的属主标识，
+// instanceID 为插件 Connect 时上报的实例 ID）。
 // 回调在隧道会话的收尾路径上被调用，必须非阻塞。
-func WithTunnelDisconnectHook(fn func(owner string)) TunnelHubOption {
+func WithTunnelDisconnectHook(fn func(owner, instanceID string)) TunnelHubOption {
 	return func(h *TunnelHub) {
 		if fn != nil {
 			h.onDisconnect = fn
@@ -76,9 +94,9 @@ func WithTunnelDisconnectHook(fn func(owner string)) TunnelHubOption {
 	}
 }
 
-// WithTunnelConnectHook 设置隧道建立回调：建流成功即通知 owner 与可用的
-// DecoderClient（回调应尽快返回，重活交给调用方）。先于任何解码调用发生。
-func WithTunnelConnectHook(fn func(owner string, client pb.DecoderClient)) TunnelHubOption {
+// WithTunnelConnectHook 设置隧道建立回调：建流成功即通知 owner、instanceID 与
+// 可用的 DecoderClient（回调应尽快返回，重活交给调用方）。先于任何解码调用发生。
+func WithTunnelConnectHook(fn func(owner, instanceID string, client pb.DecoderClient) error) TunnelHubOption {
 	return func(h *TunnelHub) {
 		if fn != nil {
 			h.onConnect = fn
@@ -95,14 +113,13 @@ func WithTunnelOwnerResolver(fn func(ctx context.Context) string) TunnelHubOptio
 	}
 }
 
-// WithTunnelQueueParams 调整每逻辑流响应队列的容量与入队等待超时（背压控制）。
-func WithTunnelQueueParams(queueSize int, enqueueWait time.Duration) TunnelHubOption {
+// WithTunnelQueueSize 调整每逻辑流响应队列的容量（背压控制）。
+// 队列满且消费者未取走时该逻辑流被 reset——缓冲只用于吸收正常抖动，
+// 不为慢消费者等待（见 deliverResponse 的隔离说明）。
+func WithTunnelQueueSize(queueSize int) TunnelHubOption {
 	return func(h *TunnelHub) {
 		if queueSize > 0 {
 			h.respQueueSize = queueSize
-		}
-		if enqueueWait > 0 {
-			h.enqueueWait = enqueueWait
 		}
 	}
 }
@@ -111,7 +128,6 @@ func WithTunnelQueueParams(queueSize int, enqueueWait time.Duration) TunnelHubOp
 func NewTunnelHub(opts ...TunnelHubOption) *TunnelHub {
 	h := &TunnelHub{
 		respQueueSize: defaultTunnelRespQueueSize,
-		enqueueWait:   defaultTunnelEnqueueWait,
 		sessions:      map[uint64]*tunnelSession{},
 	}
 	for _, opt := range opts {
@@ -129,16 +145,28 @@ func (h *TunnelHub) Connect(stream pb.PluginRegistry_ConnectServer) error {
 	if h.ownerResolver != nil {
 		owner = h.ownerResolver(stream.Context())
 	}
+	// ④ 精确绑定：Connect 必须携带 Register 返回的 instance_id。缺失即拒绝——
+	// 与其猜测配对（曾按到达顺序 FIFO 猜测，同 owner 多插件时会绑错实例），
+	// 不如让插件退避重连并在日志里留下明确原因。
+	instanceID := instanceIDFromContext(stream.Context())
+	if instanceID == "" {
+		return fmt.Errorf("tunnel: Connect missing %q metadata: plugin must Register first and pass the returned instance_id", sdk.TunnelInstanceIDKey)
+	}
 	sess := &tunnelSession{
 		hub:           h,
 		stream:        stream,
 		owner:         owner,
+		instanceID:    instanceID,
 		streams:       map[uint32]*pendingStream{},
 		closed:        make(chan struct{}),
 		respQueueSize: h.respQueueSize,
 	}
 	if h.onConnect != nil {
-		h.onConnect(owner, sess.client())
+		// 绑定失败（实例不存在/owner 不匹配）→ 直接让 Connect 失败，
+		// 插件退避重连并重新 Register，避免留下没人认领的孤儿隧道。
+		if err := h.onConnect(owner, instanceID, sess.client()); err != nil {
+			return err
+		}
 	}
 	id := h.nextID.Add(1)
 	h.mu.Lock()
@@ -151,7 +179,7 @@ func (h *TunnelHub) Connect(stream pb.PluginRegistry_ConnectServer) error {
 		h.mu.Unlock()
 		sess.close(fmt.Errorf("%w: connect stream closed", ErrTunnelSessionClosed))
 		if h.onDisconnect != nil {
-			h.onDisconnect(sess.owner)
+			h.onDisconnect(sess.owner, sess.instanceID)
 		}
 	}()
 
@@ -185,11 +213,11 @@ func (s *tunnelSession) dispatch(frame *pb.TunnelFrame) error {
 }
 
 // deliverResponse 把响应字节解包并投递到逻辑流的有界队列。
-// 队列满时等待 enqueueWait，仍投不进去则放弃该逻辑流（reset 插件侧）。
 //
-// 注意：本函数在 Connect 的单一收包循环里同步执行，某个逻辑流排队
-// 最多阻塞 enqueueWait，期间其他逻辑流的响应帧也会被拖延（队头阻塞）。
-// 默认 5s 的等待只出现在插件产出速度远超消费速度的异常场景。
+// ③ 单逻辑流隔离：本函数跑在 Connect 唯一的收包循环里，**绝不能阻塞**。
+// 曾在此为队列满的流等待 enqueueWait（默认 5s），期间同隧道其他所有流的
+// 响应帧一起被拖延——一个慢消费者能卡死整条隧道（队头阻塞）。
+// 现在入队失败只 reset 该流，代价由它自己承担，其余逻辑流照常推进。
 func (s *tunnelSession) deliverResponse(streamID uint32, data []byte) error {
 	resp := &pb.DecodeResponseV2{}
 	if err := proto.Unmarshal(data, resp); err != nil {
@@ -202,8 +230,6 @@ func (s *tunnelSession) deliverResponse(streamID uint32, data []byte) error {
 		slog.Warn("tunnel: response for unknown stream", "owner", s.owner, "stream_id", streamID)
 		return nil
 	}
-	timer := time.NewTimer(s.hub.enqueueWait)
-	defer timer.Stop()
 	select {
 	case ps.respCh <- resp:
 		return nil
@@ -211,7 +237,9 @@ func (s *tunnelSession) deliverResponse(streamID uint32, data []byte) error {
 		return nil // 逻辑流已被取消/结束，丢弃
 	case <-s.closed:
 		return fmt.Errorf("tunnel: deliver response: %w", ErrTunnelSessionClosed)
-	case <-timer.C:
+	default:
+		slog.Warn("tunnel: response queue overflow, resetting stream",
+			"owner", s.owner, "instance_id", s.instanceID, "stream_id", streamID, "queue", cap(ps.respCh))
 		return s.abortStream(streamID, errors.New("tunnel: response queue overflow"))
 	}
 }
@@ -282,10 +310,11 @@ func (s *tunnelSession) close(err error) {
 
 // tunnelSession 一条 Connect 流的多路分解状态。
 type tunnelSession struct {
-	hub       *TunnelHub
-	stream    pb.PluginRegistry_ConnectServer
-	owner     string
-	sendMu    sync.Mutex // 保护 stream.Send 的并发访问
+	hub        *TunnelHub
+	stream     pb.PluginRegistry_ConnectServer
+	owner      string
+	instanceID string // ④ 插件 Connect 时上报的注册实例 ID（精确绑定/下线）
+	sendMu     sync.Mutex // 保护 stream.Send 的并发访问
 	mu        sync.Mutex
 	streams   map[uint32]*pendingStream
 	closed    chan struct{}
@@ -527,140 +556,77 @@ func (t *tunnelStreamClient) RecvMsg(m interface{}) error {
 // ---------- RegistryServer 侧的隧道绑定/下线钩子 ----------
 //
 // 这段胶水放在 tunnel.go（与 manager.go 同包）以保持 manager.go 聚焦注册表本体。
-// 绑定模型（T4，见 RegistryServer.Register 注释）：
-//   - Register(tunnel=true) 与 Connect 是两个独立 RPC，到达顺序不保证；
-//   - 两侧各自入 per-owner FIFO（tunnelAwaiting 放实例 ID、tunnelPending 放
-//     DecoderClient），按到达顺序一一配对（同一插件进程一次 Connect 对应一次
-//     tunnel 注册）；
-//   - 绑定成功实例置在线；断开时只标记「绑定 client 的会话已死」的实例离线
-//     （断开钩子只带 owner，用会话存活状态区分同 owner 的多条隧道）。
+//
+// 绑定模型（④ 精确绑定，取代此前的 FIFO 猜测）：
+//   - Register(tunnel=true) 返回 instance_id，插件随后用该 id 作为 metadata
+//     打开 Connect（见 TunnelInstanceIDKey）；
+//   - 宿主按 instance_id 直接定位注册实例，不做任何顺序/到达时间推断；
+//   - 绑定失败（实例已被替换/回收、owner 不匹配）即让 Connect 失败，
+//     插件退避重连并重新 Register——不留下「建了流但没主人」的孤儿隧道；
+//   - 断开钩子带 instance_id，只下线那一个实例，不影响同 owner 其他隧道。
 
-// bindNextTunnelLocked 在持有 s.mu 时按 FIFO 取该 owner 最早的 await 实例，
-// 与 pending 队列中最早存活的 client 配对绑定（Register 先到、pending 已有
-// client 时的认领路径）；无可配对项时返回 ok=false（队列保持原样）。
-func (s *RegistryServer) bindNextTunnelLocked(owner string) (id, name string, ok bool) {
-	// 丢弃已死亡的 pending client（对应 Connect 已断但未绑定）
-	pending := pruneTunnelPendingLocked(s.tunnelPending[owner])
-	s.tunnelPending[owner] = pending
-	if len(pending) == 0 {
-		return "", "", false
+// bindTunnelClient 是 TunnelHub 的建流钩子：把隧道 client 精确绑定到
+// instanceID 对应的注册实例，并推 online 事件。
+// 返回非 nil 错误时 Connect 直接失败（SDK 退避重连），不留孤儿隧道。
+// 注册表 Close 后为 no-op。
+func (s *RegistryServer) bindTunnelClient(owner, instanceID string, client pb.DecoderClient) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return fmt.Errorf("registry is closed")
 	}
-	id, name, ok = bindClientToAwaitingLocked(s, owner, pending[0])
-	if ok {
-		s.tunnelPending[owner] = pending[1:]
+	rp, ok := s.plugins[instanceID]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("tunnel: unknown instance_id %q: register before connect", instanceID)
 	}
-	return id, name, ok
+	if rp.Owner != owner {
+		s.mu.Unlock()
+		return fmt.Errorf("tunnel: instance %q belongs to another owner", instanceID)
+	}
+	rp.Client = client
+	rp.LastHeartbeat = time.Now()
+	rp.Online.Store(true)
+	name := rp.Manifest.Name
+	s.mu.Unlock()
+
+	slog.Info("tunnel bound to registered plugin", "owner", owner, "instance_id", instanceID, "name", name)
+	s.emit(PluginEvent{
+		Type:       PluginEventOnline,
+		InstanceID: instanceID,
+		Name:       name,
+		Online:     true,
+		Timestamp:  time.Now(),
+	})
+	return nil
 }
 
-// bindClientToAwaitingLocked 把给定 client 绑定到 owner awaiting FIFO 最早的
-// 未绑定实例（Connect 钩子路径：client 尚未入 pending 队列）。绑定时清理
-// FIFO 中已被回收/替换/已绑定的死 ID。无可绑定实例时返回 ok=false（client
-// 由调用方挂入 pending 队列）。
-func bindClientToAwaitingLocked(s *RegistryServer, owner string, client pb.DecoderClient) (id, name string, ok bool) {
-	awaiting := s.tunnelAwaiting[owner]
-	for len(awaiting) > 0 {
-		front := awaiting[0]
-		awaiting = awaiting[1:]
-		rp, exists := s.plugins[front]
-		if !exists || rp.Client != nil {
-			continue // 已被回收/替换或已绑定，跳过
-		}
-		s.tunnelAwaiting[owner] = awaiting
-		rp.Client = client
-		rp.LastHeartbeat = time.Now()
-		rp.Online.Store(true)
-		slog.Info("tunnel bound to registered plugin", "owner", owner, "instance_id", front, "name", rp.Manifest.Name)
-		return front, rp.Manifest.Name, true
-	}
-	s.tunnelAwaiting[owner] = awaiting
-	return "", "", false
-}
-
-// pruneTunnelPendingLocked 过滤掉 Connect 会话已关闭的 pending client。
-func pruneTunnelPendingLocked(pending []pb.DecoderClient) []pb.DecoderClient {
-	out := pending[:0]
-	for _, c := range pending {
-		if !tunnelClientClosed(c) {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-// removeAwaitingLocked 在持有 s.mu 时把实例 ID 从 owner 的 awaiting FIFO 移除
-// （实例被替换/注销/回收时调用，防止 FIFO 里留死 ID）。
-func removeAwaitingLocked(s *RegistryServer, owner, instanceID string) {
-	awaiting := s.tunnelAwaiting[owner]
-	for i, id := range awaiting {
-		if id == instanceID {
-			s.tunnelAwaiting[owner] = append(awaiting[:i], awaiting[i+1:]...)
-			return
-		}
-	}
-}
-
-// bindTunnelClient 是 TunnelHub 的建流钩子：owner 从流上下文解析（auth.OwnerFrom）。
-// 优先绑定该 owner awaiting FIFO 最早的实例（Register 先到）；否则把 client 挂进
-// tunnelPending[owner] FIFO 等 Register 认领（Connect 先到）。绑定成功推 online 事件。
-// 注册表 Close 后为 no-op（防止迟到的建流钩子重新填充 pending 队列）。
-func (s *RegistryServer) bindTunnelClient(owner string, client pb.DecoderClient) {
+// tunnelDisconnected 是 TunnelHub 的断开钩子：只把 instanceID 对应的那个实例
+// 标记离线并推 offline 事件。插件重连后会重新 Register（替换旧实例）并绑定新隧道。
+// 注册表 Close 后为 no-op。
+func (s *RegistryServer) tunnelDisconnected(owner, instanceID string) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return
 	}
-	boundID, boundName, ok := bindClientToAwaitingLocked(s, owner, client)
-	if !ok {
-		// 无等待实例：清理死亡 client 后挂入 pending 队列等 Register 认领
-		s.tunnelPending[owner] = append(pruneTunnelPendingLocked(s.tunnelPending[owner]), client)
-		slog.Info("tunnel connect pending registration", "owner", owner)
+	rp, ok := s.plugins[instanceID]
+	if !ok || rp.Owner != owner || !rp.Online.Load() {
+		s.mu.Unlock()
+		return
 	}
+	rp.Online.Store(false)
+	name := rp.Manifest.Name
 	s.mu.Unlock()
 
-	if ok {
-		s.emit(PluginEvent{
-			Type:       PluginEventOnline,
-			InstanceID: boundID,
-			Name:       boundName,
-			Online:     true,
-			Timestamp:  time.Now(),
-		})
-	}
-}
-
-// tunnelDisconnected 是 TunnelHub 的断开钩子：把该 owner 下绑定到此条
-// （已死）Connect 会话的隧道插件标记离线并推送 offline 事件，同时清理
-// pending 中已死的 client。插件重连后会重新 Register（替换旧实例）并绑定新隧道。
-// 说明：TunnelHub 的断开钩子只带 owner 不带会话句柄，这里用「绑定 client 的
-// 会话是否已关闭」来区分同 owner 多条隧道里真正断开的那条。
-// 注册表 Close 后为 no-op。
-func (s *RegistryServer) tunnelDisconnected(owner string) {
-	type offline struct {
-		id, name string
-	}
-	var offs []offline
-	s.mu.Lock()
-	if !s.closed {
-		for id, rp := range s.plugins {
-			if rp.Tunnel && rp.Owner == owner && rp.Client != nil && tunnelClientClosed(rp.Client) && rp.Online.Load() {
-				rp.Online.Store(false)
-				offs = append(offs, offline{id: id, name: rp.Manifest.Name})
-			}
-		}
-		s.tunnelPending[owner] = pruneTunnelPendingLocked(s.tunnelPending[owner])
-	}
-	s.mu.Unlock()
-
-	for _, o := range offs {
-		slog.Warn("tunnel disconnected, marking plugin offline", "owner", owner, "instance_id", o.id, "name", o.name)
-		s.emit(PluginEvent{
-			Type:       PluginEventOffline,
-			InstanceID: o.id,
-			Name:       o.name,
-			Online:     false,
-			Timestamp:  time.Now(),
-		})
-	}
+	slog.Warn("tunnel disconnected, marking plugin offline", "owner", owner, "instance_id", instanceID, "name", name)
+	s.emit(PluginEvent{
+		Type:       PluginEventOffline,
+		InstanceID: instanceID,
+		Name:       name,
+		Online:     false,
+		Timestamp:  time.Now(),
+	})
 }
 
 // tunnelClientClosed 判断隧道 client 背后的 Connect 会话是否已关闭。

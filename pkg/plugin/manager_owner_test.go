@@ -128,9 +128,9 @@ func TestTunnelRegisterLifecycle(t *testing.T) {
 		t.Fatal("unbound tunnel plugin must not be findable")
 	}
 
-	// Connect 到达：绑定
+	// Connect 到达：携带本次注册的 instance_id（④ 精确绑定）
 	ctx, cancel := context.WithCancel(ownerCtx("alice"))
-	p := newTunnelHubPipe(ctx)
+	p := newTunnelHubPipeFor(ctx, resp.GetInstanceId())
 	go func() { _ = s.tunnelHub.Connect(hubEnd{p}) }()
 	waitTunnelBound(t, s, resp.GetInstanceId())
 
@@ -158,13 +158,21 @@ func TestTunnelRegisterLifecycle(t *testing.T) {
 		t.Fatalf("recv done: %v, %+v", err, r)
 	}
 
-	// 隧道插件不受 CheckOffline 影响（LastHeartbeat 拨老也不判离线）
+	// ① 隧道插件同样受心跳超时约束：TCP 半开时 Connect 流不会报错，
+	// 心跳超时是宿主发现「插件已死但连接还在」的唯一手段。
 	s.mu.Lock()
 	s.plugins[resp.GetInstanceId()].LastHeartbeat = time.Now().Add(-time.Hour)
 	s.mu.Unlock()
 	s.CheckOffline(time.Second)
+	if _, ok := s.FindByNameFor("alice", "shared-decoder"); ok {
+		t.Fatal("tunnel plugin with expired heartbeat must be marked offline")
+	}
+	// 隧道仍活着：心跳应把实例恢复在线（后续断流测试依赖 Online=true）。
+	if _, err := s.Heartbeat(context.Background(), &pb.HeartbeatRequest{InstanceId: resp.GetInstanceId()}); err != nil {
+		t.Fatalf("heartbeat should revive a live tunnel instance: %v", err)
+	}
 	if _, ok := s.FindByNameFor("alice", "shared-decoder"); !ok {
-		t.Fatal("tunnel plugin must not be killed by heartbeat CheckOffline")
+		t.Fatal("heartbeat should bring the tunnel plugin back online")
 	}
 
 	// 断开隧道：offline 事件 + 不可查
@@ -190,7 +198,7 @@ func TestTunnelRegisterLifecycle(t *testing.T) {
 	}
 	ctx2, cancel2 := context.WithCancel(ownerCtx("alice"))
 	defer cancel2()
-	p2 := newTunnelHubPipe(ctx2)
+	p2 := newTunnelHubPipeFor(ctx2, resp2.GetInstanceId())
 	go func() { _ = s.tunnelHub.Connect(hubEnd{p2}) }()
 	waitTunnelBound(t, s, resp2.GetInstanceId())
 	if _, ok := s.FindByNameFor("alice", "shared-decoder"); !ok {
@@ -198,43 +206,32 @@ func TestTunnelRegisterLifecycle(t *testing.T) {
 	}
 }
 
-// TestTunnelConnectBeforeRegister 覆盖 Connect 先于 Register 的时序：
-// pending 隧道在注册到达时被认领。
-func TestTunnelConnectBeforeRegister(t *testing.T) {
+// TestTunnelConnectRejectedWhenUnregistered ④ 护栏：Connect 携带的 instance_id
+// 没有对应注册时必须直接失败。
+//
+// 旧实现会把它挂进 per-owner FIFO 等 Register 认领（按到达顺序猜测配对），
+// 同 owner 多插件时可能绑错实例，且会留下「建了流但没主人」的孤儿隧道。
+func TestTunnelConnectRejectedWhenUnregistered(t *testing.T) {
 	s := NewRegistryServer(10)
 	defer s.Close()
 
 	ctx, cancel := context.WithCancel(ownerCtx("alice"))
 	defer cancel()
-	p := newTunnelHubPipe(ctx)
-	go func() { _ = s.tunnelHub.Connect(hubEnd{p}) }()
+	p := newTunnelHubPipeFor(ctx, "shared-decoder-999")
+	connErr := make(chan error, 1)
+	go func() { connErr <- s.tunnelHub.Connect(hubEnd{p}) }()
 
-	// 等 pending 出现（connect hook 已入队）
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		s.mu.RLock()
-		n := len(s.tunnelPending["alice"])
-		s.mu.RUnlock()
-		if n == 1 {
-			break
+	select {
+	case err := <-connErr:
+		if err == nil {
+			t.Fatal("connect with unregistered instance_id must fail")
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("pending tunnel client not queued")
-		}
-		time.Sleep(5 * time.Millisecond)
+	case <-time.After(5 * time.Second):
+		t.Fatal("connect should have been rejected immediately")
 	}
-
-	resp, err := s.Register(ownerCtx("alice"), &pb.RegisterRequest{
-		Tunnel:   true,
-		Manifest: []byte(sharedManifest),
-	})
-	if err != nil {
-		t.Fatalf("tunnel register: %v", err)
+	if _, ok := s.FindByNameFor("alice", "shared-decoder"); ok {
+		t.Fatal("a rejected connect must not register anything")
 	}
-	if _, ok := s.FindByNameFor("alice", "shared-decoder"); !ok {
-		t.Fatal("register after connect should bind the pending tunnel immediately")
-	}
-	_ = resp
 }
 
 // TestAnonymousTunnelRegisterUnchanged 验证匿名（本地单机）隧道注册同样可用：
@@ -252,7 +249,7 @@ func TestAnonymousTunnelRegisterUnchanged(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	p := newTunnelHubPipe(ctx)
+	p := newTunnelHubPipeFor(ctx, resp.GetInstanceId())
 	go func() { _ = s.tunnelHub.Connect(hubEnd{p}) }()
 	waitTunnelBound(t, s, resp.GetInstanceId())
 	if _, ok := s.FindByNameFor("", "shared-decoder"); !ok {
@@ -342,7 +339,7 @@ func TestTunnelBoundDeadClientOffline(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(ownerCtx("alice"))
-	p := newTunnelHubPipe(ctx)
+	p := newTunnelHubPipeFor(ctx, resp.GetInstanceId())
 	go func() { _ = s.tunnelHub.Connect(hubEnd{p}) }()
 	waitTunnelBound(t, s, resp.GetInstanceId())
 
@@ -358,9 +355,10 @@ func TestTunnelBoundDeadClientOffline(t *testing.T) {
 	cancel()
 }
 
-// TestHeartbeatIgnoredForTunnel 验证隧道实例收到心跳不复活：
-// 会话已死的离线实例收到 Heartbeat 不会回到在线。
-func TestHeartbeatIgnoredForTunnel(t *testing.T) {
+// TestHeartbeatRejectedForDeadTunnel ① 护栏：隧道已断但插件仍在发心跳时，
+// 宿主必须**报错**（SDK 据此判定心跳失联 → 退避重连 → 重新 Register），
+// 而不是把它 ack 掉。旧实现直接 ack 并忽略，僵尸实例能一直挂着 Online=true。
+func TestHeartbeatRejectedForDeadTunnel(t *testing.T) {
 	s := NewRegistryServer(10)
 	defer s.Close()
 
@@ -372,7 +370,7 @@ func TestHeartbeatIgnoredForTunnel(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(ownerCtx("alice"))
-	p := newTunnelHubPipe(ctx)
+	p := newTunnelHubPipeFor(ctx, resp.GetInstanceId())
 	go func() { _ = s.tunnelHub.Connect(hubEnd{p}) }()
 	waitTunnelBound(t, s, resp.GetInstanceId())
 	p.close()
@@ -391,8 +389,8 @@ func TestHeartbeatIgnoredForTunnel(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	if _, err := s.Heartbeat(context.Background(), &pb.HeartbeatRequest{InstanceId: resp.GetInstanceId()}); err != nil {
-		t.Fatalf("heartbeat should be acked (ignored), got %v", err)
+	if _, err := s.Heartbeat(context.Background(), &pb.HeartbeatRequest{InstanceId: resp.GetInstanceId()}); err == nil {
+		t.Fatal("heartbeat for a dead tunnel must be rejected, so the SDK reconnects and re-registers")
 	}
 	if _, ok := s.FindByNameFor("alice", "shared-decoder"); ok {
 		t.Fatal("heartbeat must not resurrect a tunnel instance with a dead session")
@@ -400,23 +398,25 @@ func TestHeartbeatIgnoredForTunnel(t *testing.T) {
 	cancel()
 }
 
-// TestCloseQuiescesTunnelHooks 验证 Close 后迟到的 Connect 钩子不会重新
-// 填充 tunnelPending（注册表已关闭，绑定/入队为 no-op）。
-func TestCloseQuiescesTunnelHooks(t *testing.T) {
+// TestCloseRejectsLateConnect 注册表 Close 后迟到的 Connect 必须失败：
+// 既不绑定也不排队（旧实现会把它挂进 tunnelPending 留作垃圾）。
+func TestCloseRejectsLateConnect(t *testing.T) {
 	s := NewRegistryServer(10)
 	s.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	p := newTunnelHubPipe(ctx)
-	go func() { _ = s.tunnelHub.Connect(hubEnd{p}) }()
-	time.Sleep(100 * time.Millisecond)
+	connErr := make(chan error, 1)
+	go func() { connErr <- s.tunnelHub.Connect(hubEnd{p}) }()
 
-	s.mu.RLock()
-	pending := len(s.tunnelPending[""])
-	s.mu.RUnlock()
-	if pending != 0 {
-		t.Fatalf("hooks must be no-op after Close, got %d pending clients", pending)
+	select {
+	case err := <-connErr:
+		if err == nil {
+			t.Fatal("connect after registry Close must fail")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("connect should have been rejected immediately")
 	}
 }
 

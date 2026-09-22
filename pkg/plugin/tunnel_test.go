@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
 	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 
 	"net"
@@ -33,7 +34,18 @@ type tunnelHubPipe struct {
 	once   sync.Once
 }
 
+// tunnelTestInstanceID 是测试假流上报的 instance_id（④ Connect 必带）。
+const tunnelTestInstanceID = "inst-test"
+
 func newTunnelHubPipe(ctx context.Context) *tunnelHubPipe {
+	return newTunnelHubPipeFor(ctx, tunnelTestInstanceID)
+}
+
+// newTunnelHubPipeFor 建一条上报指定 instance_id 的假隧道流（④ 精确绑定）。
+func newTunnelHubPipeFor(ctx context.Context, instanceID string) *tunnelHubPipe {
+	// 插件侧的 Connect 必须携带 instance_id；内存假流不走真实 gRPC 传输，
+	// 这里把 metadata 直接放进 incoming ctx 模拟插件上报。
+	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(sdk.TunnelInstanceIDKey, instanceID))
 	return &tunnelHubPipe{
 		ctx:    ctx,
 		hub2p:  make(chan *pb.TunnelFrame, 16),
@@ -147,7 +159,7 @@ func TestTunnelRoundTrip(t *testing.T) {
 	connected := make(chan pb.DecoderClient, 1)
 	hub := NewTunnelHub(
 		WithTunnelOwnerResolver(func(context.Context) string { return "inst-1" }),
-		WithTunnelConnectHook(func(_ string, c pb.DecoderClient) { connected <- c }),
+		WithTunnelConnectHook(func(_, _ string, c pb.DecoderClient) error { connected <- c; return nil }),
 	)
 	hubErr := make(chan error, 1)
 	go func() { hubErr <- hub.Connect(hubEnd{p}) }()
@@ -199,7 +211,7 @@ func TestTunnelReset(t *testing.T) {
 
 	connected := make(chan pb.DecoderClient, 1)
 	hub := NewTunnelHub(
-		WithTunnelConnectHook(func(_ string, c pb.DecoderClient) { connected <- c }),
+		WithTunnelConnectHook(func(_, _ string, c pb.DecoderClient) error { connected <- c; return nil }),
 	)
 	go func() { _ = hub.Connect(hubEnd{p}) }()
 	client := <-connected
@@ -229,7 +241,7 @@ func TestTunnelEndWithError(t *testing.T) {
 
 	connected := make(chan pb.DecoderClient, 1)
 	hub := NewTunnelHub(
-		WithTunnelConnectHook(func(_ string, c pb.DecoderClient) { connected <- c }),
+		WithTunnelConnectHook(func(_, _ string, c pb.DecoderClient) error { connected <- c; return nil }),
 	)
 	go func() { _ = hub.Connect(hubEnd{p}) }()
 	client := <-connected
@@ -261,7 +273,7 @@ func TestTunnelHalfClose(t *testing.T) {
 
 	connected := make(chan pb.DecoderClient, 1)
 	hub := NewTunnelHub(
-		WithTunnelConnectHook(func(_ string, c pb.DecoderClient) { connected <- c }),
+		WithTunnelConnectHook(func(_, _ string, c pb.DecoderClient) error { connected <- c; return nil }),
 	)
 	go func() { _ = hub.Connect(hubEnd{p}) }()
 	client := <-connected
@@ -291,8 +303,8 @@ func TestTunnelDisconnectHook(t *testing.T) {
 	connected := make(chan pb.DecoderClient, 1)
 	hub := NewTunnelHub(
 		WithTunnelOwnerResolver(func(context.Context) string { return "inst-42" }),
-		WithTunnelConnectHook(func(_ string, c pb.DecoderClient) { connected <- c }),
-		WithTunnelDisconnectHook(func(owner string) {
+		WithTunnelConnectHook(func(_, _ string, c pb.DecoderClient) error { connected <- c; return nil }),
+		WithTunnelDisconnectHook(func(owner, _ string) {
 			offline.Store(owner)
 			offlineCh <- struct{}{}
 		}),
@@ -339,7 +351,7 @@ func TestTunnelConnectOverRealGRPC(t *testing.T) {
 	connected := make(chan pb.DecoderClient, 1)
 	hub2 := NewTunnelHub(
 		WithTunnelOwnerResolver(func(context.Context) string { return "inst-e2e" }),
-		WithTunnelConnectHook(func(_ string, c pb.DecoderClient) { connected <- c }),
+		WithTunnelConnectHook(func(_, _ string, c pb.DecoderClient) error { connected <- c; return nil }),
 	)
 	srv := grpc.NewServer()
 	pb.RegisterPluginRegistryServer(srv, &fakeTunnelRegistry{hub: hub2})
@@ -362,7 +374,8 @@ func TestTunnelConnectOverRealGRPC(t *testing.T) {
 	defer cc.Close()
 
 	client := pb.NewPluginRegistryClient(cc)
-	stream, err := client.Connect(ctx)
+	// 像 SDK 那样带上 Register 返回的 instance_id（④）。
+	stream, err := client.Connect(metadata.AppendToOutgoingContext(ctx, sdk.TunnelInstanceIDKey, "inst-e2e"))
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -440,7 +453,7 @@ func TestTunnelDeathWithBlockedRecv(t *testing.T) {
 
 	connected := make(chan pb.DecoderClient, 1)
 	hub := NewTunnelHub(
-		WithTunnelConnectHook(func(_ string, c pb.DecoderClient) { connected <- c }),
+		WithTunnelConnectHook(func(_, _ string, c pb.DecoderClient) error { connected <- c; return nil }),
 	)
 	hubErr := make(chan error, 1)
 	go func() { hubErr <- hub.Connect(hubEnd{p}) }()
@@ -487,8 +500,8 @@ func TestTunnelQueueOverflowAbortsAndResets(t *testing.T) {
 
 	connected := make(chan pb.DecoderClient, 1)
 	hub := NewTunnelHub(
-		WithTunnelConnectHook(func(_ string, c pb.DecoderClient) { connected <- c }),
-		WithTunnelQueueParams(1, 100*time.Millisecond),
+		WithTunnelConnectHook(func(_, _ string, c pb.DecoderClient) error { connected <- c; return nil }),
+		WithTunnelQueueSize(1),
 	)
 	go func() { _ = hub.Connect(hubEnd{p}) }()
 	client := <-connected
@@ -526,6 +539,105 @@ func TestTunnelQueueOverflowAbortsAndResets(t *testing.T) {
 	}
 }
 
+// TestTunnelConnectRequiresInstanceID ④ 护栏：Connect 未携带 instance_id 时
+// 必须直接失败。宿主不按到达顺序猜测配对——错误的归属比「猜错配对并静默
+// 绑到别的实例」暴露得更早、更容易排查。
+func TestTunnelConnectRequiresInstanceID(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// 手工建一条不带 metadata 的假流（模拟老插件 / 协议错误）
+	p := &tunnelHubPipe{
+		ctx:    ctx,
+		hub2p:  make(chan *pb.TunnelFrame, 1),
+		p2hub:  make(chan *pb.TunnelFrame, 1),
+		closed: make(chan struct{}),
+	}
+	hub := NewTunnelHub()
+	err := hub.Connect(hubEnd{p})
+	if err == nil {
+		t.Fatal("connect without instance_id metadata must be rejected")
+	}
+	if !strings.Contains(err.Error(), sdk.TunnelInstanceIDKey) {
+		t.Fatalf("error should name the missing header, got %v", err)
+	}
+}
+
+// TestTunnelSlowStreamDoesNotBlockOthers ③ 护栏：某个逻辑流的响应队列被打满时
+// 只牺牲该流，同隧道其他逻辑流的往返必须照常完成。
+//
+// 旧实现在唯一的收包循环里为队列满的流同步等待 enqueueWait（默认 5s），
+// 一个慢消费者能把整条隧道的所有响应一起拖住（队头阻塞）。
+func TestTunnelSlowStreamDoesNotBlockOthers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p := newTunnelHubPipe(ctx)
+
+	connected := make(chan pb.DecoderClient, 1)
+	hub := NewTunnelHub(
+		WithTunnelQueueSize(1),
+		WithTunnelConnectHook(func(_, _ string, c pb.DecoderClient) error { connected <- c; return nil }),
+	)
+	go func() { _ = hub.Connect(hubEnd{p}) }()
+	client := <-connected
+	pe := pluginEnd{p}
+
+	// 流 1（stream_id=1）：宿主侧完全不消费，插件连发响应把队列打满。
+	slow, err := client.DecodeV2(ctx)
+	if err != nil {
+		t.Fatalf("DecodeV2 slow: %v", err)
+	}
+	if err := slow.Send(&pb.DecodeRequest{InputId: "slow-1"}); err != nil {
+		t.Fatalf("send slow: %v", err)
+	}
+	pe.recvFrame(t) // 流 1 的 request 帧
+	for i := 0; i < 4; i++ {
+		pe.sendFrame(&pb.TunnelFrame{StreamId: 1, Payload: &pb.TunnelFrame_Response{
+			Response: mustMarshal(t, &pb.DecodeResponseV2{InputId: "slow-1"}),
+		}})
+	}
+
+	// 流 2（stream_id=2）：必须仍能正常完成往返，不被流 1 的溢出拖住。
+	fast, err := client.DecodeV2(ctx)
+	if err != nil {
+		t.Fatalf("DecodeV2 fast: %v", err)
+	}
+	if err := fast.Send(&pb.DecodeRequest{InputId: "fast-1"}); err != nil {
+		t.Fatalf("send fast: %v", err)
+	}
+	// 排空流 1 溢出触发的 reset 帧（异步发出，可能排在流 2 的 request 之前）
+	for {
+		if pe.recvFrame(t).GetStreamId() == 2 {
+			break
+		}
+	}
+	pe.sendFrame(&pb.TunnelFrame{StreamId: 2, Payload: &pb.TunnelFrame_Response{
+		Response: mustMarshal(t, &pb.DecodeResponseV2{InputId: "fast-1", EventType: "fast.event"}),
+	}})
+	pe.sendFrame(&pb.TunnelFrame{StreamId: 2, Payload: &pb.TunnelFrame_End{End: &pb.StreamEnd{}}})
+
+	done := make(chan error, 1)
+	go func() {
+		resp, err := fast.Recv()
+		if err != nil {
+			done <- err
+			return
+		}
+		if resp.EventType != "fast.event" {
+			done <- errors.New("unexpected event type: " + resp.EventType)
+			return
+		}
+		done <- nil
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("fast stream must not be blocked by a slow sibling: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("fast stream blocked by slow stream: head-of-line blocking is back")
+	}
+}
+
 // TestSendAfterCloseSendRejected CloseSend 之后的 Send 应被本地拒绝。
 func TestSendAfterCloseSendRejected(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -534,7 +646,7 @@ func TestSendAfterCloseSendRejected(t *testing.T) {
 
 	connected := make(chan pb.DecoderClient, 1)
 	hub := NewTunnelHub(
-		WithTunnelConnectHook(func(_ string, c pb.DecoderClient) { connected <- c }),
+		WithTunnelConnectHook(func(_, _ string, c pb.DecoderClient) error { connected <- c; return nil }),
 	)
 	go func() { _ = hub.Connect(hubEnd{p}) }()
 	client := <-connected

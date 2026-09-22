@@ -13,8 +13,26 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 )
+
+// registry 连接的 gRPC keepalive 参数（②）。TCP 半开（对端消失但无 RST/FIN）
+// 时连接不会报错，周期性 PING 是传输层唯一的死连接发现手段。
+// PermitWithoutStream=true 是关键：隧道空闲（无解码请求）时也必须探测。
+// Time 必须 >= 宿主 EnforcementPolicy.MinTime，否则宿主会回 RST 断流。
+const (
+	registryKeepaliveTime    = 30 * time.Second
+	registryKeepaliveTimeout = 10 * time.Second
+)
+
+// TunnelInstanceIDKey 是 Connect 流用来携带 instance_id 的 gRPC metadata 键。
+//
+// Register 与 Connect 是两个独立 RPC，宿主无法从连接本身判断某条隧道属于
+// 哪次注册。插件在 Connect 时把 Register 返回的 instance_id 放进该 header，
+// 宿主据此精确绑定；缺失该 header 时宿主拒绝建流（SDK 会退避重连），
+// 不再按到达顺序猜测配对。
+const TunnelInstanceIDKey = "x-gt-instance-id"
 
 // dialRegistry 将 registry 地址解析为一条 net.Conn。
 // 支持 gametrace-pipeline 在两种平台下的端点形式：
@@ -55,6 +73,8 @@ func dialRegistry(ctx context.Context, addr string) (net.Conn, error) {
 //
 // 隧道模式（opts.Tunnel=true）：跳过第 1 步（不监听本地端点，宿主不回拨），
 // Register(tunnel=true) 成功后打开 Connect 双向流，DecodeV2 经隧道帧完成。
+// 建流时 instance_id 经 metadata（TunnelInstanceIDKey）上报供宿主精确绑定；
+// 隧道期间心跳照发——流的 Recv 无法发现 TCP 半开，心跳是唯一的应用层探测。
 // opts.AuthToken 非空时，所有 RPC 附带 `authorization: Bearer <token>` metadata。
 func RunRegisterLoopWithOptions(decodeFuncV2 DecodeFuncV2, opts RegisterOptions) {
 	decoder := &Decoder{decodeFuncV2: decodeFuncV2}
@@ -97,6 +117,13 @@ func RunRegisterLoopWithOptions(decodeFuncV2 DecodeFuncV2, opts RegisterOptions)
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 			grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 				return dialRegistry(ctx, registryAddr)
+			}),
+			grpc.WithKeepaliveParams(keepalive.ClientParameters{
+				Time:    registryKeepaliveTime,
+				Timeout: registryKeepaliveTimeout,
+				// 隧道空闲（无解码请求）时也要探测，否则死连接只能等到
+				// 下一次有流量才被发现——正是半开连接最危险的场景。
+				PermitWithoutStream: true,
 			}),
 		)
 		if err != nil {
@@ -145,9 +172,11 @@ func RunRegisterLoopWithOptions(decodeFuncV2 DecodeFuncV2, opts RegisterOptions)
 		backoff = time.Second
 
 		if opts.Tunnel {
-			// 隧道模式：在同一条连接上打开 Connect 双向流并服务解码请求，
-			// 流断开即视为失联，走与心跳断开一致的退避重连路径。
-			connectStream, err := client.Connect(callCtx)
+			// 隧道模式：在同一条连接上打开 Connect 双向流并服务解码请求。
+			// instance_id 通过 metadata 上报（④），宿主据此精确绑定本次注册，
+			// 不再依赖 Register/Connect 的到达顺序做 FIFO 猜测。
+			connectStream, err := client.Connect(
+				metadata.AppendToOutgoingContext(callCtx, TunnelInstanceIDKey, instanceID))
 			if err != nil {
 				slog.Warn("tunnel: open connect stream failed, retrying", "error", err, "backoff", backoff)
 				_ = conn.Close()
@@ -155,9 +184,34 @@ func RunRegisterLoopWithOptions(decodeFuncV2 DecodeFuncV2, opts RegisterOptions)
 				backoff = min(backoff*2, maxBackoff)
 				continue
 			}
-			tunnelErr := runTunnel(callCtx, connectStream, decoder)
+
+			// ① 隧道期间心跳照发：TCP 半开（对端消失但无 RST/FIN）时 Connect 流的
+			// Recv 不会报错，只有带超时的应用层心跳能发现对端已消失。
+			// 隧道断 / 心跳失联任一发生都走同一条退避重连路径。
+			hbCtx, hbCancel := context.WithCancel(callCtx)
+			heartbeatLost := make(chan struct{})
+			go heartbeatLoop(hbCtx, client, instanceID, time.Duration(heartbeatSec)*time.Second, heartbeatLost)
+
+			tunnelDone := make(chan error, 1)
+			go func() { tunnelDone <- runTunnel(hbCtx, connectStream, decoder) }()
+
+			var tunnelErr error
+			tunnelReturned := false
+			select {
+			case tunnelErr = <-tunnelDone:
+				tunnelReturned = true
+				slog.Warn("tunnel closed, reconnecting", "instance_id", instanceID, "error", tunnelErr)
+			case <-heartbeatLost:
+				slog.Warn("tunnel heartbeat lost, reconnecting", "instance_id", instanceID)
+			}
+			// 收尾：取消心跳并关闭连接。心跳失联时流的 Recv 不会自己报错，
+			// 必须关连接才能让 runTunnel 返回（否则 goroutine 泄漏）。
+			hbCancel()
 			_ = conn.Close()
-			slog.Warn("tunnel closed, reconnecting", "instance_id", instanceID, "error", tunnelErr)
+			if !tunnelReturned {
+				<-tunnelDone
+			}
+			<-heartbeatLost // 已关闭的 channel：立即返回，确认心跳 goroutine 已退出
 			time.Sleep(backoff)
 			backoff = min(backoff*2, maxBackoff)
 			continue
@@ -183,7 +237,12 @@ const heartbeatTimeout = 10 * time.Second
 // heartbeatLoop 定期向 registry 发送心跳。心跳失败（平台侧重启/失联）时
 // close(lost) 通知主循环触发重连，避免插件进程被平台侧重启拖死、必须人工重启。
 // ctx 应携带认证 metadata（如有），context 取消时安静退出。
+//
+// lost 在**所有**退出路径上都被关闭（含 ctx 取消），是单一出口约定：
+// 隧道分支在收尾时同步等待 <-heartbeatLost 以确认 goroutine 退出，
+// 若取消路径不关闭该 channel 会永久阻塞。
 func heartbeatLoop(ctx context.Context, client pb.PluginRegistryClient, instanceID string, interval time.Duration, lost chan<- struct{}) {
+	defer close(lost)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -196,7 +255,6 @@ func heartbeatLoop(ctx context.Context, client pb.PluginRegistryClient, instance
 			cancel()
 			if err != nil {
 				slog.Warn("heartbeat failed", "instance_id", instanceID, "error", err)
-				close(lost)
 				return
 			}
 		}

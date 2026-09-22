@@ -215,15 +215,16 @@ type fakeTunnelRegistry struct {
 
 func (r *fakeTunnelRegistry) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
 	r.registerHits.Add(1)
+	r.mu.Lock()
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		if vals := md.Get("authorization"); len(vals) > 0 {
 			r.sawToken = vals[0]
 		}
 	}
-	r.mu.Lock()
 	already := r.registered
 	r.registered = true
 	r.sawTunnel = req.GetTunnel()
+	token := r.sawToken
 	r.mu.Unlock()
 
 	if already {
@@ -234,8 +235,8 @@ func (r *fakeTunnelRegistry) Register(ctx context.Context, req *pb.RegisterReque
 	if req.GetTunnel() != true {
 		r.t.Error("expected RegisterRequest.tunnel=true")
 	}
-	if r.sawToken != "Bearer test-token" {
-		r.t.Errorf("expected authorization Bearer token, got %q", r.sawToken)
+	if token != "Bearer test-token" {
+		r.t.Errorf("expected authorization Bearer token, got %q", token)
 	}
 	r.verifyOnce.Do(func() { close(r.verifiedDone) })
 	return &pb.RegisterResponse{InstanceId: "inst-1", HeartbeatIntervalSec: 10}, nil
@@ -273,6 +274,84 @@ func (r *fakeTunnelRegistry) Connect(stream pb.PluginRegistry_ConnectServer) err
 		default:
 			r.t.Errorf("unexpected frame from plugin: %T", frame.Payload)
 		}
+	}
+}
+
+// hbRegistry 是一个「隧道长期存活」的假 registry：Connect 挂住不返回，
+// 只统计 Heartbeat 次数，用于验证隧道期间心跳仍在发。
+type hbRegistry struct {
+	pb.UnimplementedPluginRegistryServer
+	heartbeats atomic.Int64
+	connected  chan struct{}
+	release    chan struct{}
+	once       sync.Once
+}
+
+func (r *hbRegistry) Register(context.Context, *pb.RegisterRequest) (*pb.RegisterResponse, error) {
+	return &pb.RegisterResponse{InstanceId: "inst-hb", HeartbeatIntervalSec: 1}, nil
+}
+
+func (r *hbRegistry) Connect(stream pb.PluginRegistry_ConnectServer) error {
+	r.once.Do(func() { close(r.connected) })
+	<-r.release // 挂住，模拟一条长期存活的隧道
+	return nil
+}
+
+func (r *hbRegistry) Heartbeat(context.Context, *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
+	r.heartbeats.Add(1)
+	return &pb.HeartbeatResponse{}, nil
+}
+
+// TestTunnelKeepsHeartbeating ① 护栏：隧道模式下心跳必须照常发送。
+//
+// 旧实现在隧道分支用 continue 跳过 heartbeatLoop，存活完全依赖 Connect 流；
+// TCP 半开（对端消失但无 RST/FIN）时流的 Recv 不会报错，宿主与插件都无法
+// 发现对方已死——僵尸插件会一直挂着「在线」。
+func TestTunnelKeepsHeartbeating(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lis.Close()
+
+	reg := &hbRegistry{connected: make(chan struct{}), release: make(chan struct{})}
+	grpcServer := grpc.NewServer()
+	pb.RegisterPluginRegistryServer(grpcServer, reg)
+	go func() { _ = grpcServer.Serve(lis) }()
+	defer grpcServer.Stop()
+
+	t.Setenv("GT_REGISTRY_ADDR", lis.Addr().String())
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(cwd)
+	if err := os.Chdir(filepath.Join(cwd, "examples", "http-stream-decoder")); err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		RunRegisterLoopWithOptions(
+			func(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error { return nil },
+			RegisterOptions{Tunnel: true},
+		)
+	}()
+
+	select {
+	case <-reg.connected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connect stream not established")
+	}
+	defer close(reg.release)
+
+	// 心跳间隔 1s：隧道存活期间应持续收到心跳。
+	deadline := time.Now().Add(5 * time.Second)
+	for reg.heartbeats.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("tunnel mode must keep heartbeating, got %d heartbeats", reg.heartbeats.Load())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

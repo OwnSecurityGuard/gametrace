@@ -14,6 +14,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// tunnelReqQueueSize 是每个逻辑 DecodeV2 流的请求队列容量。
+// 只用于吸收正常抖动：队列满即 reset 该流，绝不为慢消费者等待
+// （等待会阻塞 runTunnel 的收包主循环，见 handleRequest）。
+const tunnelReqQueueSize = 64
+
 // RegisterOptions 是注册行为的可选项，全部为零值时行为与旧版完全一致。
 type RegisterOptions struct {
 	// Tunnel 为 true 时走反向隧道模式：Register(tunnel=true) 成功后，
@@ -198,7 +203,7 @@ func (m *tunnelMux) handleRequest(ctx context.Context, streamID uint32, data []b
 		ts = &tunnelStream{
 			ctx:      tctx,
 			cancel:   tcancel,
-			reqCh:    make(chan *pb.DecodeRequest, 16),
+			reqCh:    make(chan *pb.DecodeRequest, tunnelReqQueueSize),
 			done:     make(chan struct{}),
 			streamID: streamID,
 			sendFn:   func(resp *pb.DecodeResponseV2) error { return m.sendResponse(streamID, resp) },
@@ -216,11 +221,18 @@ func (m *tunnelMux) handleRequest(ctx context.Context, streamID uint32, data []b
 		m.closeRecv(streamID, fmt.Errorf("bad request frame: %w", err))
 		return
 	}
+	// ③ 单逻辑流隔离：入队**绝不能阻塞**——本函数在 runTunnel 唯一的收包
+	// 循环里执行，为一个消费慢的流等待会让同隧道所有其他流的帧一起卡住
+	// （队头阻塞）。入不进去就只 reset 这一个逻辑流，代价由它自己承担。
 	select {
 	case ts.reqCh <- req:
+		return
 	case <-ts.done:
-	case <-ts.ctx.Done():
+		return
+	default:
 	}
+	slog.Warn("tunnel: request queue overflow, resetting stream", "stream_id", streamID, "queue", cap(ts.reqCh))
+	m.closeRecv(streamID, fmt.Errorf("tunnel: request queue overflow"))
 }
 
 // serveStream 驱动一个逻辑流：直接复用 Decoder.DecodeV2（用户代码零改动），
