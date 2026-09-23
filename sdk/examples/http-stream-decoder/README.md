@@ -45,7 +45,7 @@ GT_REGISTRY_ADDR=127.0.0.1:9091 ./http-stream-decoder
 把本目录连同 `plugin.yaml` 复制为独立模块（参考主项目 `plugins/go.mod.template`），
 然后走 `build_plugin` → `activate_plugin` → `verify_plugin` 闭环。
 
-## 契约要点（v0.9.0）
+## 契约要点（v0.10.0）
 
 - 事件类型 `http.request` / `http.response`。
 - 协议语义全部声明为 `semantic_rules`，由平台执行：

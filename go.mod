@@ -4,7 +4,7 @@ go 1.26.8
 
 require (
 	github.com/Microsoft/go-winio v0.6.2
-	github.com/OwnSecurityGuard/gametrace/sdk v0.9.0
+	github.com/OwnSecurityGuard/gametrace/sdk v0.10.0
 	github.com/expr-lang/expr v1.17.0
 	github.com/google/uuid v1.6.0
 	github.com/gopacket/gopacket v1.7.2

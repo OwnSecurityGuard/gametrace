@@ -45,7 +45,7 @@ func loadManifest(t *testing.T) *sdk.Manifest {
 func TestManifestContractCheck(t *testing.T) {
 	m := loadManifest(t)
 	if len(m.SemanticRules) == 0 {
-		t.Fatal("plugin.yaml must declare semantic_rules (v0.9.0 contract)")
+		t.Fatal("plugin.yaml must declare semantic_rules (current contract)")
 	}
 	rep := sdkcontract.NewPluginChecker().Check(m)
 	for _, v := range rep.Violations {

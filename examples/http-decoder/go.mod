@@ -6,7 +6,7 @@ module http-decoder
 go 1.25.5
 
 require (
-	github.com/OwnSecurityGuard/gametrace/sdk v0.9.0
+	github.com/OwnSecurityGuard/gametrace/sdk v0.10.0
 	google.golang.org/grpc v1.71.0
 )
 

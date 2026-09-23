@@ -9,7 +9,11 @@
 # 分处两仓库必然漂移（迁移前 output_contract 仍描述 v1 的 JSON 产出，而 decode_v2
 # 早已改为 payload_msgpack，同一文件自相矛盾）。契约现单向流动：SDK 定义，gametrace 消费。
 
-spec_version: 6
+# === 契约版本 ===
+# 7 — 隧道唯一模式：register 请求收敛为 { manifest }（socket_path / tunnel 删除），
+#     解码通道收敛为插件发起的 Connect 双向流（宿主不回拨），v1 Decode 移除。
+# 6 — schema / state 声明层与 runtime / event 契约层移除，仅保留 semantic 层。
+spec_version: 7
 api_version: gt.decoder/v2
 
 # === 语义契约版本块（§3）===

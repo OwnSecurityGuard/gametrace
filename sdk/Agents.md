@@ -2,7 +2,7 @@
 
 > AI/Agent development guide for `github.com/OwnSecurityGuard/gametrace/sdk`.
 >
-> This file is the operational contract for an AI agent that needs to create or modify a GameTrace decoder plugin. It describes the **current SDK (v0.9.0) and the capture-to-plugin input contract**. It must not contain machine/environment-specific GameTrace pipeline runbooks.
+> This file is the operational contract for an AI agent that needs to create or modify a GameTrace decoder plugin. It describes the **current SDK (v0.10.0) and the capture-to-plugin input contract**. It must not contain machine/environment-specific GameTrace pipeline runbooks.
 
 ## 1. Mission
 
@@ -10,21 +10,21 @@
 
 A decoder plugin is an independent process that:
 
-1. starts a gRPC `Decoder.DecodeV2` server (or joins a reverse tunnel);
+1. opens the reverse tunnel to the registry (it starts no local listener);
 2. reads and validates `plugin.yaml`;
-3. registers the decoder endpoint with the GameTrace plugin registry;
+3. registers itself with the GameTrace plugin registry;
 4. receives capture records through `DecodeRequest`;
 5. decodes zero or more logical application events;
 6. returns each event as `event_type` + SDK `event.Value` MsgPack;
 7. sends a final `done=true` response for every `input_id`.
 
-The plugin contains protocol-specific decoding logic. Registration, endpoint selection, manifest loading/validation, registration retry, and heartbeat are provided by the SDK.
+The plugin contains protocol-specific decoding logic. Registration, the reverse tunnel, manifest loading/validation, registration retry, and heartbeat are provided by the SDK.
 
 ## 2. Non-negotiable rules for an AI agent
 
 Before writing code:
 
-- inspect the exact SDK version in `go.mod` (current: **v0.9.0**, requires Go 1.25.5);
+- inspect the exact SDK version in `go.mod` (current: **v0.10.0**, requires Go 1.25.5);
 - use SDK APIs instead of reimplementing registration or gRPC plumbing;
 - do not import the GameTrace root project merely to obtain decoder APIs;
 - do not invent protobuf messages or fields; use `sdk`, `proto`, `event`, `framing`, `rule` from this module;
@@ -46,9 +46,9 @@ sdk root
 ├── registry.go             # registration loop, heartbeat, endpoint logic
 ├── manifest.go             # ReadManifest, ResolveRegistryAddr
 ├── plugin_manifest.go      # Manifest types + ValidateManifest
-├── tunnel.go               # RegisterOptions (Tunnel/AuthToken), reverse tunnel mux
+├── tunnel.go               # RegisterOptions (AuthToken), reverse tunnel mux
 ├── contract/               # wire contract SSOT + checkers
-│   ├── contract.yaml       # spec_version 6, gt.decoder/v2
+│   ├── contract.yaml       # spec_version 7, gt.decoder/v2
 │   ├── types.go / contract.go  # contract model
 │   ├── plugin_checker.go   # PluginChecker.Check (declaration) / CheckEvent (per-event)
 │   └── report.go           # Violation / Report (machine-readable)
@@ -754,7 +754,6 @@ this SDK. Inspect the SDK first.
 [ ] plugin.yaml validates (ValidateManifest + PluginChecker.Check)
 [ ] RunRegisterLoop / RunRegisterLoopWithOptions is used
 [ ] registry address is configurable
-[ ] decoder endpoint is configurable
 [ ] DecodeRequest.payload framing matches link_type (framing.ExtractL7 used)
 [ ] TCP reassembly is in place if messages can span segments
 [ ] real captured bytes were inspected via sample_bytes_plugin

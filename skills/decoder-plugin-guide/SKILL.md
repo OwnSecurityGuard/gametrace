@@ -10,7 +10,7 @@ description: "指引用户或 AI Agent 用 Go 编写解码插件（gt.decoder/v2
 指导用户把任意 TCP/UDP 网络协议接入 GameTrace 平台。解码插件把抓包帧转成结构化业务事件，宿主（gt-pipeline）负责 TCP 重组以外的平台职责：语义规则执行、事件配对、状态分析、前端展示。
 
 - 语言：Go 1.25.5+（对齐 SDK 模块 `sdk/go.mod` 的 go 指令；宿主 gt-pipeline 自身用 1.26.8，与插件作者无关，插件是独立进程/独立 module）
-- SDK：`github.com/OwnSecurityGuard/gametrace/sdk` v0.9.0
+- SDK：`github.com/OwnSecurityGuard/gametrace/sdk` v0.10.0
 - API 版本：`api_version: gt.decoder/v2`
 - 插件形态：独立可执行文件，通过 Register RPC 向 registry 注册
 
@@ -193,7 +193,7 @@ func loadDotEnv(path string) {
 
 ```
 plugins/<protocol>-decoder/
-├── go.mod          # 依赖 github.com/OwnSecurityGuard/gametrace/sdk v0.9.0
+├── go.mod          # 依赖 github.com/OwnSecurityGuard/gametrace/sdk v0.10.0
 ├── main.go         # 入口：RunRegisterLoopWithOptions + loadDotEnv(".env")
 ├── decode.go       # 核心：Decode(req) → []*Event
 ├── <fmt>.go        # 负载解析器（解压/解帧/解文本）
@@ -204,14 +204,14 @@ plugins/<protocol>-decoder/
 └── decode_test.go  # 全链路解码测试 + manifest 一致性
 ```
 
-go.mod（go 指令 ≥ SDK 模块要求——当前 SDK v0.9.0 对应 **`go 1.25`**（模板值）/ `go 1.25.5`（SDK go.mod 值）。**别写成 1.26**：插件是独立进程/独立 module，宿主 gt-pipeline 用 1.26.8 与插件作者无关）：
+go.mod（go 指令 ≥ SDK 模块要求——当前 SDK v0.10.0 对应 **`go 1.25`**（模板值）/ `go 1.25.5`（SDK go.mod 值）。**别写成 1.26**：插件是独立进程/独立 module，宿主 gt-pipeline 用 1.26.8 与插件作者无关）：
 
 ```go
 module your.org/plugins/foo-decoder
 
 go 1.25
 
-require github.com/OwnSecurityGuard/gametrace/sdk v0.9.0
+require github.com/OwnSecurityGuard/gametrace/sdk v0.10.0
 ```
 
 main.go（入口必须是 `sdk.DecodeFuncV2` 函数，不是实例；每个 input 必须以 `done=true` 收尾，即使一条消息都没解出来）：

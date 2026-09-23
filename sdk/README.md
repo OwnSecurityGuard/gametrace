@@ -26,7 +26,7 @@ func decode(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error {
 
 ```bash
 # 发布 tag 带 sdk/ 前缀（module 位于 monorepo 子目录），最新版见「版本」一节
-go get github.com/OwnSecurityGuard/gametrace/sdk@v0.9.0
+go get github.com/OwnSecurityGuard/gametrace/sdk@v0.10.0
 ```
 
 在 gametrace 仓库内开发时改用 replace 指向仓库内源码，避免依赖网络：
@@ -69,7 +69,7 @@ type: decoder
 `protocol` 必填、`type` 固定 `decoder`；宿主在注册期按自身大版本（当前 `gt.decoder/v2`）
 复核 `api_version`。
 
-可选声明段（v0.9.0 现状）：
+可选声明段（v0.10.0 现状）：
 
 ```yaml
 protocol_version: "1.1"
@@ -94,7 +94,7 @@ meta:
 
 ## 契约层
 
-`contract.yaml` 是插件与宿主之间线上协议的 SSOT（`spec_version: 6`），
+`contract.yaml` 是插件与宿主之间线上协议的 SSOT（`spec_version: 7`），
 SDK 侧当前承载语义契约层：
 
 - **Protocol Semantic Rule 层**（`LayerSemantic`）：`semantic_rules` 声明在
@@ -144,7 +144,7 @@ export GT_AUTH_TOKEN=gt_tok_xxx                   # 平台开启鉴权时必填
 - [docs/decoder-development.md](docs/decoder-development.md) — 解码器开发指南（含 framing 权威说明）
 - [docs/plugin-semantic-rules.md](docs/plugin-semantic-rules.md) — Protocol Semantic Rule 规范
 - [docs/stream-reassembly.md](docs/stream-reassembly.md) / [docs/link-type-reference.md](docs/link-type-reference.md) — TCP 重组与链路类型参考
-- [docs/runtime-connection.md](docs/runtime-connection.md) — 运行时连接（注册/回连）说明
+- [docs/runtime-connection.md](docs/runtime-connection.md) — 运行时连接（注册 / 隧道）说明
 - [docs/troubleshooting.md](docs/troubleshooting.md) — 常见问题（0 事件排查等）
 - [docs/case-study-godot-tiny-mmo.md](docs/case-study-godot-tiny-mmo.md) — Godot 小游戏解码案例
 - [examples/http-stream-decoder/README.md](examples/http-stream-decoder/README.md) — 参考插件说明
@@ -154,8 +154,15 @@ export GT_AUTH_TOKEN=gt_tok_xxx                   # 平台开启鉴权时必填
 
 ## 版本
 
-当前 **v0.9.0**。沿革：
+当前 **v0.10.0**。沿革：
 
+- **v0.10.0** — **连接路径收敛为隧道唯一模式（破坏性）**：`Register` 请求删除 `socket_path` /
+  `tunnel` 两字段（protobuf 保留号 1、3），宿主不再回拨插件端点；解码一律走插件主动拨出的
+  `Connect` 双向流，建流时以 gRPC metadata `x-gt-instance-id` 携带 `Register` 返回的
+  `instance_id`，宿主据此精确绑定实例，id 缺失或未知即拒绝建流。SDK 侧 `RegisterOptions`
+  只剩 `AuthToken`；`GT_DECODER_ADDR` / `GT_DECODER_PUBLIC_ADDR` 已移除，插件只认
+  `GT_REGISTRY_ADDR`。契约 `spec_version` 6 → 7。**旧 SDK 构建的插件会在建流阶段被拒**
+  （注册成功但永不 online），必须用本版 SDK 重新构建。
 - **v0.9.0** — **Protocol Semantic Rule 的 effect 闭集收敛为 `pair` / `annotate` / `name`**：
   原第四个效果 `extract`（声明 `source` 把数组/对象字段拆成子事件、宿主挂 `parent_id`）已整体删除。
   它拆出的子事件不过语义规则（无 `meta`）、不参与状态投影（`Analysis` 恒空）、`schema_id` 随

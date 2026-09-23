@@ -132,7 +132,7 @@ build: build-mcp build-pipeline build-plugin-dev build-agent
 # 外部插件 go get ...@v0.9.0 可用。
 # ============================================================================
 .PHONY: sdk-test sdk-publish
-SDK_VERSION ?= v0.9.0
+SDK_VERSION ?= v0.10.0
 SDK_UPSTREAM ?= git@github.com:OwnSecurityGuard/gt-plugin-sdk.git
 
 # 在 SDK 子模块内单独跑它自己的测试/构建。
@@ -146,7 +146,7 @@ sdk-test:
 #      该镜像不能作为 go get 通道：镜像内 go.mod 声明的 module 是
 #      gametrace/sdk，与镜像仓库路径 gt-plugin-sdk 不匹配，Go 不会查它。
 #      外部获取一律走上一步的本仓库 tag。
-# 用法：make sdk-publish SDK_VERSION=v0.9.0
+# 用法：make sdk-publish SDK_VERSION=v0.10.0
 sdk-publish: sdk-test
 	git tag -f sdk/$(SDK_VERSION)
 	git push origin sdk/$(SDK_VERSION)

@@ -11,8 +11,8 @@ func TestLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load contract: %v", err)
 	}
-	if c.SpecVersion != 6 {
-		t.Errorf("spec_version = %d, want 6", c.SpecVersion)
+	if c.SpecVersion != 7 {
+		t.Errorf("spec_version = %d, want 7", c.SpecVersion)
 	}
 	// semantic 组件（Protocol Semantic Rule）自 spec_version 5 起加入。
 	if c.Contract.Components["semantic"] != 1 {
@@ -262,7 +262,7 @@ func TestRawYAMLNotEmpty(t *testing.T) {
 }
 
 // TestContractComponentsLoad 保证语义契约版本块仅含 semantic 组件且版本 >= 1。
-// runtime / event / schema / state 各层已随语义契约收敛移除（spec_version 6），
+// runtime / event / schema / state 各层已随语义契约收敛移除（spec_version 6 起），
 // 若重新出现说明契约被错误回滚。
 func TestContractComponentsLoad(t *testing.T) {
 	c := Default()

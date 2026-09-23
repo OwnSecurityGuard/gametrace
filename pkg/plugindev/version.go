@@ -7,12 +7,13 @@ package plugindev
 //   - create_plugin 把它作为 sdk_version 字段返回给调用方；
 //   - 升级 SDK 时，必须同步修改本常量、SDK 自身版本与 Agents.md 中引用的版本，三者保持一致。
 //
-// 当前值对应 SDK 模块 tag sdk/v0.9.0（语义契约 P1–P2：schema/state 已移除，
+// 当前值对应 SDK 模块 tag sdk/v0.10.0（连接路径只剩隧道一种：插件注册后主动拨出
+// Connect 双向流，宿主不回拨、插件不监听；语义契约 P1–P2：schema/state 已移除，
 // 三段产物 Payload/Meta/Analysis 强制分离；Protocol Semantic Rule 的 effect 闭集为
 // pair / annotate / name）。SDK 源码位于仓库内 ./sdk（唯一真源），
 // 对外发布路径为 github.com/OwnSecurityGuard/gametrace/sdk —— 因 module 在子目录，
 // 发布 tag 必须带 sdk/ 前缀，仅凭 make sdk-publish 打出的裸 tag 无法被 go get 解析。
-const SDKVersion = "v0.9.0"
+const SDKVersion = "v0.10.0"
 
 // FramingAvailable 标记当前 SDKVersion 是否包含 framing 包。
 //
@@ -21,5 +22,5 @@ const SDKVersion = "v0.9.0"
 // 若某个 SDK 版本删除了 framing 包，必须将此常量置为 false —— 脚手架会据此
 // 不 import framing 并在生成代码中显式标注「framing 不可用」，避免引用缺失的导入。
 //
-// v0.9.0 已包含 framing 包。
+// v0.10.0 已包含 framing 包。
 const FramingAvailable = true
