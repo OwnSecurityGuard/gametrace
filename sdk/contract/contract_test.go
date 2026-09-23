@@ -70,6 +70,40 @@ func TestOutputContractIsV2(t *testing.T) {
 	}
 }
 
+// TestRegisterIsTunnelOnly 守卫「宿主不回拨」这一契约事实，与 TestOutputContractIsV2
+// 同属一类：契约不得比实现多声明字段。
+//
+// socket_path / tunnel 已从 RegisterRequest 删除（plugin.proto 保留号 1、3）：宿主统一按
+// 隧道处理，解码走插件主动拨出的 Connect 双向流，插件没有可上报的本地端点。契约若重新
+// 声明这两个字段、或不声明 Connect，说明非隧道回拨路径被回滚——本测试钉死它。
+func TestRegisterIsTunnelOnly(t *testing.T) {
+	c := Default()
+
+	reg, ok := c.RPC.Methods["register"]
+	if !ok {
+		t.Fatal("contract declares no register method")
+	}
+	for _, dead := range []string{"socket_path", "tunnel"} {
+		if _, ok := reg.Request[dead]; ok {
+			t.Errorf("register.request still declares removed field %q", dead)
+		}
+	}
+	if _, ok := reg.Request["manifest"]; !ok {
+		t.Error("register.request missing manifest")
+	}
+
+	// Connect 是唯一的解码通道，契约必须声明它，否则读者会以为宿主仍按需拨号
+	// DecodeV2（decode_v2 现在只经该流暴露）。
+	conn, ok := c.RPC.Methods["connect"]
+	if !ok {
+		t.Fatal("contract does not declare the connect tunnel method")
+	}
+	if conn.Type != "bidi_stream" {
+		t.Errorf("connect.type = %q, want bidi_stream", conn.Type)
+	}
+}
+
+
 // reserved_payload_fields 是宿主真实消费的字段，迁移前只存在于 gametrace 代码里，
 // 插件作者无从得知。这里确认它们被完整描述且标注了消费方。
 func TestReservedPayloadFields(t *testing.T) {

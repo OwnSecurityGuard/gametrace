@@ -59,8 +59,8 @@ The expected sequence is:
 
 ```text
 start plugin
-  -> decoder listener starts
-  -> plugin registers
+  -> plugin registers (Register RPC returns instance_id)
+  -> plugin opens the tunnel Connect stream, instance_id in stream metadata
   -> registry reports plugin instance
   -> only then start capture/decode
 ```
@@ -271,7 +271,7 @@ known input
 
 rather than mixing old and new decoder behavior in one dataset.
 
-## 12. Decoder endpoint troubleshooting
+## 12. Registration / tunnel troubleshooting
 
 The platform runs plugins in tunnel mode only (`GT_TUNNEL=1`, injected by gt-agent and by
 Developer Plane `activate_plugin`): the plugin opens no listener and the host never dials back.

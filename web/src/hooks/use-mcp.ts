@@ -355,18 +355,17 @@ export function usePluginEventStream() {
   useEffect(() => {
     const es = new EventSource(withTokenParam("/events/plugins"));
     es.addEventListener("plugin", (e) => {
-      // register_failed：即时 toast（含尝试地址与诊断建议），其余事件维持缓存失效
+      // register_failed：即时 toast（含被拒原因），其余事件维持缓存失效
       try {
         const ev = JSON.parse((e as MessageEvent<string>).data) as {
           type: string;
           name?: string;
-          socket_path?: string;
           error?: string;
         };
         if (ev.type === "register_failed") {
           toast.error(
-            `插件 ${ev.name ?? "未知"} 注册失败：平台拨不通 ${ev.socket_path ?? "解码器地址"}`,
-            ev.error,
+            `插件 ${ev.name ?? "未知"} 注册被拒`,
+            ev.error || "平台未记录原因（可能是 manifest / 语义契约校验或隧道 Connect 流被拒）",
           );
         }
       } catch {

@@ -269,7 +269,7 @@ export function PluginPanel() {
               className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs space-y-1"
             >
               <div className="font-medium">
-                {f.name} — 平台拨不通 <code className="text-[11px]">{f.socket_path}</code>
+                {f.name} — 注册被拒
               </div>
               <div className="text-destructive break-all">{f.error}</div>
               <div className="text-muted-foreground">{fmtTime(f.timestamp_unix)}</div>
