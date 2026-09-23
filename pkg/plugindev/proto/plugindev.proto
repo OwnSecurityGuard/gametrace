@@ -89,6 +89,9 @@ message BuildResponse {
 message ActivateRequest {
   string name = 1;
   string registry_addr = 2;
+  // auth_token 由平台（gt-mcp activate_plugin/gt-agent 托管）直接注入子进程环境
+  // GT_AUTH_TOKEN，不依赖插件侧 .env 热修改。空串 = 匿名模式，不注入。
+  string auth_token = 3;
 }
 
 message ActivateResponse {

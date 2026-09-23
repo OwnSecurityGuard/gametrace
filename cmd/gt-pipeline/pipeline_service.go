@@ -28,7 +28,12 @@ type pipelineService struct {
 	controlStore store.ControlStoreBackend
 	registry     *plugin.RegistryServer
 	workDir      string
-	logger       *slog.Logger // 进程级 logger，带 component=pipeline_service
+	// pluginsDir 是插件源码目录（<workdir>/plugins），与 Developer Plane 的
+	// -plugins-dir 指向同一位置（docker compose 下同为 /data/plugins）。
+	// Verify 的 validated proof 持久化到 <pluginsDir>/<name>/.gametrace/
+	// validation.json，供跨进程的 Developer Plane status 读取（方案 B）。
+	pluginsDir string
+	logger     *slog.Logger // 进程级 logger，带 component=pipeline_service
 
 	// dbDriver/dbDSN 是事件存储后端配置：sqlite（每会话一个 capture.sqlite）或
 	// postgres（共享 PG 库，按 session_id 隔离）。由 -db-driver/-db-dsn（env
@@ -79,6 +84,7 @@ type pipelineService struct {
 func newPipelineService(workDir string, controlStore store.ControlStoreBackend, registry *plugin.RegistryServer, registryAddr, dbDriver, dbDSN string) *pipelineService {
 	return &pipelineService{
 		workDir:      workDir,
+		pluginsDir:   filepath.Join(workDir, "plugins"),
 		controlStore: controlStore,
 		registry:     registry,
 		logger:       logging.With("component", "pipeline_service"),
@@ -317,11 +323,28 @@ func (s *pipelineService) StopSession(ctx context.Context, sessionID string) (ca
 }
 
 // GetStatus 查询会话状态与统计。从 map 取 task，读 Snapshot()（无锁）。
-// sessionID 不匹配或会话未活跃时返回 State="closed"。
+//
+// 历史会话（task 已退出）不返回「closed + 0 计数」——那会把「会话早已结束」误读成
+// 「没抓到数据」。改为回退 controlStore.sessions 的持久化终值（finalizeTask 落库），
+// state 统一为 capture.StateClosed.String()（"closed"），保证调用方按
+// state=="running" 判定存活的前端语义不被破坏。
 func (s *pipelineService) GetStatus(ctx context.Context, sessionID string) (capturecontrol.StatusResult, error) {
 	task, ok := s.getTask(sessionID)
 	if !ok {
-		return capturecontrol.StatusResult{State: capture.StateClosed.String()}, nil
+		if s.controlStore == nil {
+			return capturecontrol.StatusResult{State: capture.StateClosed.String()}, nil
+		}
+		meta, err := s.controlStore.GetSession(ctx, sessionID)
+		if err != nil || meta == nil {
+			return capturecontrol.StatusResult{State: capture.StateClosed.String()}, nil
+		}
+		return capturecontrol.StatusResult{
+			State:        capture.StateClosed.String(),
+			RawCount:     meta.RawPackets,
+			EventCount:   meta.Events,
+			MetricCount:  meta.Metrics,
+			DecodeErrors: meta.DecodeErrors,
+		}, nil
 	}
 	snap := task.Snapshot()
 	res := capturecontrol.StatusResult{

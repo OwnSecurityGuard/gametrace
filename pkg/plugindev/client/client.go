@@ -19,7 +19,7 @@ type PluginDev interface {
 	Scaffold(ctx context.Context, name, protocol, protocolVersion string, hints []string, outputDir string) (*pb.ScaffoldResponse, error)
 	ListPlugins(ctx context.Context) (*pb.ListPluginsResponse, error)
 	Build(ctx context.Context, name string, timeoutSec int) (*pb.BuildResponse, error)
-	Activate(ctx context.Context, name, registryAddr string) (*pb.ActivateResponse, error)
+	Activate(ctx context.Context, name, registryAddr, authToken string) (*pb.ActivateResponse, error)
 	Deactivate(ctx context.Context, name string) (*pb.DeactivateResponse, error)
 	Status(ctx context.Context, name string) (*pb.StatusResponse, error)
 	Explain(ctx context.Context, name, action string, verify *pb.VerifyResult) (*pb.ExplainResponse, error)
@@ -52,8 +52,8 @@ func (c *grpcClient) Build(ctx context.Context, name string, timeoutSec int) (*p
 	return c.cc.Build(ctx, &pb.BuildRequest{Name: name, TimeoutSec: int32(timeoutSec)})
 }
 
-func (c *grpcClient) Activate(ctx context.Context, name, registryAddr string) (*pb.ActivateResponse, error) {
-	return c.cc.Activate(ctx, &pb.ActivateRequest{Name: name, RegistryAddr: registryAddr})
+func (c *grpcClient) Activate(ctx context.Context, name, registryAddr, authToken string) (*pb.ActivateResponse, error) {
+	return c.cc.Activate(ctx, &pb.ActivateRequest{Name: name, RegistryAddr: registryAddr, AuthToken: authToken})
 }
 
 func (c *grpcClient) Deactivate(ctx context.Context, name string) (*pb.DeactivateResponse, error) {

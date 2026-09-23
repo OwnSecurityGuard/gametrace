@@ -40,12 +40,24 @@ type QualityView struct {
 
 // VerifyResult 是 plugin.verify 的结论：violations + quality + verdict + 溯源。
 type VerifyResult struct {
-	Verdict     string
-	Violations  []ViolationView
-	Quality     QualityView
-	VerifyRunID string
-	SessionID   string
-	AtUnix      int64
+	Verdict       string
+	Violations    []ViolationView
+	Quality       QualityView
+	VerifyRunID   string
+	SessionID     string
+	AtUnix        int64
+	Applicability *VerifyApplicability
+}
+
+// VerifyApplicability 会话对该插件的适用性判定（阶段 1：target port + matching
+// count）。Applicable=false 时 Verdict=not_applicable —— 属于「换会话重试」而
+// 非「插件质量差」，AI 应换会话而非修插件。
+type VerifyApplicability struct {
+	Applicable     bool
+	Reason         string // ok | no_raw_packets | no_matching_packets
+	TargetPort     int32
+	TotalPackets   int64
+	MatchedPackets int64
 }
 
 // SampleBytesRequest 是 plugin.sample_bytes 的取证取样请求。
@@ -95,10 +107,11 @@ func (s *Server) Verify(ctx context.Context, req *pb.VerifyRequest) (*pb.VerifyR
 		return nil, err
 	}
 	vr := &pb.VerifyResponse{
-		Verdict:     res.Verdict,
-		VerifyRunId: res.VerifyRunID,
-		SessionId:   res.SessionID,
-		AtUnix:      res.AtUnix,
+		Verdict:        res.Verdict,
+		VerifyRunId:    res.VerifyRunID,
+		SessionId:      res.SessionID,
+		AtUnix:         res.AtUnix,
+		Applicability:  applicabilityToPB(res.Applicability),
 	}
 	for _, v := range res.Violations {
 		vr.Violations = append(vr.Violations, &pb.VerifyViolation{

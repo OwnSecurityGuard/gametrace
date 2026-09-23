@@ -72,4 +72,9 @@ const (
 	// HighEntropyThreshold bits/byte: payload entropy at/above this, together
 	// with a majority of undecodable inputs, looks encrypted/compressed.
 	HighEntropyThreshold = 7.5
+	// VerdictNotApplicable: 会话适用性判定（P1-1）给出的 verdict —— 过滤窗口内
+	// 没有插件该解的流量（matching=0 / 无包），属于「换会话重试」而非「插件质量差」。
+	// 该 verdict 不触发 validated 立证（仅 pass 立证），也不进入 pass|warn|fail
+	// 的质量判定。
+	VerdictNotApplicable = "not_applicable"
 )

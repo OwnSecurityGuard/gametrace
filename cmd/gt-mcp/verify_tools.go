@@ -42,13 +42,36 @@ func (m *mcpCapture) handleVerifyPlugin(ctx context.Context, req mcp.CallToolReq
 	}
 
 	out := map[string]any{
-		"status":        "verified",
+		"status":        "completed",
 		"session_id":    sessionID,
 		"plugin":        pluginName,
 		"verdict":       resp.GetVerdict(),
 		"verify_run_id": resp.GetVerifyRunId(),
 		"violations":    resp.GetViolations(),
 		"quality":       resp.GetQuality(),
+	}
+	// 会话适用性（P1-1）：not_applicable 表示「会话没带插件要解的流量」，直接给
+	// 出换会话的机器可执行建议，而不是让 AI 去修插件。
+	if app := resp.GetApplicability(); app != nil {
+		out["applicability"] = map[string]any{
+			"applicable":      app.GetApplicable(),
+			"reason":          app.GetReason(),
+			"target_port":     app.GetTargetPort(),
+			"total_packets":   app.GetTotalPackets(),
+			"matched_packets": app.GetMatchedPackets(),
+		}
+		if !app.GetApplicable() {
+			out["ok"] = false
+			out["failure"] = map[string]any{
+				"code":    "not_applicable",
+				"message": fmt.Sprintf("session %s carries no traffic the plugin is expected to decode (reason=%s, matched=%d/%d); this is a wrong-session problem, not a plugin quality problem", sessionID, app.GetReason(), app.GetMatchedPackets(), app.GetTotalPackets()),
+			}
+			out["next_action"] = map[string]any{
+				"tool":     "list_all_sessions",
+				"why":      "pick a session carrying the plugin's protocol traffic (match target_port / protocol), then re-run verify_plugin",
+				"requires": "session_with_matching_traffic",
+			}
+		}
 	}
 	return successResult(out), nil
 }

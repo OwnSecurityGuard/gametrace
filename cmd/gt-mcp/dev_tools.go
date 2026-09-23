@@ -80,20 +80,50 @@ func (m *mcpCapture) handleActivatePlugin(ctx context.Context, req mcp.CallToolR
 	if m.pdClient == nil {
 		return errorResult(fmt.Errorf("plugin dev not available (Developer Plane not configured)")), nil
 	}
-	resp, err := m.pdClient.Activate(ctx, name, registryAddr)
+
+	// token 预检：平台以 token 模式运行（GT_AUTH_TOKENS 已配置）时，插件启动后
+	// 注册会被鉴权拦截。这里在拉起进程之前就快速失败，避免「.env 写错 → 旧进程
+	// 带空 token → 一直 PermissionDenied」的接入主路径坑。
+	token, tokenSrc := m.callerToken(ctx)
+	if len(m.tokensByOwner) > 0 && token == "" {
+		return successResult(map[string]any{
+			"name":             name,
+			"ok":               false,
+			"stage":            "token",
+			"process_launched": false,
+			"registered":       false,
+			"online":           false,
+			"integrated":       false,
+			"failure": map[string]any{
+				"code":    "missing_auth_token",
+				"message": "platform is running in token mode but the caller has no registrable token; refusing to launch a plugin that would be rejected on registration",
+			},
+			"next_action": map[string]any{
+				"tool":     "get_plugin_env",
+				"why":      "resolve the caller's auth token and verify GT_AUTH_TOKENS is configured for this owner",
+				"requires": "token_resolved",
+			},
+		}), nil
+	}
+
+	resp, err := m.pdClient.Activate(ctx, name, registryAddr, token)
 	if err != nil {
 		return errorResult(err), nil
 	}
 
 	out := map[string]any{
-		"name":             name,
-		"registry_addr":    registryAddr,
-		"process_launched": resp.GetOk(),
-		"instance_id":      resp.GetInstanceId(),
-		"message":          resp.GetMessage(),
+		"name":              name,
+		"registry_addr":     registryAddr,
+		"auth_token":        token,
+		"auth_token_source": tokenSrc,
+		"process_launched":  resp.GetOk(),
+		"instance_id":       resp.GetInstanceId(),
+		"message":           resp.GetMessage(),
 	}
 
-	// 联合校验：仅看到进程 pid 或 activate 成功不算接入完成。
+	// 联合校验：仅看到进程 pid 或 activate 成功不算接入完成。输出收敛成
+	// 四阶段（token → launch → registration → integrated）以便 AI 直接按
+	// stage + next_action 决策，无需再猜源码。
 	if m.pipelineClient != nil && resp.GetOk() {
 		registered, online, manifestPresent, detail := m.verifyPluginIntegration(ctx, name)
 		integrated := registered && online && manifestPresent
@@ -102,9 +132,41 @@ func (m *mcpCapture) handleActivatePlugin(ctx context.Context, req mcp.CallToolR
 		out["manifest_present"] = manifestPresent
 		out["integrated"] = integrated
 		out["verification_detail"] = detail
+		switch {
+		case !registered:
+			out["stage"] = "registration"
+		case !online:
+			out["stage"] = "registration"
+			out["failure"] = map[string]any{"code": "not_online", "message": detail}
+			out["next_action"] = map[string]any{
+				"tool":     "status_plugin",
+				"why":      "plugin is registered but not online; check plugin logs / dev.log",
+				"requires": "heartbeat",
+			}
+		case !manifestPresent:
+			out["stage"] = "registration"
+			out["failure"] = map[string]any{"code": "missing_manifest", "message": detail}
+			out["next_action"] = map[string]any{
+				"tool":     "get_plugin_manifest",
+				"why":      "manifest unavailable; verify plugin.yaml ships with the binary",
+				"requires": "manifest_present",
+			}
+		default:
+			out["stage"] = "integrated"
+		}
 		if !integrated {
 			out["ok"] = false
 			out["message"] = "plugin process launched but not fully integrated: " + detail
+			if out["failure"] == nil {
+				out["failure"] = map[string]any{"code": "integration_incomplete", "message": detail}
+			}
+			if out["next_action"] == nil {
+				out["next_action"] = map[string]any{
+					"tool":     "status_plugin",
+					"why":      detail,
+					"requires": "integration_retry",
+				}
+			}
 		} else {
 			out["ok"] = true
 		}
@@ -112,7 +174,12 @@ func (m *mcpCapture) handleActivatePlugin(ctx context.Context, req mcp.CallToolR
 		// 无 pipeline 连接时只能确认进程已启动，无法验证注册。
 		out["ok"] = resp.GetOk()
 		out["integrated"] = false
-		out["verification_detail"] = "pipeline unreachable: registered/online/manifest not verified"
+		out["stage"] = "launch"
+		if m.pipelineClient == nil {
+			out["verification_detail"] = "pipeline unreachable: registered/online/manifest not verified"
+		} else {
+			out["verification_detail"] = "plugin process did not launch (activate reported failure)"
+		}
 	}
 	return successResult(out), nil
 }
@@ -254,7 +321,7 @@ func (m *mcpCapture) handleGetPluginEnv(ctx context.Context, req mcp.CallToolReq
 		"env_file":            buildPluginEnvFile(registry, token),
 		"notes": []string{
 			"GT_REGISTRY_ADDR: 插件注册端点，原样使用",
-			"GT_AUTH_TOKEN: 调用者自己的注册 token（agent 托管 GT_TUNNEL=1 时平台自动注入，可留空）",
+			"GT_AUTH_TOKEN: 插件注册鉴权凭证；agent 托管（GT_TUNNEL=1）与 activate_plugin 本地托管都会由平台直接注入，可省略；手工启动时（.env / 命令行）必须自行提供，否则 token 模式下注册会被拒",
 			"GT_TUNNEL: 平台统一以隧道模式运行（activate_plugin 与 gt-agent 都会注入 1）；插件不起本地端口、宿主不回拨，注册/心跳/解码帧共用 GT_REGISTRY_ADDR 这一条连接",
 			"把 env_file 原样写入插件目录 .env；不要把 .env 提交到 git",
 		},

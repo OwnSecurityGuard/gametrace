@@ -227,6 +227,9 @@ type TestPluginResult struct {
 	TypeHistogram map[string]int64
 	SampleEvents  []TestEventLite
 	ErrorSamples  []TestErrorLite
+	// Applicability 会话/插件适用性判定（不阻塞 test_plugin 采样，仅告知 AI
+	// 当前会话是否带插件要解的流量，便于换会话）。
+	Applicability *VerifyApplicability
 }
 
 // StartSessionRequest 是启动抓包的参数（与 proto 对应但不含 protobuf 类型）。
@@ -495,7 +498,22 @@ func (s *Server) TestPlugin(ctx context.Context, req *pb.TestPluginRequest) (*pb
 		TypeHistogram: res.TypeHistogram,
 		SampleEvents:  sampleEvents,
 		ErrorSamples:  errorSamples,
+		Applicability: applicabilityToPB(res.Applicability),
 	}, nil
+}
+
+// applicabilityToPB 把 engine 侧的适用性判定映射到 proto（两个调用点共用）。
+func applicabilityToPB(a *VerifyApplicability) *pb.VerifyApplicability {
+	if a == nil {
+		return nil
+	}
+	return &pb.VerifyApplicability{
+		Applicable:     a.Applicable,
+		Reason:         a.Reason,
+		TargetPort:     a.TargetPort,
+		TotalPackets:   a.TotalPackets,
+		MatchedPackets: a.MatchedPackets,
+	}
 }
 
 // withRequestOwner 把调用方身份注入 ctx，使 engine 侧能经

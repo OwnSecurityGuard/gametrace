@@ -38,6 +38,11 @@ func (f *fakeCaptureClient) SampleBytes(ctx context.Context, in *pb.SampleBytesR
 	f.sampleReq = in
 	return f.sampleResp, f.sampleErr
 }
+// GetCaptureStatus 返回空响应：list_all_sessions 的 live 计数覆盖在 fake 下不可用，
+// 运行中会话的计数回落到持久化元数据（语义与 pipeline 短暂不可达一致）。
+func (f *fakeCaptureClient) GetCaptureStatus(ctx context.Context, in *pb.GetCaptureStatusRequest, _ ...grpc.CallOption) (*pb.GetCaptureStatusResponse, error) {
+	return nil, nil
+}
 
 // TestHandleVerifyPluginForwards locks in P4: the MCP layer is a pure forwarder
 // to the Runtime Plane — it maps arguments onto the gRPC VerifyRequest and

@@ -56,10 +56,16 @@ func Activate(ctx context.Context, req *ActivateRequest) (*ActivateResponse, err
 	cmd.Dir = dir
 	// 只保留隧道模式：本地托管的插件同样以 GT_TUNNEL=1 注册（与 gt-agent 托管
 	// 一致），宿主不再回拨，因此也不需要 GT_DECODER_ADDR / GT_DECODER_PUBLIC_ADDR。
-	cmd.Env = append(os.Environ(),
-		"GT_REGISTRY_ADDR="+req.RegistryAddr,
+	env := []string{
+		"GT_REGISTRY_ADDR=" + req.RegistryAddr,
 		"GT_TUNNEL=1",
-	)
+	}
+	// 平台直接注入调用者 token（activate_plugin / gt-agent 托管路径），
+	// 不依赖插件侧 .env 热修改；空串 = 匿名模式不注入（插件自行读 .env/环境）。
+	if req.AuthToken != "" {
+		env = append(env, "GT_AUTH_TOKEN="+req.AuthToken)
+	}
+	cmd.Env = append(os.Environ(), env...)
 	if logFile != nil {
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile

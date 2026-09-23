@@ -501,9 +501,12 @@ func (x *BuildResponse) GetOutput() string {
 }
 
 type ActivateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	RegistryAddr  string                 `protobuf:"bytes,2,opt,name=registry_addr,json=registryAddr,proto3" json:"registry_addr,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Name         string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	RegistryAddr string                 `protobuf:"bytes,2,opt,name=registry_addr,json=registryAddr,proto3" json:"registry_addr,omitempty"`
+	// auth_token 由平台（gt-mcp activate_plugin/gt-agent 托管）直接注入子进程环境
+	// GT_AUTH_TOKEN，不依赖插件侧 .env 热修改。空串 = 匿名模式，不注入。
+	AuthToken     string `protobuf:"bytes,3,opt,name=auth_token,json=authToken,proto3" json:"auth_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -548,6 +551,13 @@ func (x *ActivateRequest) GetName() string {
 func (x *ActivateRequest) GetRegistryAddr() string {
 	if x != nil {
 		return x.RegistryAddr
+	}
+	return ""
+}
+
+func (x *ActivateRequest) GetAuthToken() string {
+	if x != nil {
+		return x.AuthToken
 	}
 	return ""
 }
@@ -1600,10 +1610,12 @@ const file_pkg_plugindev_proto_plugindev_proto_rawDesc = "" +
 	"\rBuildResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x127\n" +
 	"\x06errors\x18\x02 \x03(\v2\x1f.gametrace.plugindev.BuildErrorR\x06errors\x12\x16\n" +
-	"\x06output\x18\x03 \x01(\tR\x06output\"J\n" +
+	"\x06output\x18\x03 \x01(\tR\x06output\"i\n" +
 	"\x0fActivateRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
-	"\rregistry_addr\x18\x02 \x01(\tR\fregistryAddr\"]\n" +
+	"\rregistry_addr\x18\x02 \x01(\tR\fregistryAddr\x12\x1d\n" +
+	"\n" +
+	"auth_token\x18\x03 \x01(\tR\tauthToken\"]\n" +
 	"\x10ActivateResponse\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12\x0e\n" +

@@ -60,6 +60,9 @@ func Build(ctx context.Context, req *BuildRequest) (*BuildResponse, error) {
 	}
 	resp.OK = true
 	defaultTracker.RecordBuild(req.Name, dur, resp)
+	// 构建成功使既有 validated 失效（design §2.2）：进程内 Tracker 已清，
+	// 磁盘上的跨进程 proof 一并清除，避免旧验证证据跨进程残留。
+	ClearValidation(req.Root, req.Name)
 	return resp, nil
 }
 

@@ -31,6 +31,7 @@ import (
 	"gametrace/docs"
 	"gametrace/pkg/auth"
 	"gametrace/pkg/authz"
+	"gametrace/pkg/capture"
 	"gametrace/pkg/config"
 	"gametrace/pkg/event"
 	"gametrace/pkg/internalipc"
@@ -769,7 +770,7 @@ func (m *mcpCapture) handleGetSessionStatus(ctx context.Context, req mcp.CallToo
 	// 通过 gRPC 查询实时状态
 	if m.pipelineClient != nil {
 		resp, err := m.pipelineClient.GetCaptureStatus(ctx, &pb.GetCaptureStatusRequest{SessionId: sessionID})
-		if err == nil {
+		if err == nil && resp.GetState() == "running" {
 			return successResult(map[string]any{
 				"session_id":    sessionID,
 				"state":         resp.GetState(),
@@ -789,33 +790,131 @@ func (m *mcpCapture) handleGetSessionStatus(ctx context.Context, req mcp.CallToo
 				"agent_last_seen_unix": resp.GetAgentLastSeenUnix(),
 			}), nil
 		}
-		// gRPC 查询失败，降级返回 sessionMgr 中的元数据
-		slog.Warn("get_session_status gRPC failed, falling back to metadata", "error", err, "session_id", sessionID)
+		// 非 running：pipeline 对历史会话只报 closed + 0 计数，会把「早已结束」
+		// 误读成「没抓到数据」。合并 controlStore 持久化终值补充真实计数，state
+		// 保持 closed（非 live 的 gRPC 语义，前端依赖 == "running" 判定存活）。
+		if err == nil {
+			if meta := m.sessionStatusMeta(ctx, sessionID); meta != nil {
+				return successResult(sessionStatusResult(meta, capture.StateClosed.String())), nil
+			}
+		} else {
+			// gRPC 查询失败（pipeline 不可达），降级读取持久化元数据
+			slog.Warn("get_session_status gRPC failed, falling back to metadata", "error", err, "session_id", sessionID)
+		}
 	}
 
-	// 返回 sessionMgr 中的元数据
-	sess, err := m.sessionMgr.readSessionMetadata(sessionID, owner)
-	if err != nil || sess == nil {
-		return successResult(map[string]any{"state": "closed", "session_id": sessionID}), nil
+	// 持久化元数据：controlStore.sessions 权威，filesystem 兼容旧数据。
+	if meta := m.sessionStatusMeta(ctx, sessionID); meta != nil {
+		return successResult(sessionStatusResult(meta, meta.Status)), nil
 	}
+	return successResult(map[string]any{"state": "closed", "session_id": sessionID}), nil
+}
+
+// sessionStatusMeta 读取会话持久化元数据。controlStore.sessions 为唯一权威，
+// filesystem（metadata.json）仅作旧数据兼容兜底。调用方必须先完成
+// authorizeSession（本函数不做权限判定）。
+func (m *mcpCapture) sessionStatusMeta(ctx context.Context, sessionID string) *store.SessionMeta {
+	if m.controlStore != nil {
+		if meta, err := m.controlStore.GetSession(ctx, sessionID); err == nil && meta != nil {
+			return meta
+		}
+	}
+	if m.sessionMgr != nil {
+		if fs, err := m.sessionMgr.readSessionMetadata(sessionID, auth.OwnerFrom(ctx)); err == nil && fs != nil {
+			return fsToSessionMeta(fs)
+		}
+	}
+	return nil
+}
+
+// sessionStatusResult 渲染 get_session_status 持久化回退视图。
+// state 由调用方决定：gRPC 报告 closed（非 live）时传 capture.StateClosed，
+// pipeline 不可达降级时传元数据原始状态。
+func sessionStatusResult(meta *store.SessionMeta, state string) map[string]any {
 	result := map[string]any{
-		"session_id":    sess.SessionID,
-		"state":         sess.Status,
-		"port":          sess.Port,
-		"plugin":        sess.Plugin,
-		"interface":     sess.Interface,
-		"pcap_file":     sess.PCAPFile,
-		"raw_packets":   sess.RawPackets,
-		"events":        sess.Events,
-		"metrics":       sess.Metrics,
-		"decode_errors": sess.DecodeErrors,
-		"duration_sec":  sess.DurationSec,
-		"db_path":       sess.DBPath,
+		"session_id":    meta.SessionID,
+		"state":         state,
+		"port":          meta.Port,
+		"plugin":        meta.Plugin,
+		"interface":     meta.Interface,
+		"pcap_file":     meta.PCAPFile,
+		"raw_packets":   meta.RawPackets,
+		"events":        meta.Events,
+		"metrics":       meta.Metrics,
+		"decode_errors": meta.DecodeErrors,
+		"duration_sec":  meta.DurationSec,
+		"db_path":       meta.DBPath,
 	}
-	if sess.ManifestSnapshot != "" {
-		result["manifest_snapshot"] = sess.ManifestSnapshot
+	if meta.ManifestSnapshot != "" {
+		result["manifest_snapshot"] = meta.ManifestSnapshot
 	}
-	return successResult(result), nil
+	return result
+}
+
+// fsToSessionMeta 把 filesystem 层 sessionMetadata 归一化成 controlStore.SessionMeta，
+// 使持久化回退路径共用同一套渲染。时间字段按 RFC3339 解析；失败时置零值。
+func fsToSessionMeta(fs *sessionMetadata) *store.SessionMeta {
+	if fs == nil {
+		return nil
+	}
+	m := &store.SessionMeta{
+		Owner:            fs.Owner,
+		TenantID:         fs.TenantID,
+		ProjectID:        fs.ProjectID,
+		SessionID:        fs.SessionID,
+		Status:           fs.Status,
+		Port:             fs.Port,
+		Plugin:           fs.Plugin,
+		Interface:        fs.Interface,
+		PCAPFile:         fs.PCAPFile,
+		RawPackets:       fs.RawPackets,
+		Events:           fs.Events,
+		Metrics:          fs.Metrics,
+		DecodeErrors:     fs.DecodeErrors,
+		DurationSec:      fs.DurationSec,
+		DBPath:           fs.DBPath,
+		Extra:            fs.Extra,
+		ManifestSnapshot: fs.ManifestSnapshot,
+	}
+	if t, err := time.Parse(time.RFC3339, fs.StartedAt); err == nil {
+		m.StartedAt = t
+	}
+	if fs.StoppedAt != "" {
+		if t, err := time.Parse(time.RFC3339, fs.StoppedAt); err == nil {
+			m.StoppedAt = &t
+		}
+	}
+	return m
+}
+
+// sessionMetaToFsMeta 把 controlStore.SessionMeta 归一化成 sessionMetadata，
+// 使 list_all_sessions 对两个来源共用同一套渲染/纠偏逻辑。
+// 时间统一用 RFC3339（含微秒）输出，前端 SessionInfo.started_at 仅透传字符串。
+func sessionMetaToFsMeta(s *store.SessionMeta) sessionMetadata {
+	fs := sessionMetadata{
+		Owner:            s.Owner,
+		ProjectID:        s.ProjectID,
+		TenantID:         s.TenantID,
+		SessionID:        s.SessionID,
+		StartedAt:        formatEventTime(s.StartedAt),
+		Status:           s.Status,
+		Port:             s.Port,
+		Plugin:           s.Plugin,
+		Interface:        s.Interface,
+		PCAPFile:         s.PCAPFile,
+		RawPackets:       s.RawPackets,
+		Events:           s.Events,
+		Metrics:          s.Metrics,
+		DecodeErrors:     s.DecodeErrors,
+		DurationSec:      s.DurationSec,
+		DBPath:           s.DBPath,
+		Extra:            s.Extra,
+		ManifestSnapshot: s.ManifestSnapshot,
+	}
+	if s.StoppedAt != nil {
+		fs.StoppedAt = formatEventTime(*s.StoppedAt)
+	}
+	return fs
 }
 
 func (m *mcpCapture) handleListPlugins(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -1783,7 +1882,7 @@ func (m *mcpCapture) handleTestPlugin(ctx context.Context, req mcp.CallToolReque
 	slog.Info("test_plugin completed",
 		"session_id", sessionID, "plugin", pluginName,
 		"total_raw", resp.GetTotalRaw(), "decoded", resp.GetDecoded(), "decode_errors", resp.GetDecodeErrors())
-	return successResult(map[string]any{
+	out := map[string]any{
 		"status":         "tested",
 		"session_id":     sessionID,
 		"plugin":         pluginName,
@@ -1793,7 +1892,18 @@ func (m *mcpCapture) handleTestPlugin(ctx context.Context, req mcp.CallToolReque
 		"type_histogram": resp.GetTypeHistogram(),
 		"sample_events":  resp.GetSampleEvents(),
 		"error_samples":  resp.GetErrorSamples(),
-	}), nil
+	}
+	// 会话适用性（P1-1）：不阻塞采样，仅告知 AI 当前会话是否带插件要解的流量。
+	if app := resp.GetApplicability(); app != nil {
+		out["applicability"] = map[string]any{
+			"applicable":      app.GetApplicable(),
+			"reason":          app.GetReason(),
+			"target_port":     app.GetTargetPort(),
+			"total_packets":   app.GetTotalPackets(),
+			"matched_packets": app.GetMatchedPackets(),
+		}
+	}
+	return successResult(out), nil
 }
 
 // queryEnv returns the expr environment for decoded event queries.
@@ -1860,16 +1970,42 @@ func (m *mcpCapture) getDBPath(ctx context.Context, sessionID string) (string, e
 }
 
 func (m *mcpCapture) handleListAllSessions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// 项目是协作边界：可见范围 = 自己的会话 ∪ 可见项目的会话（含文件系统侧过滤）。
+	// 项目是协作边界：可见范围 = 自己的会话 ∪ 可见项目的会话（含存储层过滤）。
 	f, err := m.visibleSessionFilter(ctx)
 	if err != nil {
 		slog.Error("list_all_sessions: resolve filter failed", "error", err)
 		return errorResult(err), nil
 	}
-	sessions, err := m.sessionMgr.listSessions(f)
-	if err != nil {
-		slog.Error("list_all_sessions failed", "error", err)
-		return errorResult(err), nil
+
+	// 会话元数据唯一权威 = controlStore.sessions（sqlite/PG 同语义）：
+	// PG 模式下 filesystem 的 metadata.json 可能缺失，以其为列表主源会丢会话。
+	// filesystem 枚举仅作旧数据兼容补充（controlStore 未落库的历史会话）。
+	have := map[string]bool{}
+	sessions := make([]sessionMetadata, 0, 16)
+	if m.controlStore != nil {
+		metas, lerr := m.controlStore.ListSessionsFor(ctx, f)
+		if lerr != nil {
+			slog.Warn("list_all_sessions: controlStore list failed", "error", lerr)
+		} else {
+			for i := range metas {
+				have[metas[i].SessionID] = true
+				sessions = append(sessions, sessionMetaToFsMeta(&metas[i]))
+			}
+		}
+	}
+	if m.sessionMgr != nil {
+		fs, ferr := m.sessionMgr.listSessions(f)
+		if ferr != nil {
+			// filesystem 不再是主源：失败仅告警，不把列表打挂。
+			slog.Error("list_all_sessions: filesystem list failed", "error", ferr)
+		} else {
+			for _, meta := range fs {
+				if have[meta.SessionID] {
+					continue
+				}
+				sessions = append(sessions, meta)
+			}
+		}
 	}
 
 	// 可选 status 过滤（failed/success）。"failed" 映射到内部 status="error"。
@@ -2790,10 +2926,11 @@ func main() {
 		mcp.WithNumber("sample_limit", mcp.Description("Optional: max number of decoded events to return as samples, default 50")),
 	), capture.handleTestPlugin)
 
-	// verify_plugin：契约+质量校验，产出 verdict 并把 artifact.state 升到 validated。
-	// 纯转发到 Runtime Plane（gt-pipeline）；MCP 零归因逻辑。
+	// verify_plugin：契约+质量校验，产出 verdict + applicability。verdict==pass
+	// 时把 artifact.state 升到 validated（磁盘 proof，跨进程可见）。纯转发到
+	// Runtime Plane（gt-pipeline）；MCP 零归因逻辑。
 	s.AddTool(mcp.NewTool("verify_plugin",
-		mcp.WithDescription("Verify a plugin by decoding an offline session's raw packets and checking contract violations (SDK checker, each tagged with a contract.yaml rule_id) plus gt-side quality stats (unknown ratio, entropy, correlation). Returns a verdict: pass | warn | fail, and on a non-fail verdict promotes the plugin's artifact.state to validated (with a proof). Pure forwarder to the Runtime Plane; MCP owns no attribution logic."),
+		mcp.WithDescription("Verify a plugin by decoding an offline session's raw packets and checking contract violations (SDK checker, each tagged with a contract.yaml rule_id) plus gt-side quality stats (unknown ratio, entropy, correlation). Returns a verdict: pass | warn | fail | not_applicable, plus an applicability block (target port + matching count). not_applicable means the session carries no traffic the plugin should decode — pick another session; only verdict=pass promotes the artifact.state to validated (with a disk proof). Pure forwarder to the Runtime Plane; MCP owns no attribution logic."),
 		mcp.WithString("session_id", mcp.Required(), mcp.Description("Stopped session whose raw packets to verify against")),
 		mcp.WithString("plugin", mcp.Required(), mcp.Description("Plugin name to verify, e.g. http or tcp")),
 		mcp.WithString("protocol", mcp.Description("Optional: only verify packets with this protocol, e.g. tcp")),

@@ -79,9 +79,14 @@ func Status(ctx context.Context, req *StatusRequest) (*PluginStatus, error) {
 	artifact := ArtifactStateOf(req.Root, req.Name)
 
 	// Promoted to validated only when a cross-plane proof exists and the
-	// binary is not stale (design §2.2 invalidation rule).
+	// binary is not stale (design §2.2 invalidation rule). The proof lives in
+	// the process-local Tracker AND on disk (方案 B，pipeline verify 写盘)：
+	// docker 部署下两平面不同进程，pipeline 进程内 Tracker 的 proof 对
+	// Developer Plane 不可见，必须先查内存、再落盘兜底。
 	if artifact.State == "compiled" && !artifact.BinaryStale {
 		if p := defaultTracker.ValidatedProof(req.Name); p != nil {
+			artifact.State = "validated"
+		} else if p := LoadValidation(req.Root, req.Name); p != nil {
 			artifact.State = "validated"
 		}
 	}

@@ -72,10 +72,14 @@ type BuildResponse struct {
 // RegistryAddr so the plugin can register with the runtime. The Developer Plane
 // owns only the process it launches (per design §1.4); production environments
 // launch plugins via systemd/k8s instead.
+//
+// AuthToken（非空时）直接注入子进程环境 GT_AUTH_TOKEN，避免依赖 .env 热修改；
+// 空串 = 匿名模式，不注入，插件自行从 .env/环境读取。
 type ActivateRequest struct {
 	Root         string
 	Name         string
 	RegistryAddr string
+	AuthToken    string
 }
 
 // ActivateResponse reports the launch outcome. InstanceID is a Developer-Plane

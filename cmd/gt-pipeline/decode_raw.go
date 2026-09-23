@@ -336,7 +336,7 @@ func (s *pipelineService) TestPlugin(ctx context.Context, req capturecontrol.Tes
 	defer dispatcher.Close()
 
 	res := capturecontrol.TestPluginResult{TypeHistogram: map[string]int64{}}
-	var totalRaw, decoded int64
+	var totalRaw, decoded, matchedRaw int64
 	start := time.Now()
 	loopErr := forEachRawDecoded(ctx, st, dispatcher, decodeRawOptions{
 		Protocol: req.Protocol,
@@ -345,6 +345,9 @@ func (s *pipelineService) TestPlugin(ctx context.Context, req capturecontrol.Tes
 		Limit:    req.Limit,
 	}, func(r rawDecodeResult) {
 		totalRaw++
+		if rawPortMatches(r.Src, r.Dst, int32(meta.Port)) {
+			matchedRaw++
+		}
 		if r.Err != nil {
 			// 只登记不采样：样本统一在末尾按指纹取（见下），否则 sampleLimit 会被
 			// 最先出现的那一种错误占满 —— 恰好是用户最需要区分同类错误的时候。
@@ -361,6 +364,9 @@ func (s *pipelineService) TestPlugin(ctx context.Context, req capturecontrol.Tes
 	})
 	res.TotalRaw, res.Decoded = totalRaw, decoded
 	res.DecodeErrors = errCol.Total()
+	// 会话适用性（P1-1）：不阻塞 test_plugin 采样，仅告知 AI 该会话是否带插件
+	// 要解的流量，便于换会话而不是误判插件。
+	res.Applicability = sessionApplicability(int32(meta.Port), totalRaw, matchedRaw)
 	// 错误样本按指纹去重（每组一条，次数多的在前），包含插件主动报错 —— 这类错误
 	// 过去连日志都是一行带过，现在能在「解码错误样例」里看到原文。
 	res.ErrorSamples = errorSamplesFromGroups(errCol, int(sampleLimit))

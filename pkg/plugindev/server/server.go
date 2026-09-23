@@ -96,6 +96,7 @@ func (s *Server) Activate(ctx context.Context, req *pb.ActivateRequest) (*pb.Act
 		Root:         s.root,
 		Name:         req.GetName(),
 		RegistryAddr: req.GetRegistryAddr(),
+		AuthToken:    req.GetAuthToken(),
 	})
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())

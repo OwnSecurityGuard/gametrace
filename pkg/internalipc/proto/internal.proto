@@ -142,6 +142,7 @@ message TestPluginResponse {
   map<string, int64> type_histogram = 4;   // 事件类型 → 计数（全量）
   repeated TestEventLite sample_events = 5;
   repeated TestErrorLite error_samples = 6;
+  VerifyApplicability applicability = 7;  // 会话/插件适用性判定（不阻塞 test_plugin 采样）
 }
 
 // VerifyRequest 插件验证请求（契约+质量校验）。参数与 TestPlugin 同源：
@@ -178,13 +179,26 @@ message VerifyQuality {
 }
 
 // VerifyResponse 验证结论：violations + quality + verdict，外加溯源字段。
+// VerifyApplicability 会话对该插件的适用性判定（阶段 1：target port + matching
+// count）。不适用（reason=no_raw_packets / no_matching_packets）时
+// VerifyResponse.verdict=not_applicable —— 属于「换会话重试」而非「插件质量差」。
+message VerifyApplicability {
+  bool applicable = 1;        // 会话流量是否命中插件预期的协议流量
+  string reason = 2;          // 判定原因：ok | no_raw_packets | no_matching_packets
+  int32 target_port = 3;      // 会话的服务端端口（判定依据；<=0 表示无端口信息）
+  int64 total_packets = 4;    // 过滤窗口内原始包总数
+  int64 matched_packets = 5;  // 命中 target port 的包数（matching count）
+}
+
+// VerifyResponse 插件验证响应。
 message VerifyResponse {
-  string verdict = 1;                 // pass | warn | fail
+  string verdict = 1;                 // pass | warn | fail | not_applicable
   repeated VerifyViolation violations = 2;
   VerifyQuality quality = 3;
   string verify_run_id = 4;
   string session_id = 5;
   int64 at_unix = 6;
+  VerifyApplicability applicability = 7;
 }
 
 // SampleBytesRequest 取证取样请求。limit/max_bytes 为请求值，服务端封顶

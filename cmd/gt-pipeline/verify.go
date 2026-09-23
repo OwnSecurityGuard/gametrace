@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"net/netip"
 	"time"
 
 	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
@@ -32,8 +33,8 @@ const (
 //
 // 它是 Runtime Plane 的 verify 执行（设计 §1.3 / §7）：拥有真实流量与 registry，
 // 调度解码、产出语料，再交给 quality.Verify 合并 SDK 违规与 gametrace 统计得 verdict。
-// 完成后把 validated 证明回写 Developer Plane 的 Tracker（跨平面；plugindev 在本
-// 进程内嵌，故直接进程内调用），使 plugin.status 的 artifact.state 升到 validated。
+// 完成后把 validated 证明持久化到 plugins/<name>/.gametrace/validation.json
+//（跨平面：Runtime 写、Developer Plane status 读，见 pkg/plugindev/proof.go）。
 func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyRequest) (capturecontrol.VerifyResult, error) {
 	if req.SessionID == "" {
 		return capturecontrol.VerifyResult{}, fmt.Errorf("session_id is required")
@@ -86,12 +87,17 @@ func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyR
 	sem := newSemCollector()
 
 	var corpus []quality.DecodeIO
+	var totalRaw, matchedRaw int64
 	loopErr := forEachRawDecoded(ctx, st, dispatcher, decodeRawOptions{
 		Protocol: req.Protocol,
 		Src:      req.Src,
 		Dst:      req.Dst,
 		Limit:    req.Limit,
 	}, func(r rawDecodeResult) {
+		totalRaw++
+		if rawPortMatches(r.Src, r.Dst, int32(meta.Port)) {
+			matchedRaw++
+		}
 		corpus = append(corpus, decodeIOsFromResult(r)...)
 		if manifest != nil {
 			for _, ev := range r.Events {
@@ -112,21 +118,40 @@ func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyR
 	result.Violations = append(result.Violations, sem.violations()...)
 	quality.RecomputeVerdict(result)
 
-	// 跨平面回写：把 validated 证明落到 Developer Plane 的 Tracker。
+	// 会话适用性（P1-1 阶段 1：target port + matching count）：过滤窗口里一个
+	// 命中会话 target port 的包都没有，说明这个会话根本没带插件要解的流量 ——
+	// 属于「换会话重试」而非「插件质量差」，verdict 报 not_applicable。
+	app := sessionApplicability(int32(meta.Port), totalRaw, matchedRaw)
+	if !app.Applicable {
+		result.Verdict = plugindev.VerdictNotApplicable
+	}
+
+	// 跨平面回写：validated 证明必须跨进程可见（Runtime Plane verify 写、
+	// Developer Plane status 读），进程内 Tracker 在 docker 部署（两平面不同
+	// 进程）下会丢，导致 verify pass 后 status 停留 compiled。方案 B：持久化
+	// 到 plugins/<name>/.gametrace/validation.json（两进程共享 <workdir>/plugins）。
+	// 仅 verdict == "pass" 才立证；warn/fail 显式清除旧证明（防旧 pass 残留）。
 	runID := fmt.Sprintf("verify_%d", time.Now().UnixNano())
-	plugindev.DefaultTracker().SetValidated(req.Plugin, &plugindev.ValidatedProof{
-		VerifyRunID: runID,
-		SessionID:   req.SessionID,
-		Verdict:     result.Verdict,
-		At:          time.Now(),
-	})
+	if result.Verdict == "pass" {
+		if perr := plugindev.PersistValidation(s.pluginsDir, req.Plugin, &plugindev.ValidatedProof{
+			VerifyRunID: runID,
+			SessionID:   req.SessionID,
+			Verdict:     result.Verdict,
+			At:          time.Now(),
+		}); perr != nil {
+			logger.Warn("verify: persist validation proof failed", "error", perr)
+		}
+	} else {
+		plugindev.ClearValidation(s.pluginsDir, req.Plugin)
+	}
 	plugindev.RecordVerify(req.Plugin, result)
 
 	out := capturecontrol.VerifyResult{
-		Verdict:     result.Verdict,
-		VerifyRunID: runID,
-		SessionID:   req.SessionID,
-		AtUnix:      time.Now().Unix(),
+		Verdict:       result.Verdict,
+		VerifyRunID:   runID,
+		SessionID:     req.SessionID,
+		AtUnix:        time.Now().Unix(),
+		Applicability: app,
 	}
 	for _, v := range result.Violations {
 		out.Violations = append(out.Violations, capturecontrol.ViolationView{
@@ -152,6 +177,44 @@ func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyR
 	}
 	logger.Info("verify completed", "verdict", out.Verdict, "violations", len(out.Violations), "corpus", len(corpus))
 	return out, nil
+}
+
+// rawPortMatches 判断一个原始包是否命中会话的 target port（meta.Port）：
+// Src/Dst 任一端口等于它即命中（双向流量都算）。port<=0（无端口信息）时视为
+// 全部命中，保持旧行为不误伤。
+func rawPortMatches(src, dst string, port int32) bool {
+	if port <= 0 {
+		return true
+	}
+	for _, s := range []string{src, dst} {
+		if ap, err := netip.ParseAddrPort(s); err == nil && int32(ap.Port()) == port {
+			return true
+		}
+	}
+	return false
+}
+
+// sessionApplicability 汇总 verify/test_plugin 的会话适用性判定（P1-1 阶段 1）。
+// 只做 target port + matching count：窗口里一个命中包都没有就判定不适用，
+// verdict 报 not_applicable（换会话），而不是质量 fail（修插件）。
+// raw packet distribution / protocol 分布等更细的信号留待阶段 2。
+func sessionApplicability(targetPort int32, totalPackets, matchedPackets int64) *capturecontrol.VerifyApplicability {
+	app := &capturecontrol.VerifyApplicability{
+		Applicable:     true,
+		Reason:         "ok",
+		TargetPort:     targetPort,
+		TotalPackets:   totalPackets,
+		MatchedPackets: matchedPackets,
+	}
+	switch {
+	case totalPackets == 0:
+		app.Applicable = false
+		app.Reason = "no_raw_packets"
+	case targetPort > 0 && matchedPackets == 0:
+		app.Applicable = false
+		app.Reason = "no_matching_packets"
+	}
+	return app
 }
 
 // SampleBytes 读取会话原始包的前若干字节（事实：hexdump / 长度直方图 / 首字节分布 /
