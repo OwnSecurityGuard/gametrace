@@ -37,12 +37,8 @@ func TestGetPluginEnvAuthenticatedCaller(t *testing.T) {
 		`"registry_addr":"192.168.31.87:9091"`,
 		`"auth_token":"gt_tok_alice"`,
 		`"token_source":"env"`,
-		`"decoder_addr":"0.0.0.0:61887"`,
-		`"decoder_public_addr":"192.168.31.87:61887"`,
 		"GT_REGISTRY_ADDR=192.168.31.87:9091",
 		"GT_AUTH_TOKEN=gt_tok_alice",
-		"GT_DECODER_ADDR=0.0.0.0:61887",
-		"GT_DECODER_PUBLIC_ADDR=192.168.31.87:61887",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("result missing %s: %s", want, text)
@@ -61,26 +57,13 @@ func TestGetPluginEnvAnonymous(t *testing.T) {
 	}
 }
 
-func TestGetPluginEnvDecoderPortOverride(t *testing.T) {
-	t.Setenv("GT_PUBLIC_HOST", "192.168.31.87")
-	fc := &fakeCaptureClient{dbDir: t.TempDir()}
-	m := &mcpCapture{pipelineClient: fc}
-
-	text := envResultText(t, m, context.Background(), map[string]any{"decoder_port": 61882})
-	if !strings.Contains(text, `"decoder_addr":"0.0.0.0:61882"`) ||
-		!strings.Contains(text, `"decoder_public_addr":"192.168.31.87:61882"`) {
-		t.Errorf("decoder_port override not applied: %s", text)
-	}
-}
-
 func TestGetPluginEnvHostOverride(t *testing.T) {
 	// 不设 GT_PUBLIC_HOST：host 参数（跨机部署时插件所在机器视角）生效
 	fc := &fakeCaptureClient{dbDir: t.TempDir()}
 	m := &mcpCapture{pipelineClient: fc}
 
 	text := envResultText(t, m, context.Background(), map[string]any{"host": "10.0.0.9"})
-	if !strings.Contains(text, `"registry_addr":"10.0.0.9:9091"`) ||
-		!strings.Contains(text, `"decoder_public_addr":"10.0.0.9:61887"`) {
+	if !strings.Contains(text, `"registry_addr":"10.0.0.9:9091"`) {
 		t.Errorf("host override not applied: %s", text)
 	}
 }

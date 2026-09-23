@@ -16,22 +16,23 @@ service PluginRegistry {
   rpc Register(RegisterRequest) returns (RegisterResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
   rpc Deregister(DeregisterRequest) returns (DeregisterResponse);
-  // Connect 仅在 Register(tunnel=true) 后由插件拨出：
-  // 主程序经此双向流把 DecodeRequest 以帧形式转发给插件，
-  // 插件用 TunnelFrame 应答，替代对 socket_path 的直接回拨。
+  // Connect 由注册成功的插件拨出：主程序经此双向流把 DecodeRequest 以帧形式
+  // 转发给插件，插件用 TunnelFrame 应答。这是唯一的解码通道——主程序不回拨插件。
   rpc Connect(stream TunnelFrame) returns (stream TunnelFrame);
 }
 
-// Decoder 由插件实现，主程序按需拨号调用 DecodeV2。
+// Decoder 是解码服务的逻辑接口：插件侧由 SDK 实现，注册后经 Connect 隧道暴露，
+// 主程序不再直接拨号插件的任何本地端点。
 service Decoder {
   // DecodeV2 是新版解码接口，返回结构化的 EventV2 数据
   rpc DecodeV2(stream DecodeRequest) returns (stream DecodeResponseV2);
 }
 
 message RegisterRequest {
-  string socket_path = 1;   // 插件 DecodeV2 RPC 监听的 socket 路径（tunnel=true 时可留空）
-  bytes  manifest    = 2;   // plugin.yaml 原文（主程序 parse）
-  bool   tunnel      = 3;   // true = 走反向隧道（Connect 流），主程序跳过对 socket_path 的回拨
+  // 1, 3 曾为 socket_path 与 tunnel。宿主统一按隧道处理、不再回拨，
+  // 插件也没有可上报的本地端点；字段编号保留防止被误复用。
+  reserved 1, 3;
+  bytes manifest = 2; // plugin.yaml 原文（主程序 parse）
 }
 
 message RegisterResponse {

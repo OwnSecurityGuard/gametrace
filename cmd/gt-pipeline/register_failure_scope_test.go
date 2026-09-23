@@ -9,13 +9,15 @@ import (
 	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
-const scopeManifest = "api_version: gt.decoder/v2\nname: scope-decoder\nprotocol: tcp\ntype: decoder\n"
-
-func failRegister(s *pipelineService, ctx context.Context, socketPath string) {
+// failRegister 制造一次注册被拒。宿主已不再拨号插件，注册失败只可能来自
+// manifest / 契约校验：这里用一份缺 type 的 manifest。name 参与失败去重键，
+// 因此不同调用要传不同的 name，否则第二次会被去重窗口吞掉。
+func failRegister(s *pipelineService, ctx context.Context, name string) {
+	manifest := "api_version: gt.decoder/v2\nname: " + name + "\nprotocol: tcp\n"
 	if _, err := s.registry.Register(ctx, &pb.RegisterRequest{
-		SocketPath: socketPath, Manifest: []byte(scopeManifest),
+		Manifest: []byte(manifest),
 	}); err == nil {
-		panic("register should fail: " + socketPath)
+		panic("register should fail: " + name)
 	}
 }
 
@@ -23,8 +25,8 @@ func failRegister(s *pipelineService, ctx context.Context, socketPath string) {
 func TestListRegisterFailuresOwnerScope(t *testing.T) {
 	s := &pipelineService{registry: plugin.NewRegistryServer(10)}
 	failRegister(s, auth.WithPrincipal(context.Background(), &auth.Principal{Owner: "bob"}),
-		"unix:/nonexistent/bob.sock")
-	failRegister(s, context.Background(), "unix:/nonexistent/anon.sock")
+		"scope-decoder-bob")
+	failRegister(s, context.Background(), "scope-decoder-anon")
 
 	// alice 非 admin：只见匿名
 	got, err := s.ListRegisterFailures(auth.WithPrincipal(context.Background(), &auth.Principal{Owner: "alice"}))

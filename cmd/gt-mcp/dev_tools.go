@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -247,31 +245,17 @@ func (m *mcpCapture) handleGetPluginEnv(ctx context.Context, req mcp.CallToolReq
 	}
 	registry, _, _ := m.advertisedAddrs(ctx, req.GetString("host", ""))
 
-	port := 61887
-	if p := req.GetInt("decoder_port", 0); p > 0 && p < 65536 {
-		port = p
-	}
-	regHost, _, err := net.SplitHostPort(registry)
-	if err != nil {
-		return errorResult(fmt.Errorf("parse registry addr %q: %w", registry, err)), nil
-	}
-	decoderAddr := net.JoinHostPort("0.0.0.0", strconv.Itoa(port))
-	publicAddr := net.JoinHostPort(regHost, strconv.Itoa(port))
-
 	token, src := m.callerToken(ctx)
 
 	return successResult(map[string]any{
 		"registry_addr":       registry,
 		"auth_token":          token,
 		"token_source":        src,
-		"decoder_addr":        decoderAddr,
-		"decoder_public_addr": publicAddr,
-		"env_file":            buildPluginEnvFile(registry, token, decoderAddr, publicAddr),
+		"env_file":            buildPluginEnvFile(registry, token),
 		"notes": []string{
 			"GT_REGISTRY_ADDR: 插件注册端点，原样使用",
 			"GT_AUTH_TOKEN: 调用者自己的注册 token（agent 托管 GT_TUNNEL=1 时平台自动注入，可留空）",
 			"GT_TUNNEL: 平台统一以隧道模式运行（activate_plugin 与 gt-agent 都会注入 1）；插件不起本地端口、宿主不回拨，注册/心跳/解码帧共用 GT_REGISTRY_ADDR 这一条连接",
-			"GT_DECODER_ADDR / GT_DECODER_PUBLIC_ADDR: 仅非隧道回退模式使用；隧道下宿主不回拨，它们不参与连接，注册失败时不要去调这两个值",
 			"把 env_file 原样写入插件目录 .env；不要把 .env 提交到 git",
 		},
 	}), nil
@@ -340,14 +324,12 @@ func (m *mcpCapture) serviceToken() string {
 }
 
 // buildPluginEnvFile 生成可直接写入 .env 的文本（含注释）。
-func buildPluginEnvFile(registryAddr, token, decoderAddr, publicAddr string) string {
+func buildPluginEnvFile(registryAddr, token string) string {
 	var b strings.Builder
 	b.WriteString("# 由 gametrace get_plugin_env 生成 —— 复制为 .env，无需手填\n")
 	b.WriteString("# 同名环境变量优先于本文件；不要把 .env 提交到 git\n")
 	fmt.Fprintf(&b, "GT_REGISTRY_ADDR=%s\n", registryAddr)
 	fmt.Fprintf(&b, "GT_AUTH_TOKEN=%s\n", token)
-	fmt.Fprintf(&b, "GT_DECODER_ADDR=%s\n", decoderAddr)
-	fmt.Fprintf(&b, "GT_DECODER_PUBLIC_ADDR=%s\n", publicAddr)
 	return b.String()
 }
 
@@ -425,17 +407,12 @@ func (m *mcpCapture) handleStatusPlugin(ctx context.Context, req mcp.CallToolReq
 		"next_action":  next,
 	}
 	// 注册失败（Runtime Plane ring buffer）：命中同名失败时并入。
-	// 隧道模式下宿主不回拨，失败原因不是 Decode 地址（GT_DECODER_PUBLIC_ADDR），
-	// 而是注册/建流本身（token、registry 地址、缺 instance_id 被拒流等）。
+	// 平台只支持隧道注册，宿主不回拨；失败原因是注册/建流本身
+	// （token、registry 地址、缺 instance_id 被拒流等），与 Decode 地址无关。
 	if f := m.latestRegisterFailure(ctx, name); f != nil {
 		out["register_failure"] = f
 		if runtimeState == "offline" {
-			errText, _ := f["error"].(string)
-			if strings.Contains(errText, "dial plugin socket") {
-				out["next_action"] = "注册失败：平台拨不通插件 Decode 地址（见 register_failure.error，含来源 IP 建议值）——这是非隧道回退模式；修正 .env 的 GT_DECODER_PUBLIC_ADDR 后重新 activate_plugin"
-			} else {
-				out["next_action"] = "注册失败（隧道模式，宿主不回拨，与 GT_DECODER_PUBLIC_ADDR 无关）：核对 .env 的 GT_REGISTRY_ADDR 与 GT_AUTH_TOKEN；若插件用旧 SDK 编译（Connect 未带 instance_id）会被拒流，用当前 SDK 重新 build_plugin 后 activate_plugin"
-			}
+			out["next_action"] = "注册失败（隧道模式，宿主不回拨）：核对 .env 的 GT_REGISTRY_ADDR 与 GT_AUTH_TOKEN；若插件用旧 SDK 编译（Connect 未带 instance_id）会被拒流，用当前 SDK 重新 build_plugin 后 activate_plugin"
 		}
 	}
 	return successResult(out), nil
@@ -470,7 +447,7 @@ func (m *mcpCapture) latestRegisterFailure(ctx context.Context, name string) map
 	for _, f := range resp.GetRecentFailures() {
 		if f.GetName() == name {
 			return map[string]any{
-				"socket_path":    f.GetSocketPath(),
+				"name":           f.GetName(),
 				"error":          f.GetError(),
 				"owner":          f.GetOwner(),
 				"timestamp_unix": f.GetTimestampUnix(),

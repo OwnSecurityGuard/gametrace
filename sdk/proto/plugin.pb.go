@@ -32,9 +32,7 @@ const (
 
 type RegisterRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	SocketPath    string                 `protobuf:"bytes,1,opt,name=socket_path,json=socketPath,proto3" json:"socket_path,omitempty"` // 插件 DecodeV2 RPC 监听的 socket 路径（tunnel=true 时可留空）
-	Manifest      []byte                 `protobuf:"bytes,2,opt,name=manifest,proto3" json:"manifest,omitempty"`                       // plugin.yaml 原文（主程序 parse）
-	Tunnel        bool                   `protobuf:"varint,3,opt,name=tunnel,proto3" json:"tunnel,omitempty"`                          // true = 走反向隧道（Connect 流），主程序跳过对 socket_path 的回拨
+	Manifest      []byte                 `protobuf:"bytes,2,opt,name=manifest,proto3" json:"manifest,omitempty"` // plugin.yaml 原文（主程序 parse）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -69,25 +67,11 @@ func (*RegisterRequest) Descriptor() ([]byte, []int) {
 	return file_proto_plugin_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *RegisterRequest) GetSocketPath() string {
-	if x != nil {
-		return x.SocketPath
-	}
-	return ""
-}
-
 func (x *RegisterRequest) GetManifest() []byte {
 	if x != nil {
 		return x.Manifest
 	}
 	return nil
-}
-
-func (x *RegisterRequest) GetTunnel() bool {
-	if x != nil {
-		return x.Tunnel
-	}
-	return false
 }
 
 type RegisterResponse struct {
@@ -772,12 +756,9 @@ var File_proto_plugin_proto protoreflect.FileDescriptor
 
 const file_proto_plugin_proto_rawDesc = "" +
 	"\n" +
-	"\x12proto/plugin.proto\x12\x06plugin\"f\n" +
-	"\x0fRegisterRequest\x12\x1f\n" +
-	"\vsocket_path\x18\x01 \x01(\tR\n" +
-	"socketPath\x12\x1a\n" +
-	"\bmanifest\x18\x02 \x01(\fR\bmanifest\x12\x16\n" +
-	"\x06tunnel\x18\x03 \x01(\bR\x06tunnel\"i\n" +
+	"\x12proto/plugin.proto\x12\x06plugin\"9\n" +
+	"\x0fRegisterRequest\x12\x1a\n" +
+	"\bmanifest\x18\x02 \x01(\fR\bmanifestJ\x04\b\x01\x10\x02J\x04\b\x03\x10\x04\"i\n" +
 	"\x10RegisterResponse\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x124\n" +

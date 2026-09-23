@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 	"gametrace/pkg/auth"
 	"gametrace/pkg/capture/agent"
 	"gametrace/pkg/internalipc/capturecontrol"
@@ -101,14 +100,14 @@ schemas:
     fields:
       hp: { type: uint32 }
 `
-	sock, stop := startFakeDecoderMain(t)
-	defer stop()
-	if _, err := s.registry.Register(
+	// 平台只支持隧道注册：测试用内存 Connect 流把桩解码器挂到注册表。
+	_, stop, err := s.registry.RegisterInProcessTunnel(
 		auth.WithPrincipal(context.Background(), &auth.Principal{Owner: "alice"}),
-		&pb.RegisterRequest{SocketPath: sock, Manifest: []byte(manifest)},
-	); err != nil {
+		[]byte(manifest), fakeDecoderServerMain{})
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer stop()
 
 	// alice 自己：可见
 	if _, err := s.GetPluginManifest(

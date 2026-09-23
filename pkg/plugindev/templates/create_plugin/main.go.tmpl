@@ -14,15 +14,10 @@ import (
 func main() {
 	// 平台统一以隧道模式运行：gt-agent 托管与 Developer Plane activate_plugin
 	// 都会注入 GT_TUNNEL=1 / GT_AUTH_TOKEN，插件不起本地端口、宿主不回拨，
-	// 注册/心跳/解码帧共用同一条到 registry 的连接。
-	// 未设置 GT_TUNNEL 时 opts 取零值，退化为本地监听 + 宿主回拨（遗留路径）。
-	//
-	// 隧道与非隧道都必须带 token：两种模式只是「谁拨谁」不同，Register 走的是
-	// 同一条鉴权链路。曾在这里写成「仅隧道分支传 opts、否则走 RunRegisterLoop」，
-	// 导致本地直连插件的 GT_AUTH_TOKEN 被丢弃，在开启鉴权的 pipeline
-	// （GT_AUTH_TOKENS 非空）上必然注册失败。
+	// 注册/心跳/解码帧共用同一条到 registry 的连接——插件在 NAT / 容器 / 手机
+	// 后面也能直接接入，不需要任何入站端口。
+	// 仅显式传入鉴权 token；GT_TUNNEL 由运行方注入，代码只透传不判断。
 	sdk.RunRegisterLoopWithOptions(dec.decodePacket, sdk.RegisterOptions{
-		Tunnel:    os.Getenv("GT_TUNNEL") != "",
 		AuthToken: os.Getenv("GT_AUTH_TOKEN"),
 	})
 }

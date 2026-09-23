@@ -3,24 +3,14 @@ package plugin
 import (
 	"context"
 	"testing"
-
-	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
-// regShared 按指定 owner 注册一个共享名插件（非隧道，注册即在线）。
-// Register 会做 Decode 地址可达性探测，因此每次注册用独立的真实监听 socket。
-func regShared(t *testing.T, s *RegistryServer, owner string) string {
+// regShared 按指定 owner 注册一个共享名插件（隧道模式，绑定即在线）。
+// 返回 instance_id 与停止函数；调用方须在测试结束前 defer stop，否则隧道断开
+// 插件会判离线（不能像旧 startFakeDecoder 那样在 helper 内 defer stop）。
+func regShared(t *testing.T, s *RegistryServer, owner string) (string, func()) {
 	t.Helper()
-	sock, stop := startFakeDecoder(t)
-	defer stop()
-	resp, err := s.Register(ownerCtx(owner), &pb.RegisterRequest{
-		SocketPath: sock,
-		Manifest:   []byte(sharedManifest),
-	})
-	if err != nil {
-		t.Fatalf("register(owner=%s): %v", owner, err)
-	}
-	return resp.GetInstanceId()
+	return registerFakeDecoder(t, s, ownerCtx(owner), []byte(sharedManifest))
 }
 
 // TestFindByNameAmong 覆盖项目成员共用项目插件的多 owner 解析语义：
@@ -34,8 +24,12 @@ func TestFindByNameAmong(t *testing.T) {
 	s := NewRegistryServer(10)
 	defer s.Close()
 
-	regShared(t, s, "alice") // alice/shared-decoder
-	regShared(t, s, "bob")   // bob/shared-decoder
+	aliceID, aliceStop := regShared(t, s, "alice") // alice/shared-decoder
+	defer aliceStop()
+	bobID, bobStop := regShared(t, s, "bob") // bob/shared-decoder
+	defer bobStop()
+	_ = aliceID
+	_ = bobID
 
 	// 1) 会话 owner 优先：carol 自己没有 → 命中白名单第一个 owner（alice）
 	c, ok := s.FindByNameAmong([]string{"carol", "alice", "bob"}, "shared-decoder")
@@ -56,29 +50,22 @@ func TestFindByNameAmong(t *testing.T) {
 	}
 
 	// 3) 匿名（系统）插件恒可见
-	sysSock, stopSys := startFakeDecoder(t)
+	sysID, stopSys := registerFakeDecoder(t, s, context.Background(), []byte(sharedManifest))
 	defer stopSys()
-	if _, err := s.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: sysSock,
-		Manifest:   []byte(sharedManifest),
-	}); err != nil {
-		t.Fatal(err)
+	if _, ok := s.FindByNameAmong(nil, "shared-decoder"); !ok {
+		t.Fatal("anonymous/shared-decoder must be visible with empty owners")
 	}
 	// 系统插件键是裸名；上面的 owner 键都在它前面。用不同的名字注册系统插件验证可见性。
-	sysSock2, stopSys2 := startFakeDecoder(t)
-	defer stopSys2()
-	if _, err := s.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: sysSock2,
-		Manifest: []byte(`api_version: gt.decoder/v2
+	sysID2, stopSys2 := registerFakeDecoder(t, s, context.Background(), []byte(`api_version: gt.decoder/v2
 name: sys-decoder
 protocol: test_proto
 type: decoder
 hints:
   - tcp
-`),
-	}); err != nil {
-		t.Fatal(err)
-	}
+`))
+	defer stopSys2()
+	_ = sysID
+	_ = sysID2
 	if _, ok := s.FindByNameAmong(nil, "sys-decoder"); !ok {
 		t.Fatal("anonymous/system plugin must be visible with empty owners")
 	}
@@ -106,8 +93,12 @@ func TestFindByNameAmong_OfflineSkipped(t *testing.T) {
 	s := NewRegistryServer(10)
 	defer s.Close()
 
-	regShared(t, s, "alice") // alice/shared-decoder（会离线）
-	regShared(t, s, "bob")   // bob/shared-decoder（保持在线）
+	aliceID, aliceStop := regShared(t, s, "alice") // alice/shared-decoder（会离线）
+	defer aliceStop()
+	bobID, bobStop := regShared(t, s, "bob") // bob/shared-decoder（保持在线）
+	defer bobStop()
+	_ = aliceID
+	_ = bobID
 
 	// 把 alice 的实例置为离线
 	s.mu.RLock()

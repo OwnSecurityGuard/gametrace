@@ -19,19 +19,14 @@ import (
 // （等待会阻塞 runTunnel 的收包主循环，见 handleRequest）。
 const tunnelReqQueueSize = 64
 
-// RegisterOptions 是注册行为的可选项，全部为零值时行为与旧版完全一致。
+// RegisterOptions 是注册行为的可选项；零值表示匿名注册（平台未开启鉴权时的用法）。
 type RegisterOptions struct {
-	// Tunnel 为 true 时走反向隧道模式：Register(tunnel=true) 成功后，
-	// 插件在同一连接上打开 Connect 双向流，DecodeV2 经隧道帧完成，
-	// 宿主不再回拨 socket_path（此时也不需要启动本地 Decoder server）。
-	Tunnel bool
-
 	// AuthToken 非空时，注册/心跳/隧道请求附带
 	// `authorization: Bearer <token>` gRPC metadata。
 	AuthToken string
 }
 
-// RunRegisterLoop 是插件 main 的标准入口（非隧道模式，保持原有行为）。
+// RunRegisterLoop 是插件 main 的标准入口（匿名注册）。
 func RunRegisterLoop(decodeFuncV2 DecodeFuncV2) {
 	RunRegisterLoopWithOptions(decodeFuncV2, RegisterOptions{})
 }
@@ -129,7 +124,7 @@ func (s *tunnelStream) SetTrailer(metadata.MD)       {}
 
 // tunnelMux 把一条 Connect 双向流多路分解为若干逻辑 DecodeV2 流。
 type tunnelMux struct {
-	decoder  *Decoder
+	decoder  pb.DecoderServer
 	stream   pb.PluginRegistry_ConnectClient
 	sendMu   sync.Mutex // 保护 stream.Send 的并发访问
 	mu       sync.Mutex
@@ -139,8 +134,12 @@ type tunnelMux struct {
 	closeAll context.CancelFunc
 }
 
-// runTunnel 在一条 Connect 流上服务解码请求，直到流断开或 ctx 取消。
-func runTunnel(ctx context.Context, stream pb.PluginRegistry_ConnectClient, decoder *Decoder) error {
+// ServeTunnel 在一条 Connect 流上服务解码请求，直到流断开或 ctx 取消。
+//
+// 通常由 RunRegisterLoopWithOptions 调用（流来自真实 registry 连接）。导出版本
+// 供宿主侧的同进程用途使用：模拟器 / 集成测试可把任意 pb.DecoderServer 挂到
+// 一条内存 Connect 流上，无需真实网络端点。
+func ServeTunnel(ctx context.Context, stream pb.PluginRegistry_ConnectClient, decoder pb.DecoderServer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	m := &tunnelMux{
 		decoder:  decoder,

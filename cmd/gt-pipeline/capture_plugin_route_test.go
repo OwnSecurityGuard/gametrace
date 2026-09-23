@@ -2,9 +2,6 @@ package main
 
 import (
 	"context"
-	"net"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"gametrace/pkg/plugin"
@@ -13,7 +10,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-// fakeDecoderServerMain 是最小化的 Decoder gRPC 服务桩，仅用于让 Register 完成可达性拨号。
+// fakeDecoderServerMain 是最小化的解码器桩，经内存隧道挂在注册表上。
 type fakeDecoderServerMain struct {
 	pb.UnimplementedDecoderServer
 }
@@ -22,52 +19,27 @@ func (fakeDecoderServerMain) DecodeV2(stream grpc.BidiStreamingServer[pb.DecodeR
 	return nil
 }
 
-// startFakeDecoderMain 启动一个监听 unix socket 的 Decoder 服务，返回 socket 路径与停止函数。
-func startFakeDecoderMain(t *testing.T) (string, func()) {
-	t.Helper()
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "decoder.sock")
-	_ = os.Remove(sock)
-	lis, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatalf("listen unix socket: %v", err)
-	}
-	srv := grpc.NewServer()
-	pb.RegisterDecoderServer(srv, fakeDecoderServerMain{})
-	go func() { _ = srv.Serve(lis) }()
-	stop := func() {
-		srv.Stop()
-		_ = os.Remove(sock)
-	}
-	return sock, stop
-}
-
 // registerFakePlugin 向注册表注册一个具名解码插件（protocol 固定 tcp，便于验证按名区分）。
-func registerFakePlugin(t *testing.T, s *plugin.RegistryServer, name, sock string) {
+// 平台只支持隧道注册，测试与本进程内注册表之间用内存 Connect 流（无需 socket）。
+func registerFakePlugin(t *testing.T, s *plugin.RegistryServer, name string) func() {
 	t.Helper()
 	// api_version 必须是 v2：manager 的 CheckManifestVersion 要求 major 与
 	// ProtocolVersion 一致，写 v1 会在 Register 阶段直接被拒。
 	manifest := "api_version: gt.decoder/v2\nname: " + name + "\nprotocol: tcp\ntype: decoder\n"
-	if _, err := s.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: sock,
-		Manifest:   []byte(manifest),
-	}); err != nil {
+	_, stop, err := s.RegisterInProcessTunnel(context.Background(), []byte(manifest), fakeDecoderServerMain{})
+	if err != nil {
 		t.Fatalf("register %s: %v", name, err)
 	}
+	return stop
 }
 
 // TestCaptureTask_resolveDecoderClient 验证 GAP 2 修复：
 // 会话按 t.plugin 名字精确路由到对应插件，多项目并行互不干扰；
 // 未指定插件名时退化按 tcp 协议 hint；未知名返回 not-found。
 func TestCaptureTask_resolveDecoderClient(t *testing.T) {
-	sockA, stopA := startFakeDecoderMain(t)
-	defer stopA()
-	sockB, stopB := startFakeDecoderMain(t)
-	defer stopB()
-
 	s := plugin.NewRegistryServer(10)
-	registerFakePlugin(t, s, "plugin-a", sockA)
-	registerFakePlugin(t, s, "plugin-b", sockB)
+	defer registerFakePlugin(t, s, "plugin-a")()
+	defer registerFakePlugin(t, s, "plugin-b")()
 
 	// 预取两个插件各自的 client 指针，用于断言"按名精确区分"
 	ca, okA := s.FindByName("plugin-a")

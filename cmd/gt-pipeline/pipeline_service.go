@@ -467,7 +467,6 @@ func (s *pipelineService) ListPlugins(ctx context.Context) ([]capturecontrol.Plu
 			Protocol:      sp.Protocol,
 			Type:          sp.Type,
 			APIVersion:    sp.APIVersion,
-			SocketPath:    sp.SocketPath,
 			Online:        sp.Online,
 			LastHeartbeat: sp.LastHeartbeat,
 			Owner:         sp.Owner,
@@ -562,7 +561,6 @@ func (s *pipelineService) SubscribePlugins(ctx context.Context) (<-chan capturec
 					Name:       ev.Name,
 					Online:     ev.Online,
 					Timestamp:  ev.Timestamp,
-					SocketPath: ev.SocketPath,
 					Error:      ev.Error,
 					Owner:      ev.Owner,
 				}
@@ -596,7 +594,6 @@ func (s *pipelineService) ListRegisterFailures(ctx context.Context) ([]captureco
 		}
 		out = append(out, capturecontrol.RegisterFailure{
 			Name:       f.Name,
-			SocketPath: f.SocketPath,
 			Error:      f.Error,
 			Owner:      f.Owner,
 			Timestamp:  f.Timestamp,

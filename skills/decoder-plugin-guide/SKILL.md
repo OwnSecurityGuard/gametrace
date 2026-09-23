@@ -54,7 +54,7 @@ description: "指引用户或 AI Agent 用 Go 编写解码插件（gt.decoder/v2
 
 ### 0.4 插件运行的两条路
 
-- **本机 Developer Plane 托管**：`build_plugin` → `get_plugin_env` → 写 `.env` → `activate_plugin`。activate 成功 ≠ 接入完成；返回里 `registered + online + manifest_present` 全真（`integrated=true`）才算。`integrated=false` 才进入 `status_plugin` → `explain_plugin` 诊断；注册失败带地址类提示时优先检查 `.env` 的 `GT_DECODER_PUBLIC_ADDR`。
+- **本机 Developer Plane 托管**：`build_plugin` → `get_plugin_env` → 写 `.env` → `activate_plugin`。activate 成功 ≠ 接入完成；返回里 `registered + online + manifest_present` 全真（`integrated=true`）才算。`integrated=false` 才进入 `status_plugin` → `explain_plugin` 诊断。
 - **远程机器运行**：`activate_plugin` 只管理 Developer Plane 自己启动的本地进程。远程插件 = 本地写码构建 → 部署到远端 → `get_plugin_env(host=远端可达地址)` → 远端自行启动 → `list_registered_plugins` / `get_plugin_manifest` 确认注册。不要把本地 activate 当远程启动器。
 
 ### 0.5 验证分两层（关键：哪些工具不落库）
@@ -93,8 +93,6 @@ description: "指引用户或 AI Agent 用 Go 编写解码插件（gt.decoder/v2
 | `GT_REGISTRY_ADDR` | registry 端点（注册 + 心跳 + 隧道帧都走它） | **自动**：`get_plugin_env` 的 `registry_addr` |
 | `GT_TUNNEL` | 非空即隧道模式；由**运行方**注入 | `activate_plugin` / gt-agent 注入 `1`，插件代码只读透传 |
 | `GT_AUTH_TOKEN` | 注册鉴权 Bearer token | **自动**：`get_plugin_env` 返回调用者自己的 token；agent 托管下平台自动注入，可留空 |
-| `GT_DECODER_ADDR` | 解码器本地监听地址 | **仅非隧道回退模式需要**；隧道下宿主不回拨，设了也不参与连接 |
-| `GT_DECODER_PUBLIC_ADDR` | 注册时上报、宿主回拨的地址 | **仅非隧道回退模式需要**；同上 |
 
 确认步骤：
 
@@ -114,9 +112,6 @@ description: "指引用户或 AI Agent 用 Go 编写解码插件（gt.decoder/v2
 GT_REGISTRY_ADDR=<get_plugin_env 的 registry_addr>
 GT_AUTH_TOKEN=<get_plugin_env 的 auth_token；agent 托管 GT_TUNNEL 下可留空>
 GT_TUNNEL=1                     # 由运行方注入；activate_plugin / gt-agent 都会注入
-# 以下两项仅非隧道回退模式需要，隧道下不参与连接：
-# GT_DECODER_ADDR=0.0.0.0:61887
-# GT_DECODER_PUBLIC_ADDR=<registry_addr 的 host 段>:61887
 ```
 
 > 提醒：`.env` 含用户 token，**不提交 git**——`create_plugin` 不生成 `.gitignore`，Agent 自行创建（内容一行 `.env`），不要省略。
@@ -239,12 +234,10 @@ func main() {
 	loadDotEnv(".env")
 
 	d := newDecoder()
-	// GT_REGISTRY_ADDR 由 SDK 原生读取（隧道模式下注册/心跳/解码帧都走它）；
-	// GT_DECODER_ADDR / GT_DECODER_PUBLIC_ADDR 仅非隧道回退模式用到。
-	// 这里只需显式传入鉴权 token 与隧道开关。模式由运行方决定：
+	// GT_REGISTRY_ADDR 由 SDK 原生读取（隧道模式下注册/心跳/解码帧都走它）。
+	// 这里只需显式传入鉴权 token；平台统一以隧道模式运行：
 	// activate_plugin 与 gt-agent 都会注入 GT_TUNNEL=1，代码只透传不判断。
 	sdk.RunRegisterLoopWithOptions(d.decodePacket, sdk.RegisterOptions{
-		Tunnel:    os.Getenv("GT_TUNNEL") != "",
 		AuthToken: os.Getenv("GT_AUTH_TOKEN"),
 	})
 }

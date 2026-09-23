@@ -86,8 +86,7 @@ type pluginEventJSON struct {
 	Name       string `json:"name"`
 	Online     bool   `json:"online"`
 	Timestamp  int64  `json:"timestamp_unix"`
-	SocketPath string `json:"socket_path,omitempty"` // register_failed：尝试拨号的地址
-	Error      string `json:"error,omitempty"`       // register_failed：拨号错误与诊断建议
+	Error      string `json:"error,omitempty"`       // register_failed：注册被拒原因
 	Owner      string `json:"owner,omitempty"`       // register_failed：订阅侧过滤用
 }
 
@@ -883,7 +882,6 @@ func (m *mcpCapture) handleListRegisteredPlugins(ctx context.Context, req mcp.Ca
 			"protocol":       p.GetProtocol(),
 			"type":           p.GetType(),
 			"api_version":    p.GetApiVersion(),
-			"socket_path":    p.GetSocketPath(),
 			"online":         p.GetOnline(),
 			"last_heartbeat": p.GetLastHeartbeatUnix(),
 			"owner":          p.GetOwner(),
@@ -902,7 +900,6 @@ func (m *mcpCapture) handleListRegisteredPlugins(ctx context.Context, req mcp.Ca
 	for _, f := range resp.GetRecentFailures() {
 		failures = append(failures, map[string]any{
 			"name":           f.GetName(),
-			"socket_path":    f.GetSocketPath(),
 			"error":          f.GetError(),
 			"owner":          f.GetOwner(),
 			"timestamp_unix": f.GetTimestampUnix(),
@@ -2162,7 +2159,6 @@ func (m *mcpCapture) startPluginEventWatcher() {
 					Name:       ev.GetName(),
 					Online:     ev.GetOnline(),
 					Timestamp:  ev.GetTimestampUnix(),
-					SocketPath: ev.GetSocketPath(),
 					Error:      ev.GetError(),
 					Owner:      ev.GetOwner(),
 				})
@@ -2650,9 +2646,8 @@ func main() {
 	), capture.handleGetRegistryAddr)
 
 	s.AddTool(mcp.NewTool("get_plugin_env",
-		mcp.WithDescription("Return the complete .env for a decoder plugin: GT_REGISTRY_ADDR/GT_AUTH_TOKEN/GT_DECODER_ADDR/GT_DECODER_PUBLIC_ADDR plus a ready-to-write env_file block. The token is the caller's own registration token (anonymous mode returns empty). Scaffold a plugin, call this once, write env_file to .env — zero manual fill. Note: the platform runs plugins in tunnel mode (GT_TUNNEL=1 is injected by activate_plugin and by gt-agent); the host never dials back, so GT_DECODER_ADDR/GT_DECODER_PUBLIC_ADDR belong to the legacy non-tunnel fallback and must not be tuned when debugging a tunnel plugin."),
+		mcp.WithDescription("Return the complete .env for a decoder plugin: GT_REGISTRY_ADDR/GT_AUTH_TOKEN plus a ready-to-write env_file block. The token is the caller's own registration token (anonymous mode returns empty). Scaffold a plugin, call this once, write env_file to .env — zero manual fill. The platform runs plugins in tunnel mode (GT_TUNNEL=1 is injected by activate_plugin and by gt-agent); the host never dials back, so there is no decoder listen port to configure."),
 		mcp.WithString("host", mcp.Description("Explicit externally reachable host, same semantics as get_registry_addr (used when the plugin runs on a different machine than this caller)")),
-		mcp.WithNumber("decoder_port", mcp.Description("Decoder listen port, default 61887")),
 	), capture.handleGetPluginEnv)
 
 	s.AddTool(mcp.NewTool("get_agent_download_options",

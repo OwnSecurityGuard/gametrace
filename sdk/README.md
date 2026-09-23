@@ -103,17 +103,14 @@ SDK 侧当前承载语义契约层：
 `_state_changes` 是分析载荷的保留键：宿主经 `event.ExtractStateChanges` 投影到
 `state_changes` 表，是实体/状态变更分析的唯一输入。
 
-## 注册与解码端点
+## 注册与解码通道
 
-`RunRegisterLoopWithOptions(decodeFuncV2, opts)` 支持两种注册模式
-（默认与 `RunRegisterLoop` 完全一致）：
-
-- **标准模式**：启动本地 DecodeV2 gRPC server，注册后上报拨号地址，宿主回拨；
-- **隧道模式**（`opts.Tunnel=true`）：跳过本地监听，`Register(tunnel=true)` 后在同一连接上
-  打开 `Connect` 双向流，DecodeV2 经隧道帧完成，宿主不回拨。建流时插件把 Register 返回的
-  `instance_id` 放入 metadata（`sdk.TunnelInstanceIDKey`），宿主据此精确绑定，不按到达顺序
-  猜测配对；**隧道期间心跳照发**——TCP 半开时流的 `Recv` 不会报错，心跳是唯一的应用层探测。
-  设置 `opts.AuthToken` 后所有 RPC 附带 `authorization: Bearer <token>` metadata。
+`RunRegisterLoopWithOptions(decodeFuncV2, opts)` **以隧道模式注册**（平台唯一的运行方式）：
+插件不起本地监听，`Register` 后在同一条连接上打开 `Connect` 双向流，DecodeV2 经隧道帧完成，
+宿主不回拨。建流时插件把 Register 返回的 `instance_id` 放入 metadata
+（`sdk.TunnelInstanceIDKey`），宿主据此精确绑定，不按到达顺序猜测配对；**隧道期间心跳照发**
+——TCP 半开时流的 `Recv` 不会报错，心跳是唯一的应用层探测。设置 `opts.AuthToken` 后所有 RPC
+附带 `authorization: Bearer <token>` metadata。
 
 注册端点发现顺序：`GT_REGISTRY_ADDR` 环境变量 > `--registry=` 参数 > 默认 `:9091`。
 注册端点支持 TCP、Unix socket（`unix:` 或裸路径）与 Windows 命名管道（`npipe:`）。
@@ -122,53 +119,24 @@ SDK 侧当前承载语义契约层：
 
 ## 环境变量速查
 
-插件与宿主之间能否正确连接、解码，取决于下面三个环境变量——漏设或设错是"注册了但解码不出事件"最常见的原因：
+插件能否接入只取决于两个环境变量——漏设 `GT_REGISTRY_ADDR` 是"注册不上 / 解码不出事件"最常见的原因：
 
 | 环境变量 | 作用 | 典型值 |
 |---|---|---|
 | `GT_REGISTRY_ADDR` | 宿主 registry 的监听地址，插件据此注册（发现顺序最高） | `127.0.0.1:19091` |
-| `GT_TUNNEL` | 非空即隧道模式。由**运行方**注入（gt-agent / `activate_plugin` 都注入 `1`），插件代码只透传不判断 | `1` |
-| `GT_DECODER_ADDR` | 插件 DecodeV2 的监听地址；不设则监听 `:0` 随机端口。**仅标准（非隧道）回退模式需要** | `0.0.0.0:61888` |
-| `GT_DECODER_PUBLIC_ADDR` | 上报给宿主回连的地址（宿主侧必须能拨到）；不设则自动取监听地址，通配符替换为本机非回环 IPv4。**仅标准（非隧道）回退模式需要**——隧道下宿主不回拨，设了也不参与连接 | `192.168.31.87:61888` |
+| `GT_TUNNEL` | 隧道模式标记。由**运行方**注入（gt-agent / `activate_plugin` 都注入 `1`），插件代码只透传不判断 | `1` |
+| `GT_AUTH_TOKEN` | 注册鉴权 Bearer token（平台未开鉴权时可留空） | `gt_tok_xxx` |
 
-> **以下「回连地址」整节只适用于标准（非隧道）回退模式。** 平台统一以隧道模式运行插件：
-> 宿主不回拨，插件不需要任何入站端口，**只需 `GT_REGISTRY_ADDR`（+ `GT_AUTH_TOKEN`）**。
-> 隧道模式下如果发现自己在调 `GT_DECODER_PUBLIC_ADDR`，方向已经错了 —— 那不是故障点。
+平台统一以隧道模式运行插件：宿主不回拨，插件不需要任何入站端口，**只需 `GT_REGISTRY_ADDR`
+（+ `GT_AUTH_TOKEN`）**。原 `GT_DECODER_ADDR` / `GT_DECODER_PUBLIC_ADDR`（本地监听地址与回连
+地址）已随非隧道回退路径整体删除——如果发现自己在配这两个变量，方向已经错了。
 
-本地/同机开发的最简完整配置（标准模式）：
+本地/同机开发的最简完整配置：
 
 ```bash
 export GT_REGISTRY_ADDR=127.0.0.1:19091           # 宿主 registry 端口
-export GT_DECODER_ADDR=0.0.0.0:61888              # 插件监听所有网卡
-export GT_DECODER_PUBLIC_ADDR=192.168.31.87:61888 # 宿主回连地址（本机局域网 IP）
+export GT_AUTH_TOKEN=gt_tok_xxx                   # 平台开启鉴权时必填
 ```
-
-要点：
-
-- `GT_DECODER_PUBLIC_ADDR` 的端口必须与 `GT_DECODER_ADDR` 的实际监听端口一致，否则宿主按上报地址拨号会连不上。
-- 只设 `GT_REGISTRY_ADDR` 也能完成注册（监听随机端口、自动上报本机 IP），但跨机器 / Docker / 多网卡场景下不可靠，务必显式设置全部三个变量。
-- 常见误区：三个变量都设了却用了不同的端口，或 `GT_DECODER_PUBLIC_ADDR` 填成了宿主自己回环都不可达的地址。
-
-## 平台侧部署在 Docker 时的回连地址
-
-插件注册时会向宿主上报自己的 DecodeV2 拨号地址（`Register.socket_path`），宿主随后据此回连插件。SDK 的默认行为：
-
-- 未设置 `GT_DECODER_ADDR`：监听 TCP `:0`（随机端口），上报地址**自动替换为本机首个非回环 IPv4**，而不是通配符地址。
-- 设置了 `GT_DECODER_ADDR=0.0.0.0:port`：同样在上报时自动带上本机 IP。
-
-之所以不能上报通配符（`0.0.0.0` / `[::]`）：当宿主运行在 Docker 容器内时，通配符地址会解析到**容器自身的回环**，容器永远拨不到运行在宿主机上的插件。
-
-当宿主（pipeline/registry）运行在 Docker、插件运行在宿主机时：
-
-- 默认行为即可覆盖绝大多数场景（容器经网桥可达宿主机网卡 IP）；
-- 多网卡 / VPN / 需要走 Docker 网桥网关等场景，用 `GT_DECODER_PUBLIC_ADDR` 显式指定平台侧可达的地址（原样上报，优先级最高）：
-
-```bash
-export GT_DECODER_ADDR=0.0.0.0:19001              # 监听所有网卡
-export GT_DECODER_PUBLIC_ADDR=192.168.1.10:19001  # 上报给宿主的回连地址（容器可达）
-```
-
-Docker Desktop（Mac/Windows）下也可用 `host.docker.internal` 作为容器访问宿主机的地址。
 
 ## 文档
 

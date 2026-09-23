@@ -43,9 +43,8 @@ type PluginRegistryClient interface {
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
 	Deregister(ctx context.Context, in *DeregisterRequest, opts ...grpc.CallOption) (*DeregisterResponse, error)
-	// Connect 仅在 Register(tunnel=true) 后由插件拨出：
-	// 主程序经此双向流把 DecodeRequest 以帧形式转发给插件，
-	// 插件用 TunnelFrame 应答，替代对 socket_path 的直接回拨。
+	// Connect 由注册成功的插件拨出：主程序经此双向流把 DecodeRequest 以帧形式
+	// 转发给插件，插件用 TunnelFrame 应答。这是唯一的解码通道——主程序不回拨插件。
 	Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TunnelFrame, TunnelFrame], error)
 }
 
@@ -109,9 +108,8 @@ type PluginRegistryServer interface {
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
 	Deregister(context.Context, *DeregisterRequest) (*DeregisterResponse, error)
-	// Connect 仅在 Register(tunnel=true) 后由插件拨出：
-	// 主程序经此双向流把 DecodeRequest 以帧形式转发给插件，
-	// 插件用 TunnelFrame 应答，替代对 socket_path 的直接回拨。
+	// Connect 由注册成功的插件拨出：主程序经此双向流把 DecodeRequest 以帧形式
+	// 转发给插件，插件用 TunnelFrame 应答。这是唯一的解码通道——主程序不回拨插件。
 	Connect(grpc.BidiStreamingServer[TunnelFrame, TunnelFrame]) error
 	mustEmbedUnimplementedPluginRegistryServer()
 }
@@ -256,7 +254,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Decoder 由插件实现，主程序按需拨号调用 DecodeV2。
+// Decoder 是解码服务的逻辑接口：插件侧由 SDK 实现，注册后经 Connect 隧道暴露，
+// 主程序不再直接拨号插件的任何本地端点。
 type DecoderClient interface {
 	// DecodeV2 是新版解码接口，返回结构化的 EventV2 数据
 	DecodeV2(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[DecodeRequest, DecodeResponseV2], error)
@@ -287,7 +286,8 @@ type Decoder_DecodeV2Client = grpc.BidiStreamingClient[DecodeRequest, DecodeResp
 // All implementations must embed UnimplementedDecoderServer
 // for forward compatibility.
 //
-// Decoder 由插件实现，主程序按需拨号调用 DecodeV2。
+// Decoder 是解码服务的逻辑接口：插件侧由 SDK 实现，注册后经 Connect 隧道暴露，
+// 主程序不再直接拨号插件的任何本地端点。
 type DecoderServer interface {
 	// DecodeV2 是新版解码接口，返回结构化的 EventV2 数据
 	DecodeV2(grpc.BidiStreamingServer[DecodeRequest, DecodeResponseV2]) error

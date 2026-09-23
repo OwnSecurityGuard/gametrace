@@ -2,46 +2,27 @@ package plugin
 
 import (
 	"context"
-	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"google.golang.org/grpc"
-
 	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
-// fakeDecoderServer 是一个最小化的 Decoder gRPC 服务桩，仅用于让 RegistryServer.Register
-// 完成可达性拨号验证（Register 只建立连接，不实际调用 Decode）。
-type fakeDecoderServer struct {
-	pb.UnimplementedDecoderServer
-}
-
-func (fakeDecoderServer) DecodeV2(stream grpc.BidiStreamingServer[pb.DecodeRequest, pb.DecodeResponseV2]) error {
-	return nil
-}
-
-// startFakeDecoder 启动一个监听 unix socket 的 Decoder 服务，返回 socket 路径与停止函数。
-func startFakeDecoder(t *testing.T) (string, func()) {
+// registerFakeDecoder 把 manifest 注册成隧道插件并绑定一条 noop 隧道，
+// 返回 instance_id 与停止函数。替代已删除的非隧道 startFakeDecoder：
+// 平台现在只认隧道注册，Register 分配 instance_id，再经 Connect 精确绑定才在线。
+// ctx 须携带与 Register 一致的属主（ownerCtx），owner 作用域才一致。
+func registerFakeDecoder(t *testing.T, s *RegistryServer, ctx context.Context, manifest []byte) (string, func()) {
 	t.Helper()
-	dir := t.TempDir()
-	sock := filepath.Join(dir, "decoder.sock")
-	_ = os.Remove(sock)
-	lis, err := net.Listen("unix", sock)
+	resp, err := s.Register(ctx, &pb.RegisterRequest{Manifest: manifest})
 	if err != nil {
-		t.Fatalf("listen unix socket: %v", err)
+		t.Fatalf("register: %v", err)
 	}
-	srv := grpc.NewServer()
-	pb.RegisterDecoderServer(srv, fakeDecoderServer{})
-	go func() { _ = srv.Serve(lis) }()
-	stop := func() {
-		srv.Stop()
-		_ = os.Remove(sock)
-	}
-	return sock, stop
+	p := newTunnelHubPipeFor(ctx, resp.GetInstanceId())
+	go func() { _ = s.tunnelHub.Connect(hubEnd{p}) }()
+	waitTunnelBound(t, s, resp.GetInstanceId())
+	return resp.GetInstanceId(), p.close
 }
 
 const testManifest = `api_version: gt.decoder/v2
@@ -69,8 +50,7 @@ semantic_rules:
 `
 	s := NewRegistryServer(10)
 	_, err := s.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: "unix:/nonexistent/decoder.sock",
-		Manifest:   []byte(bad),
+		Manifest: []byte(bad),
 	})
 	if err == nil {
 		t.Fatal("Register should reject a manifest with an invalid schema field type")
@@ -98,41 +78,21 @@ schemas:
     fields:
       hp: { type: uint32, semantic: health, unit: hp, aggregatable: true }
 `
-	sock, stop := startFakeDecoder(t)
-	defer stop()
 	s := NewRegistryServer(10)
-	resp, err := s.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: sock,
-		Manifest:   []byte(good),
-	})
-	if err != nil {
-		t.Fatalf("valid declaration should pass the semantic check, got: %v", err)
-	}
-	if resp.GetInstanceId() == "" {
-		t.Fatal("expected non-empty instance_id")
-	}
+	_, stop := registerFakeDecoder(t, s, context.Background(), []byte(good))
+	defer stop()
 }
 
 // TestRegistryServer_RegisterAndLifecycle 覆盖 Register 后的完整生命周期：
 // Find（按 protocol / hint / 未知）、Heartbeat、List、CheckOffline、GetPluginManifest、Deregister。
 func TestRegistryServer_RegisterAndLifecycle(t *testing.T) {
-	sock, stop := startFakeDecoder(t)
-	defer stop()
-
 	s := NewRegistryServer(10)
 
-	resp, err := s.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: sock,
-		Manifest:   []byte(testManifest),
-	})
-	if err != nil {
-		t.Fatalf("Register: %v", err)
-	}
-	if resp.InstanceId == "" {
+	id, stop := registerFakeDecoder(t, s, context.Background(), []byte(testManifest))
+	defer stop()
+
+	if id == "" {
 		t.Fatalf("expected non-empty instance_id")
-	}
-	if resp.HeartbeatIntervalSec != 10 {
-		t.Errorf("heartbeat interval = %d, want 10", resp.HeartbeatIntervalSec)
 	}
 
 	// Find by protocol
@@ -149,7 +109,7 @@ func TestRegistryServer_RegisterAndLifecycle(t *testing.T) {
 	}
 
 	// Heartbeat 刷新 LastHeartbeat
-	if _, err := s.Heartbeat(context.Background(), &pb.HeartbeatRequest{InstanceId: resp.InstanceId}); err != nil {
+	if _, err := s.Heartbeat(context.Background(), &pb.HeartbeatRequest{InstanceId: id}); err != nil {
 		t.Errorf("Heartbeat: %v", err)
 	}
 
@@ -178,7 +138,7 @@ func TestRegistryServer_RegisterAndLifecycle(t *testing.T) {
 	}
 
 	// Deregister 后不再可被 Find 命中
-	if _, err := s.Deregister(context.Background(), &pb.DeregisterRequest{InstanceId: resp.InstanceId}); err != nil {
+	if _, err := s.Deregister(context.Background(), &pb.DeregisterRequest{InstanceId: id}); err != nil {
 		t.Fatalf("Deregister: %v", err)
 	}
 	if _, ok := s.Find("test_proto"); ok {
@@ -191,8 +151,7 @@ func TestRegistryServer_RegisterInvalidManifest(t *testing.T) {
 	s := NewRegistryServer(10)
 	// api_version 格式非法
 	_, err := s.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: "/nonexistent.sock",
-		Manifest:   []byte("api_version: bad\nname: x\nprotocol: p\ntype: decoder\n"),
+		Manifest: []byte("api_version: bad\nname: x\nprotocol: p\ntype: decoder\n"),
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid api_version, got nil")
@@ -204,8 +163,7 @@ func TestRegistryServer_RegisterVersionMismatch(t *testing.T) {
 	s := NewRegistryServer(10)
 	mani := "api_version: gt.decoder/v1\nname: x\nprotocol: p\ntype: decoder\n"
 	_, err := s.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: "/nonexistent.sock",
-		Manifest:   []byte(mani),
+		Manifest: []byte(mani),
 	})
 	if err == nil {
 		t.Fatal("expected version-mismatch error, got nil")
@@ -216,23 +174,16 @@ func TestRegistryServer_RegisterVersionMismatch(t *testing.T) {
 // 同协议（都声明 tcp）的两个插件可被按名区分，A 会话只命中 A、B 会话只命中 B，
 // 未知名报 not-found，注销后名查失效，协议 hint 退化路径仍可用。
 func TestRegistryServer_FindByName(t *testing.T) {
-	sockA, stopA := startFakeDecoder(t)
-	defer stopA()
-	sockB, stopB := startFakeDecoder(t)
-	defer stopB()
-
 	const (
 		maniA = "api_version: gt.decoder/v2\nname: a-decoder\nprotocol: tcp\ntype: decoder\n"
 		maniB = "api_version: gt.decoder/v2\nname: b-decoder\nprotocol: tcp\ntype: decoder\n"
 	)
 
 	s := NewRegistryServer(10)
-	if _, err := s.Register(context.Background(), &pb.RegisterRequest{SocketPath: sockA, Manifest: []byte(maniA)}); err != nil {
-		t.Fatalf("register a-decoder: %v", err)
-	}
-	if _, err := s.Register(context.Background(), &pb.RegisterRequest{SocketPath: sockB, Manifest: []byte(maniB)}); err != nil {
-		t.Fatalf("register b-decoder: %v", err)
-	}
+	idA, stopA := registerFakeDecoder(t, s, context.Background(), []byte(maniA))
+	defer stopA()
+	idB, stopB := registerFakeDecoder(t, s, context.Background(), []byte(maniB))
+	defer stopB()
 
 	ca, okA := s.FindByName("a-decoder")
 	if !okA || ca == nil {
@@ -261,16 +212,7 @@ func TestRegistryServer_FindByName(t *testing.T) {
 	}
 
 	// 注销 b-decoder 后：名查失效，a-decoder 不受影响
-	var bInstance string
-	for _, p := range s.List() {
-		if p.Name == "b-decoder" {
-			bInstance = p.InstanceID
-		}
-	}
-	if bInstance == "" {
-		t.Fatal("b-decoder instance id not found in List")
-	}
-	if _, err := s.Deregister(context.Background(), &pb.DeregisterRequest{InstanceId: bInstance}); err != nil {
+	if _, err := s.Deregister(context.Background(), &pb.DeregisterRequest{InstanceId: idB}); err != nil {
 		t.Fatalf("deregister b-decoder: %v", err)
 	}
 	if _, ok := s.FindByName("b-decoder"); ok {
@@ -279,4 +221,5 @@ func TestRegistryServer_FindByName(t *testing.T) {
 	if _, ok := s.FindByName("a-decoder"); !ok {
 		t.Error("a-decoder should still resolve after b-decoder deregistered")
 	}
+	_ = idA
 }

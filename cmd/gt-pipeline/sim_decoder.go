@@ -17,10 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/netip"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -264,23 +261,12 @@ func entityCountOf(fr simFrame) int {
 	return len(seen)
 }
 
-// startSimDecoder 在 unix socket 上起一个真实的解码 gRPC 服务，并注册到 in-process 注册表。
-// 返回 socket 路径与停止函数。注册表会做一次可达性拨号，所以必须先 Listen 再 Register。
+// startSimDecoder 把内置解码器注册到 in-process 注册表，返回 instance_id 与停止函数。
+//
+// 平台只支持隧道注册，模拟器与 registry 同进程、没有可拨的网络端点，因此走
+// RegisterInProcessTunnel：内存 Connect 流替代真实 socket，宿主侧看到的仍是
+// 标准隧道绑定（与外置插件同一条代码路径）。
 func startSimDecoder(mgr *plugin.RegistryServer) (string, func(), error) {
-	dir, err := os.MkdirTemp("", "sim-decoder")
-	if err != nil {
-		return "", nil, err
-	}
-	sock := filepath.Join(dir, "decoder.sock")
-	_ = os.Remove(sock)
-	lis, err := net.Listen("unix", sock)
-	if err != nil {
-		return "", nil, err
-	}
-	srv := grpc.NewServer()
-	pb.RegisterDecoderServer(srv, simDecoderServer{})
-	go func() { _ = srv.Serve(lis) }()
-
 	manifest := "api_version: gt.decoder/v2\n" +
 		"name: " + simPluginName + "\n" +
 		"protocol: tcp\n" +
@@ -290,23 +276,11 @@ func startSimDecoder(mgr *plugin.RegistryServer) (string, func(), error) {
 		"contract:\n" +
 		"  name: gta.plugin\n" +
 		"  version: 1\n"
-	// Register 会拨号校验可达性，因此解码服务必须先 Listen。
-	// SocketPath 必须带 unix: 前缀：dialTarget 对裸 Windows 路径（无 '/'）会误判成 tcp。
-	socketTarget := "unix:" + sock
-	if _, err := mgr.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: socketTarget,
-		Manifest:   []byte(manifest),
-	}); err != nil {
-		srv.Stop()
-		_ = os.RemoveAll(dir)
+	instanceID, stop, err := mgr.RegisterInProcessTunnel(context.Background(), []byte(manifest), simDecoderServer{})
+	if err != nil {
 		return "", nil, fmt.Errorf("注册 sim-game 解码插件失败: %w", err)
 	}
-	stop := func() {
-		srv.Stop()
-		_ = os.Remove(sock)
-		_ = os.RemoveAll(dir)
-	}
-	return sock, stop, nil
+	return instanceID, stop, nil
 }
 
 // generateScenario 产出一段「MMO 账号登录后同步角色档案 + 角色成长」的合成抓包时间线。

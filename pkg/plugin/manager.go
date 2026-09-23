@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"strings"
 	"sync"
@@ -15,28 +14,22 @@ import (
 	sdkcontract "github.com/OwnSecurityGuard/gametrace/sdk/contract"
 	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/peer"
 	"gopkg.in/yaml.v3"
 )
 
 // RegisteredPlugin 表示一个已注册的插件实例。
+//
+// 插件一律经 Connect 反向隧道接入：存活跟随隧道连接，解码流量走同一条连接上的
+// 隧道帧（Client 由隧道会话提供）。
 type RegisteredPlugin struct {
 	InstanceID    string
-	SocketPath    string
 	Manifest      *Manifest
 	Client        pb.DecoderClient
-	Conn          *grpc.ClientConn
 	LastHeartbeat time.Time
 	Online        atomic.Bool // true 表示最近有心跳，false 表示超时未心跳
 	// Owner 是注册方的属主标识（来自 gRPC auth 上下文，auth.OwnerFrom）。
-	// 空串表示无主/匿名（本地单机用法），注册键退化为裸 manifest name，
-	// 与改造前的行为完全一致。
+	// 空串表示无主/匿名（本地单机用法），注册键退化为裸 manifest name。
 	Owner string
-	// Tunnel 表示该插件经 Connect 反向隧道接入：没有可回拨的 socket，
-	// 存活与否跟随 Connect 流（不参与 CheckOffline 心跳超时判定）。
-	Tunnel bool
 }
 
 // PluginSummary 是插件注册信息的摘要，用于对外暴露。
@@ -48,13 +41,10 @@ type PluginSummary struct {
 	// Transports 是插件声明的 L4 传输层能力（tcp|udp）；空表示未声明。
 	Transports    []string
 	APIVersion    string
-	SocketPath    string
 	Online        bool
 	LastHeartbeat time.Time
-	// Owner 是注册方属主（空串 = 匿名/本地）。T13 的 MCP listing 需要。
+	// Owner 是注册方属主（空串 = 匿名/本地）。
 	Owner string
-	// Tunnel 表示该插件经反向隧道接入（存活跟随 Connect 流）。
-	Tunnel bool
 }
 
 // PluginEventType 表示插件注册表状态变化的类型。
@@ -69,8 +59,8 @@ const (
 	PluginEventOnline PluginEventType = "online"
 	// PluginEventOffline 插件心跳超时被判离线（在线→离线翻转）。
 	PluginEventOffline PluginEventType = "offline"
-	// PluginEventRegisterFailed 注册失败（平台拨号插件 Decode 地址不通等）。
-	// 失败的注册不进注册表；事件携带 SocketPath/Error/Owner 诊断字段。
+	// PluginEventRegisterFailed 注册被拒绝（manifest 不合法 / 契约校验失败等）。
+	// 失败的注册不进注册表；事件携带 Error/Owner 诊断字段。
 	PluginEventRegisterFailed PluginEventType = "register_failed"
 )
 
@@ -82,22 +72,19 @@ type PluginEvent struct {
 	Online     bool
 	Timestamp  time.Time
 	// 以下为 register_failed 专用字段（其余事件为零值）：
-	// SocketPath 注册时上报的插件地址；Error 拨号错误与诊断建议；
-	// Owner 注册方属主（SSE 订阅侧按此过滤，匿名为空串）。
-	SocketPath string
-	Error      string
-	Owner      string
+	// Error 注册被拒原因；Owner 注册方属主（SSE 订阅侧按此过滤，匿名为空串）。
+	Error  string
+	Owner  string
 }
 
-// RegisterFailure 记录一次注册失败的诊断信息（dial 插件地址失败）。
-// ring buffer 容量 20、条目 TTL 15 分钟；name+socket_path+error 同 key
+// RegisterFailure 记录一次注册失败的诊断信息（manifest / 契约校验被拒）。
+// ring buffer 容量 20、条目 TTL 15 分钟；name+error 同 key
 // 5 分钟内去重（SDK 以 1→30s 退避无限重试，不去重会刷屏）。
 type RegisterFailure struct {
-	Name       string
-	SocketPath string
-	Error      string
-	Owner      string
-	Timestamp  time.Time
+	Name      string
+	Error     string
+	Owner     string
+	Timestamp time.Time
 }
 
 // maxRecentFailures 是注册失败 ring buffer 的容量。
@@ -107,9 +94,6 @@ const maxRecentFailures = 20
 var (
 	failureTTL         = 15 * time.Minute
 	failureDedupWindow = 5 * time.Minute
-	// registerProbeTimeout 是 Register 阶段对插件 Decode 地址做可达性探测的
-	// 超时（错误远端地址/被防火墙丢弃的 SYN 不应长时间挂住注册 RPC）。
-	registerProbeTimeout = 5 * time.Second
 )
 
 // RegistryServer 实现 PluginRegistry gRPC 服务，被动接受插件注册。
@@ -132,7 +116,7 @@ type RegistryServer struct {
 	tunnelHub *TunnelHub
 
 	// 注册失败 ring buffer（register_failed 事件源数据）：容量 20、TTL 15min、
-	// name+socket_path+error 同 key 5min 去重。
+	// name+error 同 key 5min 去重。
 	failMu       sync.Mutex
 	failures     []RegisterFailure
 	failLastSeen map[string]time.Time
@@ -225,39 +209,40 @@ func (s *RegistryServer) emit(event PluginEvent) {
 }
 
 // Register 处理插件注册请求。
-// 流程：解析 manifest → 校验 manifest → 版本协商 → （非隧道时）拨号插件 Decode
-// socket 验证可达 → 分配 instance_id。
+// 流程：解析 manifest → 校验 manifest → 版本协商 → 分配 instance_id（不再有任何
+// 到插件的入站拨号：解码通道只有 Connect 隧道）。
 //
 // 属主：owner 取自 gRPC auth 上下文（auth.OwnerFrom），注册键为 pluginKey(owner, name)；
 // 同一 owner 的同名重复注册替换旧实例（崩溃重启场景），不同 owner 的同名插件共存。
 //
-// 隧道分支：req.Tunnel == true 时插件没有可回拨的 Decode socket，跳过拨号验证；
-// 解码用 pb.DecoderClient 由 Connect 反向隧道提供（见 tunnel.go）。绑定方式（④）：
-// 本 RPC 返回 instance_id，插件随后带着它打开 Connect（metadata
+// 绑定：本 RPC 返回 instance_id，插件随后带着它打开 Connect（metadata
 // sdk.TunnelInstanceIDKey），宿主按 id 精确绑定——不做任何到达顺序推断。
 // 绑定前实例 Online=false、不参与 Find/FindByName（Client 为 nil 不可用）。
 //
-// 存活：隧道实例同样受心跳超时约束（CheckOffline）。断开的隧道由断开钩子
-// 立即下线；心跳只是兜底——半开连接下 Connect 流不会报错，只有心跳超时能
-// 发现插件已消失（①）。
+// 存活：受心跳超时约束（CheckOffline）。断开的隧道由断开钩子立即下线；心跳是兜底
+// ——半开连接下 Connect 流不会报错，只有心跳超时能发现插件已消失。
 func (s *RegistryServer) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
 	// 1. 解析 manifest
 	m, err := ParseManifest(req.Manifest)
 	if err != nil {
+		s.recordFailure("", err.Error(), auth.OwnerFrom(ctx))
 		return nil, fmt.Errorf("parse manifest: %w", err)
 	}
 	// 2. 校验 manifest
 	if err := ValidateManifest(m); err != nil {
+		s.recordFailure(m.Name, err.Error(), auth.OwnerFrom(ctx))
 		return nil, fmt.Errorf("validate manifest: %w", err)
 	}
 	// 3. 版本协商
 	if err := CheckManifestVersion(m); err != nil {
+		s.recordFailure(m.Name, err.Error(), auth.OwnerFrom(ctx))
 		return nil, fmt.Errorf("version check: %w", err)
 	}
 	// 3.5 语义契约声明期校验（Semantic Contract v1 两层：schema/state）。
 	//     error 级违规拒绝注册；warn 级放行但记日志，让插件作者能在 plugin.verify 看到全量报告。
 	if report := sdkcontract.NewPluginChecker().Check(m); report != nil {
 		if report.HasErrors() {
+			s.recordFailure(m.Name, "semantic contract: "+formatReport(report), auth.OwnerFrom(ctx))
 			return nil, fmt.Errorf("semantic contract check failed: %s", formatReport(report))
 		}
 		for _, v := range report.Violations {
@@ -266,49 +251,17 @@ func (s *RegistryServer) Register(ctx context.Context, req *pb.RegisterRequest) 
 	}
 
 	owner := auth.OwnerFrom(ctx)
-	tunnel := req.GetTunnel()
 
-	// 4. 拨号到插件的 Decode socket 验证可达（隧道模式跳过：存活跟随 Connect 流）
-	//    SocketPath 可能是 host:port（跨机器部署）、unix:/path 或 npipe:\\.\pipe\name。
-	var conn *grpc.ClientConn
-	var client pb.DecoderClient
-	if !tunnel {
-		// 真实可达性探测：grpc.NewClient 是懒连接，创建时不会报错——不主动
-		// 探测的话，错误的 GT_DECODER_PUBLIC_ADDR 要到首次解码 RPC 才暴露。
-		// SDK 保证 Decode server 先于 Register 启动（sdk/registry.go），
-		// 正确配置的插件不受影响；探测失败则拒绝注册（SDK 退避重试自愈）。
-		pctx, pcancel := context.WithTimeout(ctx, registerProbeTimeout)
-		probe, perr := dialTarget(pctx, req.SocketPath)
-		pcancel()
-		if perr != nil {
-			// 诊断建议随错误返回给 SDK（插件控制台可见），同时入账 ring buffer
-			// 并发 register_failed 事件（前端 toast / 插件面板 / status_plugin）。
-			hint := dialFailureHint(ctx, req.SocketPath, perr)
-			s.recordFailure(m, req.SocketPath, hint, owner)
-			return nil, fmt.Errorf("dial plugin socket: %w (%s)", perr, hint)
-		}
-		_ = probe.Close()
-		conn, err = dialDecoder(ctx, req.SocketPath)
-		if err != nil {
-			return nil, fmt.Errorf("dial plugin socket: %w", err)
-		}
-		client = pb.NewDecoderClient(conn)
-	}
-
-	// 5. 分配 instance_id
+	// 4. 分配 instance_id
 	instanceID := fmt.Sprintf("%s-%d", m.Name, s.nextID.Add(1))
 
 	rp := &RegisteredPlugin{
 		InstanceID:    instanceID,
-		SocketPath:    req.SocketPath,
 		Manifest:      m,
-		Client:        client,
-		Conn:          conn,
 		LastHeartbeat: time.Now(),
 		Owner:         owner,
-		Tunnel:        tunnel,
 	}
-	rp.Online.Store(!tunnel) // 隧道实例等 Connect 绑定后才算在线
+	rp.Online.Store(false) // 等 Connect 绑定后才算在线
 
 	nameKey := pluginKey(owner, m.Name)
 	s.mu.Lock()
@@ -319,13 +272,10 @@ func (s *RegistryServer) Register(ctx context.Context, req *pb.RegisterRequest) 
 	// 若同名插件已注册（同 owner 作用域内），删除旧实例（崩溃后重启场景）。
 	// 旧实例的隧道若仍存活，其断开钩子因 plugins 里已无该 instance_id 而为
 	// no-op —— 不会误伤接替它的新实例（④ 精确绑定的直接收益）。
+	// 旧实例若仍有存活隧道，其断开钩子在表里找不到该 instance_id 而为 no-op，
+	// 不会误伤接替它的新实例（精确绑定的直接收益）。
 	if oldID, ok := s.byName[nameKey]; ok {
-		if old, ok := s.plugins[oldID]; ok {
-			if old.Conn != nil {
-				_ = old.Conn.Close()
-			}
-			delete(s.plugins, oldID)
-		}
+		delete(s.plugins, oldID)
 	}
 	s.plugins[instanceID] = rp
 	s.byName[nameKey] = instanceID
@@ -334,7 +284,7 @@ func (s *RegistryServer) Register(ctx context.Context, req *pb.RegisterRequest) 
 	s.mu.Unlock()
 
 	slog.Info("plugin registered", "name", m.Name, "instance_id", instanceID, "protocol", m.Protocol,
-		"owner", owner, "tunnel", tunnel)
+		"owner", owner)
 
 	s.emit(PluginEvent{
 		Type:       PluginEventRegister,
@@ -350,51 +300,13 @@ func (s *RegistryServer) Register(ctx context.Context, req *pb.RegisterRequest) 
 	}, nil
 }
 
-// dialFailureHint 生成拨号失败的诊断建议：底层错误 + 注册连接来源 IP 建议值 +
-// 回环地址场景的 Docker 提示。仅作建议文本，不做自动纠正（证据驱动原则）。
-func dialFailureHint(ctx context.Context, socketPath string, dialErr error) string {
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "%v", dialErr)
-	if src := peerSourceIP(ctx); src != "" {
-		if port := socketPort(socketPath); port != "" {
-			fmt.Fprintf(&sb, "; 注册连接来源 IP %s，可尝试 GT_DECODER_PUBLIC_ADDR=%s:%s", src, src, port)
-		} else {
-			fmt.Fprintf(&sb, "; 注册连接来源 IP %s", src)
-		}
-	}
-	if host, _, err := net.SplitHostPort(socketPath); err == nil &&
-		(host == "127.0.0.1" || host == "localhost" || host == "::1") {
-		sb.WriteString("; GT_DECODER_PUBLIC_ADDR/GT_DECODER_ADDR 指向回环地址：平台（尤其 Docker 部署）回拨的是平台自身，请改填平台可回拨的宿主机地址（如 GT_PUBLIC_HOST 或宿主机局域网 IP）")
-	}
-	return sb.String()
-}
-
-// peerSourceIP 返回 RPC 调用方的来源 IP（地址的 host 部分）。
-func peerSourceIP(ctx context.Context) string {
-	p, ok := peer.FromContext(ctx)
-	if !ok || p.Addr == nil {
-		return ""
-	}
-	host, _, err := net.SplitHostPort(p.Addr.String())
-	if err != nil {
-		return p.Addr.String()
-	}
-	return host
-}
-
-// socketPort 返回 host:port 形态地址的端口；unix:/npipe: 等非 TCP 形态返回空。
-func socketPort(socketPath string) string {
-	_, port, err := net.SplitHostPort(socketPath)
-	if err != nil {
-		return ""
-	}
-	return port
-}
-
-// recordFailure 记录一次注册失败并返回是否入账：name+socket_path+error 同 key
+// recordFailure 记录一次注册失败并返回是否入账：name+error 同 key
 // 在去重窗口内返回 false（不记录、不发事件）。入账时向事件总线发 register_failed。
-func (s *RegistryServer) recordFailure(m *Manifest, socketPath, errMsg, owner string) bool {
-	key := m.Name + "|" + socketPath + "|" + errMsg
+//
+// 宿主已不再向插件拨号，这里承载的是「manifest 不合法 / 契约校验失败」这类注册期
+// 拒绝——过去唯一的调用点（回拨探测）已随非隧道模式一并删除。
+func (s *RegistryServer) recordFailure(name, errMsg, owner string) bool {
+	key := name + "|" + errMsg
 	now := time.Now()
 	s.failMu.Lock()
 	if last, ok := s.failLastSeen[key]; ok && now.Sub(last) < failureDedupWindow {
@@ -407,15 +319,15 @@ func (s *RegistryServer) recordFailure(m *Manifest, socketPath, errMsg, owner st
 		if now.Sub(f.Timestamp) < failureTTL {
 			kept = append(kept, f)
 		} else {
-			delete(s.failLastSeen, f.Name+"|"+f.SocketPath+"|"+f.Error)
+			delete(s.failLastSeen, f.Name+"|"+f.Error)
 		}
 	}
 	kept = append(kept, RegisterFailure{
-		Name: m.Name, SocketPath: socketPath, Error: errMsg, Owner: owner, Timestamp: now,
+		Name: name, Error: errMsg, Owner: owner, Timestamp: now,
 	})
 	if overflow := len(kept) - maxRecentFailures; overflow > 0 {
 		for _, f := range kept[:overflow] {
-			delete(s.failLastSeen, f.Name+"|"+f.SocketPath+"|"+f.Error)
+			delete(s.failLastSeen, f.Name+"|"+f.Error)
 		}
 		kept = kept[overflow:]
 	}
@@ -423,12 +335,11 @@ func (s *RegistryServer) recordFailure(m *Manifest, socketPath, errMsg, owner st
 	s.failMu.Unlock()
 
 	s.emit(PluginEvent{
-		Type:       PluginEventRegisterFailed,
-		Name:       m.Name,
-		SocketPath: socketPath,
-		Error:      errMsg,
-		Owner:      owner,
-		Timestamp:  now,
+		Type:      PluginEventRegisterFailed,
+		Name:      name,
+		Error:     errMsg,
+		Owner:     owner,
+		Timestamp: now,
 	})
 	return true
 }
@@ -475,13 +386,13 @@ func (s *RegistryServer) Heartbeat(ctx context.Context, req *pb.HeartbeatRequest
 	wasOnline := rp.Online.Load()
 	name := rp.Manifest.Name
 	instanceID := req.InstanceId
-	if rp.Tunnel && rp.Client != nil && tunnelClientClosed(rp.Client) {
+	if rp.Client != nil && tunnelClientClosed(rp.Client) {
 		// 隧道已断但插件还在发心跳：拒绝，而不是让该实例「复活」回在线。
 		// SDK 收到错误即判定心跳失联 → 退避重连并重新 Register（新 instance_id）。
 		s.mu.Unlock()
 		return nil, fmt.Errorf("tunnel closed for instance %q: re-register required", instanceID)
 	}
-	// ① 隧道插件同样记录心跳：TCP 半开时 Connect 流的 Recv 不会报错，
+	// 隧道插件同样记录心跳：TCP 半开时 Connect 流的 Recv 不会报错，
 	// 心跳超时是宿主侧唯一能发现「插件已死但连接还在」的信号。
 	rp.LastHeartbeat = time.Now()
 	rp.Online.Store(true)
@@ -510,9 +421,6 @@ func (s *RegistryServer) Deregister(ctx context.Context, req *pb.DeregisterReque
 	}
 	name := rp.Manifest.Name
 	instanceID := req.InstanceId
-	if rp.Conn != nil {
-		_ = rp.Conn.Close()
-	}
 	delete(s.plugins, instanceID)
 	delete(s.byName, pluginKey(rp.Owner, name))
 	s.mu.Unlock()
@@ -533,43 +441,40 @@ func (s *RegistryServer) Deregister(ctx context.Context, req *pb.DeregisterReque
 // CheckOffline 扫描注册表，将心跳超时的插件标记下线。
 // 应由外部定时调用（如每秒）。
 //
-// 隧道插件同样参与心跳超时判定（①）：半开连接下 Connect 流不会报错，
-// 只有心跳超时能发现插件已经消失。此外隧道还有两条自己的规则：
-//   - 已绑定的隧道插件若其 Connect 会话已关闭（断开钩子丢失的兜底）→ 判离线；
-//   - 一直未绑定隧道的注册（插件崩溃在 Connect 前/从未 Connect）超过
-//     2×timeout 宽限 → 从注册表移除（SDK 重启后会重新 Register）。
+// 一律按隧道语义判定：
+//   - 心跳超时 → 判离线。半开连接下 Connect 流不会报错，只有心跳能发现插件已消失；
+//   - 已绑定的隧道若 Connect 会话已关闭（断开钩子丢失的兜底）→ 判离线；
+//   - 一直未绑定隧道的注册（崩溃在 Connect 前）超过 2×timeout 宽限 → 回收。
 func (s *RegistryServer) CheckOffline(timeout time.Duration) {
 	s.mu.Lock()
 	now := time.Now()
 	var transitions []PluginEvent
 	var reaped []PluginEvent
 	for id, rp := range s.plugins {
-		if rp.Tunnel {
-			// 兜底：断开钩子丢失时，检测已死 Connect 会话并判离线
-			if rp.Client != nil && rp.Online.Load() && tunnelClientClosed(rp.Client) {
-				rp.Online.Store(false)
-				transitions = append(transitions, PluginEvent{
-					Type:       PluginEventOffline,
-					InstanceID: id,
-					Name:       rp.Manifest.Name,
-					Online:     false,
-					Timestamp:  now,
-				})
-				continue
-			}
-			// 从未绑定的注册超过宽限期则回收
-			if rp.Client == nil && now.Sub(rp.LastHeartbeat) > 2*timeout {
-				delete(s.plugins, id)
-				delete(s.byName, pluginKey(rp.Owner, rp.Manifest.Name))
-				reaped = append(reaped, PluginEvent{
-					Type:       PluginEventDeregister,
-					InstanceID: id,
-					Name:       rp.Manifest.Name,
-					Online:     false,
-					Timestamp:  now,
-				})
-				continue
-			}
+		// 兜底：断开钩子丢失时，检测已死 Connect 会话并判离线
+		if rp.Client != nil && rp.Online.Load() && tunnelClientClosed(rp.Client) {
+			rp.Online.Store(false)
+			transitions = append(transitions, PluginEvent{
+				Type:       PluginEventOffline,
+				InstanceID: id,
+				Name:       rp.Manifest.Name,
+				Online:     false,
+				Timestamp:  now,
+			})
+			continue
+		}
+		// 从未绑定的注册超过宽限期则回收
+		if rp.Client == nil && now.Sub(rp.LastHeartbeat) > 2*timeout {
+			delete(s.plugins, id)
+			delete(s.byName, pluginKey(rp.Owner, rp.Manifest.Name))
+			reaped = append(reaped, PluginEvent{
+				Type:       PluginEventDeregister,
+				InstanceID: id,
+				Name:       rp.Manifest.Name,
+				Online:     false,
+				Timestamp:  now,
+			})
+			continue
 		}
 		if now.Sub(rp.LastHeartbeat) > timeout && rp.Online.Load() {
 			rp.Online.Store(false)
@@ -827,11 +732,9 @@ func (s *RegistryServer) List() []PluginSummary {
 			Transports:    rp.Manifest.Transports,
 			Type:          rp.Manifest.Type,
 			APIVersion:    rp.Manifest.APIVersion,
-			SocketPath:    rp.SocketPath,
 			Online:        rp.Online.Load(),
 			LastHeartbeat: rp.LastHeartbeat,
 			Owner:         rp.Owner,
-			Tunnel:        rp.Tunnel,
 		})
 	}
 	return out
@@ -850,11 +753,9 @@ func (s *RegistryServer) ListSummaries() []PluginSummary {
 			Transports:    rp.Manifest.Transports,
 			Type:          rp.Manifest.Type,
 			APIVersion:    rp.Manifest.APIVersion,
-			SocketPath:    rp.SocketPath,
 			Online:        rp.Online.Load(),
 			LastHeartbeat: rp.LastHeartbeat,
 			Owner:         rp.Owner,
-			Tunnel:        rp.Tunnel,
 		})
 	}
 	return out
@@ -886,10 +787,7 @@ func (s *RegistryServer) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
-	for id, rp := range s.plugins {
-		if rp.Conn != nil {
-			_ = rp.Conn.Close()
-		}
+	for id := range s.plugins {
 		delete(s.plugins, id)
 	}
 	s.byName = map[string]string{}
@@ -907,36 +805,6 @@ func (s *RegistryServer) Connect(stream pb.PluginRegistry_ConnectServer) error {
 		return fmt.Errorf("registry is closed")
 	}
 	return s.tunnelHub.Connect(stream)
-}
-
-// dialTarget 解析插件上报的 Decode 地址并建立 net.Conn。
-// 支持 host:port（TCP，跨机器）、unix:/path、npipe:\\.\pipe\name、以及裸路径（视为 Unix socket）。
-func dialTarget(ctx context.Context, target string) (net.Conn, error) {
-	switch {
-	case strings.HasPrefix(target, "unix:"):
-		return (&net.Dialer{}).DialContext(ctx, "unix", strings.TrimPrefix(target, "unix:"))
-	case strings.HasPrefix(target, "npipe:"):
-		return dialNamedPipe(strings.TrimPrefix(target, "npipe:"))
-	case strings.HasPrefix(target, `\\.\pipe\`):
-		return dialNamedPipe(target)
-	case strings.ContainsRune(target, '/') || strings.ContainsRune(target, '\\'):
-		// 裸路径视为 Unix socket（Windows 路径分隔符是反斜杠）
-		return (&net.Dialer{}).DialContext(ctx, "unix", target)
-	default:
-		// host:port 走 TCP（跨机器部署）
-		return (&net.Dialer{}).DialContext(ctx, "tcp", target)
-	}
-}
-
-// dialDecoder 建立到插件 Decode 服务的 gRPC 连接。
-func dialDecoder(ctx context.Context, target string) (*grpc.ClientConn, error) {
-	return grpc.NewClient(
-		"passthrough:///"+target,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-			return dialTarget(ctx, target)
-		}),
-	)
 }
 
 // Manager 管理插件注册表（被动接受注册，不再 spawn 子进程）。

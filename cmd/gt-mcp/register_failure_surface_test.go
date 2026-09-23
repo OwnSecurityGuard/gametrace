@@ -36,7 +36,7 @@ func TestRegisterFailedVisibility(t *testing.T) {
 
 func TestListRegisteredPluginsIncludesFailures(t *testing.T) {
 	fc := &fakeCaptureClient{dbDir: t.TempDir(), recentFailures: []*pb.PluginFailure{{
-		Name: "my-plug", SocketPath: "127.0.0.1:61887", Error: "connection refused", Owner: "alice", TimestampUnix: 1700000000,
+		Name: "my-plug", Error: "connection refused", Owner: "alice", TimestampUnix: 1700000000,
 	}}}
 	m := &mcpCapture{pipelineClient: fc}
 
@@ -47,7 +47,7 @@ func TestListRegisteredPluginsIncludesFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := res.Content[0].(mcp.TextContent).Text
-	for _, want := range []string{"recent_register_failures", "my-plug", "127.0.0.1:61887", "connection refused"} {
+	for _, want := range []string{"recent_register_failures", "my-plug", "connection refused"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("result missing %s: %s", want, text)
 		}
@@ -56,12 +56,12 @@ func TestListRegisteredPluginsIncludesFailures(t *testing.T) {
 
 func TestLatestRegisterFailure(t *testing.T) {
 	fc := &fakeCaptureClient{dbDir: t.TempDir(), recentFailures: []*pb.PluginFailure{{
-		Name: "my-plug", SocketPath: "127.0.0.1:61887", Error: "connection refused", Owner: "alice", TimestampUnix: 1700000000,
+		Name: "my-plug", Error: "connection refused", Owner: "alice", TimestampUnix: 1700000000,
 	}}}
 	m := &mcpCapture{pipelineClient: fc}
 
 	f := m.latestRegisterFailure(context.Background(), "my-plug")
-	if f == nil || f["socket_path"] != "127.0.0.1:61887" || f["error"] != "connection refused" {
+	if f == nil || f["name"] != "my-plug" || f["error"] != "connection refused" {
 		t.Errorf("latestRegisterFailure mismatch: %+v", f)
 	}
 	if got := m.latestRegisterFailure(context.Background(), "other"); got != nil {

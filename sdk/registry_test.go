@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -196,44 +195,6 @@ func (m *mockDecodeV2Stream) Recv() (*pb.DecodeRequest, error) {
 	return nil, nil
 }
 
-func TestAdvertiseTCP(t *testing.T) {
-	// GT_DECODER_PUBLIC_ADDR 显式指定时原样返回（最高优先级）。
-	if got := advertiseTCP("10.0.0.5:19001", "0.0.0.0:19001"); got != "10.0.0.5:19001" {
-		t.Errorf("explicit pub must win, got %q", got)
-	}
-
-	// 绑定到具体 IP 时原样上报，尊重用户意图。
-	if got := advertiseTCP("", "192.168.1.10:19001"); got != "192.168.1.10:19001" {
-		t.Errorf("specific bind address must be kept, got %q", got)
-	}
-	if got := advertiseTCP("", "127.0.0.1:19001"); got != "127.0.0.1:19001" {
-		t.Errorf("loopback bind address must be kept, got %q", got)
-	}
-
-	// 通配符监听地址应替换为本机非回环 IPv4（若本机存在），
-	// 使 Docker 容器内的平台侧可以拨号回连，而不是解析到容器自身。
-	ip := hostIPv4()
-	if ip == "" {
-		t.Skip("no non-loopback IPv4 on this machine")
-	}
-	want := net.JoinHostPort(ip, "19001")
-	for _, actual := range []string{"0.0.0.0:19001", "[::]:19001", ":19001"} {
-		if got := advertiseTCP("", actual); got != want {
-			t.Errorf("advertiseTCP(%q) = %q, want %q", actual, got, want)
-		}
-	}
-}
-
-func TestHostIPv4(t *testing.T) {
-	ip := hostIPv4()
-	if ip == "" {
-		t.Skip("no non-loopback IPv4 on this machine")
-	}
-	parsed := net.ParseIP(ip)
-	if parsed == nil || parsed.To4() == nil || parsed.IsLoopback() {
-		t.Errorf("hostIPv4() = %q, want a non-loopback IPv4 address", ip)
-	}
-}
 
 // mockRegistryClient 是 PluginRegistryClient 的最小实现，
 // 只用于在单测中驱动 heartbeatLoop。

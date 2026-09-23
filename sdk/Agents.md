@@ -117,18 +117,14 @@ read + validate plugin.yaml
 connect to registry
     |
     v
-Register(socket_path, manifest[, tunnel])
+Register(manifest)
     |
     v
 receive instance_id + heartbeat interval
     |
     v
-[standard mode only] start DecodeV2 listener   <- skipped in tunnel mode
-    |
-    v
-[tunnel mode] open Connect stream with
-              instance_id in metadata          <- host binds by instance_id,
-    |                                             rejects unknown/absent id
+open Connect stream with instance_id in metadata  <- host binds by instance_id,
+    |                                                rejects unknown/absent id
     v
 heartbeat (+ tunnel serving concurrently)
     |
@@ -136,13 +132,13 @@ heartbeat (+ tunnel serving concurrently)
               retry with backoff (1s .. 30s)
 ```
 
-Two modes, selected by `RegisterOptions`. **The platform runs plugins in tunnel mode**:
-gt-agent managed plugins and Developer Plane `activate_plugin` both inject `GT_TUNNEL=1`.
-Plugin code should pass the switch through, never branch on it.
+**Tunnel mode is the only mode.** Registration always opens a `Connect` stream and DecodeV2
+runs over it — there is no local listener and the host never dials back. gt-agent managed
+plugins and Developer Plane `activate_plugin` both inject `GT_TUNNEL=1`; plugin code just
+passes the token through and never branches on anything.
 
 ```go
 sdk.RunRegisterLoopWithOptions(decode, sdk.RegisterOptions{
-    Tunnel:    true,          // no local listener; DecodeV2 over the Connect stream
     AuthToken: tok,           // adds `authorization: Bearer <tok>` metadata
 })
 ```
@@ -176,32 +172,10 @@ explicitly.
 
 ## 6. Decoder endpoint configuration
 
-> **Standard (non-tunnel) mode only.** The platform runs plugins in tunnel mode, where the
-> host never dials back and these two variables do not participate in the connection. They
-> are documented here for the legacy fallback path only — do not treat them as required when
-> debugging a tunnel plugin.
-
-The decoder endpoint is controlled by:
-
-- `GT_DECODER_ADDR`
-- `GT_DECODER_PUBLIC_ADDR`
-
-If `GT_DECODER_ADDR` is unset, the SDK listens on TCP `:0` and advertises the selected address.
-
-```text
-GT_DECODER_ADDR=0.0.0.0:19001
-GT_DECODER_PUBLIC_ADDR=192.168.1.10:19001
-```
-
-When the listen address is a wildcard (`0.0.0.0` / `[::]`, including the `:0` default), the
-SDK **replaces the host part with the machine's first non-loopback IPv4 before registering**.
-Inside Docker a wildcard host resolves to the container's own loopback, so the host could
-never reach the plugin. The substitution is skipped when `GT_DECODER_PUBLIC_ADDR` is set —
-that value is always used verbatim. Set it explicitly for multi-NIC / VPN setups, or to route
-via the Docker bridge gateway (e.g. `host.docker.internal` on Docker Desktop).
-
-`GT_DECODER_PUBLIC_ADDR` must carry the same port as `GT_DECODER_ADDR`, otherwise the host
-dials a closed port.
+**Removed — the platform is tunnel-only.** A plugin opens no listener and the host never
+dials back, so there is no decoder endpoint to configure. The former `GT_DECODER_ADDR` /
+`GT_DECODER_PUBLIC_ADDR` variables and `Register`'s `socket_path` field no longer exist.
+The only endpoint a plugin needs is `GT_REGISTRY_ADDR` (see §5).
 
 ## 7. Manifest contract
 

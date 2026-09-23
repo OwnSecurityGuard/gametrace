@@ -500,7 +500,7 @@ func main() {
 1. 读取当前目录 plugin.yaml → manifest bytes
 2. 端点发现：GT_REGISTRY_ADDR > --registry= > 默认 :9091
 3. 建立 gRPC 连接到 RegistryServer
-4. 调用 Register RPC（携带 manifest、tunnel=true）
+4. 调用 Register RPC（携带 manifest；平台只有隧道一条注册路径）
 5. 注册成功 → 拿到 instance_id
 6. 打开 Connect 流，把 instance_id 放进 metadata → 宿主据此精确绑定该实例
    （缺 instance_id 或实例未知：宿主直接拒绝建流）
@@ -522,12 +522,10 @@ func main() {
 | `GT_REGISTRY_ADDR` | 注册中心地址（env > `--registry=` > 默认 `:9091`；显式设置可避免连到非预期地址） | 见下方说明 |
 | `GT_TUNNEL` | 非空即隧道模式。由**运行方**注入，插件代码只透传不判断 | `1` |
 | `GT_AUTH_TOKEN` | 注册鉴权 Bearer token（`GT_AUTH_TOKENS` 非空时必填；agent 托管下平台自动注入） | `gt_tok_xxx` |
-| `GT_DECODER_ADDR` | 插件 Decode 服务监听地址——**仅非隧道回退模式需要**，隧道下宿主不回拨 | `0.0.0.0:9092` |
-| `GT_DECODER_PUBLIC_ADDR` | pipeline 回拨插件的可达地址——**仅非隧道回退模式需要** | `10.12.34.57:9092` |
 
 > **隧道插件排障**：注册成功但一直不在线，基本只有两种原因——Connect 没建起来（用旧 SDK
-> 编译，缺 `instance_id`，宿主拒流），或心跳/隧道断连。此时**不要**去调
-> `GT_DECODER_ADDR` / `GT_DECODER_PUBLIC_ADDR`，它们在隧道下不参与连接。
+> 编译，缺 `instance_id`，宿主拒流），或心跳/隧道断连。此时**不要**去排查解码器监听地址：
+> 平台只有隧道一条路径，插件不监听任何端口，解码帧与注册/心跳共用同一条连接。
 
 > **`GT_REGISTRY_ADDR` 的真实取值**：由 gt-pipeline 启动时打印在日志 `GT_REGISTRY_ADDR` 字段中；MCP 工具 `get_registry_addr` 亦可直接获取。
 > - Windows（命名管道）：`npipe:\\.\pipe\gt-registry`
@@ -540,8 +538,7 @@ func main() {
 
 三个进程（gt-pipeline / 插件 / gt-mcp）**不要求共享 workDir**，全部通过显式网络地址互联：
 
-- **插件 → registry（注册 / 心跳 / 隧道帧）**：`GT_REGISTRY_ADDR=host:port`（pipeline 用 `-registry-addr :9091` 监听 TCP）。**隧道模式下这是唯一必需的地址**——解码流量也走这条连接，插件不需要任何可入站端口，因此 NAT / 防火墙 / 容器后面都能直接接入。
-- **pipeline → 插件 Decode**：仅在非隧道回退模式下需要，插件用 `GT_DECODER_ADDR=0.0.0.0:9092` 监听 TCP，并用 `GT_DECODER_PUBLIC_ADDR=10.12.34.57:9092` 上报 pipeline 实际可达地址。
+- **插件 → registry（注册 / 心跳 / 隧道帧）**：`GT_REGISTRY_ADDR=host:port`（pipeline 用 `-registry-addr :9091` 监听 TCP）。**这是唯一必需的地址**——解码流量也走这条连接，插件不需要任何可入站端口，因此 NAT / 防火墙 / 容器后面都能直接接入。
 - **gt-mcp → pipeline（控制面）**：gt-pipeline 用 `-control-addr :9888` 监听 TCP，gt-mcp 用 `-pipeline-addr host:port` 连接。
 
 地址支持形式：`host:port`（TCP）、`unix:/path`、`npipe:\\.\pipe\name`、裸路径（按 Unix socket 处理）。

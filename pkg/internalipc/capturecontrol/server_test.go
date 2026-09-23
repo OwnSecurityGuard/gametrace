@@ -244,7 +244,7 @@ func TestServer_StartCaptureMobile(t *testing.T) {
 func TestListPluginsIncludesRegisterFailures(t *testing.T) {
 	ts := time.Now()
 	s := NewServer(&fakeEngine{failures: []RegisterFailure{{
-		Name: "my-plug", SocketPath: "127.0.0.1:61887", Error: "connection refused", Owner: "alice", Timestamp: ts,
+		Name: "my-plug", Error: "connection refused", Owner: "alice", Timestamp: ts,
 	}}})
 	resp, err := s.ListPlugins(context.Background(), &pb.ListPluginsRequest{})
 	if err != nil {
@@ -254,7 +254,7 @@ func TestListPluginsIncludesRegisterFailures(t *testing.T) {
 	if len(fs) != 1 {
 		t.Fatalf("want 1 recent failure, got %d", len(fs))
 	}
-	if fs[0].GetName() != "my-plug" || fs[0].GetSocketPath() != "127.0.0.1:61887" ||
+	if fs[0].GetName() != "my-plug" ||
 		fs[0].GetError() != "connection refused" || fs[0].GetOwner() != "alice" ||
 		fs[0].GetTimestampUnix() != ts.Unix() {
 		t.Errorf("failure mapping mismatch: %+v", fs[0])

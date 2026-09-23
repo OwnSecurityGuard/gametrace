@@ -3,8 +3,6 @@ package plugin
 import (
 	"context"
 	"testing"
-
-	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 )
 
 // TestFindFor_MatchesTransports 验证 registry 按插件声明的 transports 匹配协议：
@@ -21,13 +19,8 @@ type: decoder
 transports:
   - udp
 `
-	sock, stop := startFakeDecoder(t)
-	defer stop()
-	if _, err := s.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: sock,
-		Manifest:   []byte(udpManifest),
-	}); err != nil {
-		t.Fatalf("register udp decoder: %v", err)
+	if _, stop := registerFakeDecoder(t, s, context.Background(), []byte(udpManifest)); stop != nil {
+		defer stop()
 	}
 
 	if _, ok := s.FindFor("", "udp"); !ok {

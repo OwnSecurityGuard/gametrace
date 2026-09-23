@@ -558,7 +558,7 @@ func (t *tunnelStreamClient) RecvMsg(m interface{}) error {
 // 这段胶水放在 tunnel.go（与 manager.go 同包）以保持 manager.go 聚焦注册表本体。
 //
 // 绑定模型（④ 精确绑定，取代此前的 FIFO 猜测）：
-//   - Register(tunnel=true) 返回 instance_id，插件随后用该 id 作为 metadata
+//   - Register 返回 instance_id，插件随后用该 id 作为 metadata
 //     打开 Connect（见 TunnelInstanceIDKey）；
 //   - 宿主按 instance_id 直接定位注册实例，不做任何顺序/到达时间推断；
 //   - 绑定失败（实例已被替换/回收、owner 不匹配）即让 Connect 失败，

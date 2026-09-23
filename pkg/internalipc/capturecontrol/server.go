@@ -162,7 +162,6 @@ type PluginEvent struct {
 	Online     bool
 	Timestamp  time.Time
 	// register_failed 专用字段（其余事件为零值）。
-	SocketPath string
 	Error      string
 	Owner      string
 }
@@ -170,7 +169,6 @@ type PluginEvent struct {
 // RegisterFailure 是最近一次注册失败的诊断记录（与 proto PluginFailure 对应）。
 type RegisterFailure struct {
 	Name       string
-	SocketPath string
 	Error      string
 	Owner      string
 	Timestamp  time.Time
@@ -324,7 +322,6 @@ type PluginSummary struct {
 	Protocol       string
 	Type           string
 	APIVersion     string
-	SocketPath     string
 	Online         bool
 	LastHeartbeat  time.Time
 	Owner          string
@@ -534,7 +531,6 @@ func (s *Server) ListPlugins(ctx context.Context, req *pb.ListPluginsRequest) (*
 			Protocol:          p.Protocol,
 			Type:              p.Type,
 			ApiVersion:        p.APIVersion,
-			SocketPath:        p.SocketPath,
 			Online:            p.Online,
 			LastHeartbeatUnix: p.LastHeartbeat.Unix(),
 			Owner:             p.Owner,
@@ -548,7 +544,6 @@ func (s *Server) ListPlugins(ctx context.Context, req *pb.ListPluginsRequest) (*
 	for _, f := range failures {
 		fails = append(fails, &pb.PluginFailure{
 			Name:          f.Name,
-			SocketPath:    f.SocketPath,
 			Error:         f.Error,
 			Owner:         f.Owner,
 			TimestampUnix: f.Timestamp.Unix(),
@@ -629,7 +624,6 @@ func (s *Server) WatchPlugins(req *pb.WatchPluginsRequest, stream grpc.ServerStr
 			Name:          ev.Name,
 			Online:        ev.Online,
 			TimestampUnix: ev.Timestamp.Unix(),
-			SocketPath:    ev.SocketPath,
 			Error:         ev.Error,
 			Owner:         ev.Owner,
 		}); err != nil {

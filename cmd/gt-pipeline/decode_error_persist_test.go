@@ -14,9 +14,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -62,23 +59,9 @@ func (d *failingDecoderServer) DecodeV2(stream grpc.BidiStreamingServer[pb.Decod
 }
 
 // startFailingDecoder 注册一个必失败的解码器，返回停止函数。
-// 注册流程与 sim_decoder.go 完全一致（同样的 manifest 校验与可达性校验）。
+// 与 sim_decoder.go 一致：平台只支持隧道注册，测试用内存 Connect 流挂载。
 func startFailingDecoder(t *testing.T, mgr *plugin.RegistryServer) func() {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "fail-decoder")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sock := filepath.Join(dir, "decoder.sock")
-	_ = os.Remove(sock)
-	lis, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := grpc.NewServer()
-	pb.RegisterDecoderServer(srv, &failingDecoderServer{})
-	go func() { _ = srv.Serve(lis) }()
-
 	manifest := "api_version: gt.decoder/v2\n" +
 		"name: " + failPluginName + "\n" +
 		"protocol: tcp\n" +
@@ -88,19 +71,11 @@ func startFailingDecoder(t *testing.T, mgr *plugin.RegistryServer) func() {
 		"contract:\n" +
 		"  name: gta.plugin\n" +
 		"  version: 1\n"
-	if _, err := mgr.Register(context.Background(), &pb.RegisterRequest{
-		SocketPath: "unix:" + sock,
-		Manifest:   []byte(manifest),
-	}); err != nil {
-		srv.Stop()
-		_ = os.RemoveAll(dir)
+	_, stop, err := mgr.RegisterInProcessTunnel(context.Background(), []byte(manifest), &failingDecoderServer{})
+	if err != nil {
 		t.Fatalf("注册必失败解码器失败: %v", err)
 	}
-	return func() {
-		srv.Stop()
-		_ = os.Remove(sock)
-		_ = os.RemoveAll(dir)
-	}
+	return stop
 }
 
 func TestCapturePersistsDecodeErrorGroups(t *testing.T) {

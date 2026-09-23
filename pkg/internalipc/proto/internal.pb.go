@@ -2020,7 +2020,6 @@ type PluginSummary struct {
 	Protocol          string                 `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
 	Type              string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`
 	ApiVersion        string                 `protobuf:"bytes,5,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
-	SocketPath        string                 `protobuf:"bytes,6,opt,name=socket_path,json=socketPath,proto3" json:"socket_path,omitempty"`
 	Online            bool                   `protobuf:"varint,7,opt,name=online,proto3" json:"online,omitempty"`
 	LastHeartbeatUnix int64                  `protobuf:"varint,8,opt,name=last_heartbeat_unix,json=lastHeartbeatUnix,proto3" json:"last_heartbeat_unix,omitempty"`
 	Owner             string                 `protobuf:"bytes,9,opt,name=owner,proto3" json:"owner,omitempty"` // 注册方属主（空串 = 匿名/系统插件）
@@ -2089,13 +2088,6 @@ func (x *PluginSummary) GetType() string {
 func (x *PluginSummary) GetApiVersion() string {
 	if x != nil {
 		return x.ApiVersion
-	}
-	return ""
-}
-
-func (x *PluginSummary) GetSocketPath() string {
-	if x != nil {
-		return x.SocketPath
 	}
 	return ""
 }
@@ -2174,13 +2166,12 @@ func (x *ListPluginsResponse) GetRecentFailures() []*PluginFailure {
 	return nil
 }
 
-// PluginFailure 最近的解码器注册失败记录（dial 插件地址不通等）。
+// PluginFailure 最近的解码器注册失败记录（manifest / 契约校验被拒等）。
 type PluginFailure struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	SocketPath    string                 `protobuf:"bytes,2,opt,name=socket_path,json=socketPath,proto3" json:"socket_path,omitempty"` // 注册时上报的地址
-	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`                             // 拨号错误与诊断建议
-	Owner         string                 `protobuf:"bytes,4,opt,name=owner,proto3" json:"owner,omitempty"`                             // 注册方属主（空串 = 匿名/系统）
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"` // 注册被拒原因
+	Owner         string                 `protobuf:"bytes,4,opt,name=owner,proto3" json:"owner,omitempty"` // 注册方属主（空串 = 匿名/系统）
 	TimestampUnix int64                  `protobuf:"varint,5,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2219,13 +2210,6 @@ func (*PluginFailure) Descriptor() ([]byte, []int) {
 func (x *PluginFailure) GetName() string {
 	if x != nil {
 		return x.Name
-	}
-	return ""
-}
-
-func (x *PluginFailure) GetSocketPath() string {
-	if x != nil {
-		return x.SocketPath
 	}
 	return ""
 }
@@ -2653,8 +2637,7 @@ type PluginEvent struct {
 	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`                                         // 插件名（manifest.name）
 	Online        bool                   `protobuf:"varint,4,opt,name=online,proto3" json:"online,omitempty"`                                    // 事件后是否在线
 	TimestampUnix int64                  `protobuf:"varint,5,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"` // 事件发生时间（Unix 秒）
-	SocketPath    string                 `protobuf:"bytes,6,opt,name=socket_path,json=socketPath,proto3" json:"socket_path,omitempty"`           // register_failed：注册时上报、拨号失败的插件地址
-	Error         string                 `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`                                       // register_failed：拨号错误与诊断建议
+	Error         string                 `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`                                       // register_failed：注册被拒原因
 	Owner         string                 `protobuf:"bytes,8,opt,name=owner,proto3" json:"owner,omitempty"`                                       // 事件归属（register_failed 订阅侧按 owner 过滤）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2723,13 +2706,6 @@ func (x *PluginEvent) GetTimestampUnix() int64 {
 		return x.TimestampUnix
 	}
 	return 0
-}
-
-func (x *PluginEvent) GetSocketPath() string {
-	if x != nil {
-		return x.SocketPath
-	}
-	return ""
 }
 
 func (x *PluginEvent) GetError() string {
@@ -5679,7 +5655,7 @@ const file_pkg_internalipc_proto_internal_proto_rawDesc = "" +
 	"\x12ListPluginsRequest\x12\x14\n" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x1d\n" +
 	"\n" +
-	"all_owners\x18\x02 \x01(\bR\tallOwners\"\x94\x02\n" +
+	"all_owners\x18\x02 \x01(\bR\tallOwners\"\xf9\x01\n" +
 	"\rPluginSummary\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
 	"instanceId\x12\x12\n" +
@@ -5687,22 +5663,18 @@ const file_pkg_internalipc_proto_internal_proto_rawDesc = "" +
 	"\bprotocol\x18\x03 \x01(\tR\bprotocol\x12\x12\n" +
 	"\x04type\x18\x04 \x01(\tR\x04type\x12\x1f\n" +
 	"\vapi_version\x18\x05 \x01(\tR\n" +
-	"apiVersion\x12\x1f\n" +
-	"\vsocket_path\x18\x06 \x01(\tR\n" +
-	"socketPath\x12\x16\n" +
+	"apiVersion\x12\x16\n" +
 	"\x06online\x18\a \x01(\bR\x06online\x12.\n" +
 	"\x13last_heartbeat_unix\x18\b \x01(\x03R\x11lastHeartbeatUnix\x12\x14\n" +
-	"\x05owner\x18\t \x01(\tR\x05owner\"\xa4\x01\n" +
+	"\x05owner\x18\t \x01(\tR\x05ownerJ\x04\b\x06\x10\a\"\xa4\x01\n" +
 	"\x13ListPluginsResponse\x12>\n" +
 	"\aplugins\x18\x01 \x03(\v2$.gametrace.internalipc.PluginSummaryR\aplugins\x12M\n" +
-	"\x0frecent_failures\x18\x02 \x03(\v2$.gametrace.internalipc.PluginFailureR\x0erecentFailures\"\x97\x01\n" +
+	"\x0frecent_failures\x18\x02 \x03(\v2$.gametrace.internalipc.PluginFailureR\x0erecentFailures\"|\n" +
 	"\rPluginFailure\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
-	"\vsocket_path\x18\x02 \x01(\tR\n" +
-	"socketPath\x12\x14\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05error\x18\x03 \x01(\tR\x05error\x12\x14\n" +
 	"\x05owner\x18\x04 \x01(\tR\x05owner\x12%\n" +
-	"\x0etimestamp_unix\x18\x05 \x01(\x03R\rtimestampUnix\"c\n" +
+	"\x0etimestamp_unix\x18\x05 \x01(\x03R\rtimestampUnixJ\x04\b\x02\x10\x03\"c\n" +
 	"\x18GetPluginManifestRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05owner\x18\x02 \x01(\tR\x05owner\x12\x1d\n" +
@@ -5731,18 +5703,16 @@ const file_pkg_internalipc_proto_internal_proto_rawDesc = "" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x16\n" +
 	"\x06plugin\x18\x03 \x01(\tR\x06plugin\x12\x18\n" +
 	"\amessage\x18\x04 \x01(\tR\amessage\"\x15\n" +
-	"\x13WatchPluginsRequest\"\xe2\x01\n" +
+	"\x13WatchPluginsRequest\"\xc7\x01\n" +
 	"\vPluginEvent\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x1f\n" +
 	"\vinstance_id\x18\x02 \x01(\tR\n" +
 	"instanceId\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x16\n" +
 	"\x06online\x18\x04 \x01(\bR\x06online\x12%\n" +
-	"\x0etimestamp_unix\x18\x05 \x01(\x03R\rtimestampUnix\x12\x1f\n" +
-	"\vsocket_path\x18\x06 \x01(\tR\n" +
-	"socketPath\x12\x14\n" +
+	"\x0etimestamp_unix\x18\x05 \x01(\x03R\rtimestampUnix\x12\x14\n" +
 	"\x05error\x18\a \x01(\tR\x05error\x12\x14\n" +
-	"\x05owner\x18\b \x01(\tR\x05owner\"\x18\n" +
+	"\x05owner\x18\b \x01(\tR\x05ownerJ\x04\b\x06\x10\a\"\x18\n" +
 	"\x16GetRegistryAddrRequest\">\n" +
 	"\x17GetRegistryAddrResponse\x12#\n" +
 	"\rregistry_addr\x18\x01 \x01(\tR\fregistryAddr\"\xcd\x02\n" +

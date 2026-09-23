@@ -2,7 +2,6 @@ package sdk
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -58,49 +57,26 @@ func dialRegistry(ctx context.Context, addr string) (net.Conn, error) {
 	}
 }
 
-// RunRegisterLoopWithOptions 是插件 main 的标准入口，支持隧道等可选行为。
+// RunRegisterLoopWithOptions 是插件 main 的标准入口。
 //
-// 工作流程（默认模式，opts 全零值时与旧版行为完全一致）：
-//  1. 创建 Decoder gRPC server，监听 DecodeV2 端点
-//     - 默认：本地 Unix socket（同机部署，路径含 PID 避免冲突）
-//     - 跨机器：设置 GT_DECODER_ADDR=host:port 监听 TCP；
-//     并用 GT_DECODER_PUBLIC_ADDR（缺省回退为该 listen 地址）作为注册时上报的拨号地址
-//  2. 确定 registry 端点地址（GT_REGISTRY_ADDR 环境变量 > --registry flag > 默认 :9091）
-//     - 未显式设置时回退到 SDK 默认 :9091（见 ResolveRegistryAddr）；显式设置可避免连到非预期地址
-//  3. 拨号 registry 并调用 Register RPC（传入上报地址和 plugin.yaml manifest bytes）
-//  4. 按返回的 instance_id 和 heartbeat_interval_sec 启动心跳 goroutine
-//  5. 心跳断开或 Register 失败时，指数退避重试（首次 1s，上限 30s）
+// 插件一律经反向隧道接入：不起本地监听端点，宿主也不回拨插件，注册 / 心跳 /
+// 解码帧全部复用同一条到 registry 的连接——因此插件在 NAT、容器、手机后面都能
+// 直接接入，不需要任何入站端口。
 //
-// 隧道模式（opts.Tunnel=true）：跳过第 1 步（不监听本地端点，宿主不回拨），
-// Register(tunnel=true) 成功后打开 Connect 双向流，DecodeV2 经隧道帧完成。
-// 建流时 instance_id 经 metadata（TunnelInstanceIDKey）上报供宿主精确绑定；
-// 隧道期间心跳照发——流的 Recv 无法发现 TCP 半开，心跳是唯一的应用层探测。
+// 工作流程：
+//  1. 确定 registry 端点（GT_REGISTRY_ADDR 环境变量 > --registry flag > 默认 :9091）
+//  2. 读取插件目录下的 plugin.yaml → manifest bytes
+//  3. 调 Register RPC 拿到 instance_id 与心跳间隔
+//  4. 在同一条连接上打开 Connect 双向流：instance_id 经 metadata
+//     （TunnelInstanceIDKey）上报，宿主据此精确绑定本次注册
+//  5. 心跳与隧道服务并发运行：任一失败（心跳失联 / 隧道断开）都退避重连并
+//     重新 Register（新的 instance_id），进程无需重启
+//
+// 心跳不能用隧道流代替：TCP 半开时 Connect 流的 Recv 不会报错，只有带超时的
+// 应用层心跳能发现宿主已经消失。
 // opts.AuthToken 非空时，所有 RPC 附带 `authorization: Bearer <token>` metadata。
 func RunRegisterLoopWithOptions(decodeFuncV2 DecodeFuncV2, opts RegisterOptions) {
 	decoder := &Decoder{decodeFuncV2: decodeFuncV2}
-
-	// 1. 启动 Decoder server，并决定注册时上报给 pipeline 的拨号地址。
-	//    隧道模式跳过回拨，无需本地监听。
-	var listener net.Listener
-	var advertise string
-	if !opts.Tunnel {
-		var err error
-		listener, advertise, err = listenDecoder()
-		if err != nil {
-			slog.Error("failed to listen on decoder endpoint", "error", err)
-			os.Exit(1)
-		}
-		defer listener.Close()
-
-		grpcServer := grpc.NewServer()
-		pb.RegisterDecoderServer(grpcServer, decoder)
-		go func() {
-			if err := grpcServer.Serve(listener); err != nil && err != io.EOF {
-				slog.Error("decoder server error", "error", err)
-			}
-		}()
-		slog.Info("decoder endpoint listening", "advertise", advertise, "local", listener.Addr().String())
-	}
 
 	registryAddr := ResolveRegistryAddr()
 	if registryAddr == "" {
@@ -148,12 +124,7 @@ func RunRegisterLoopWithOptions(decodeFuncV2 DecodeFuncV2, opts RegisterOptions)
 		}
 
 		client := pb.NewPluginRegistryClient(conn)
-		regReq := &pb.RegisterRequest{
-			SocketPath: advertise,
-			Manifest:   manifestBytes,
-			Tunnel:     opts.Tunnel,
-		}
-		regResp, err := client.Register(callCtx, regReq)
+		regResp, err := client.Register(callCtx, &pb.RegisterRequest{Manifest: manifestBytes})
 		if err != nil {
 			slog.Warn("register: Register RPC failed, retrying", "error", err, "backoff", backoff)
 			_ = conn.Close()
@@ -168,64 +139,50 @@ func RunRegisterLoopWithOptions(decodeFuncV2 DecodeFuncV2, opts RegisterOptions)
 			heartbeatSec = 10
 		}
 
-		slog.Info("registered successfully", "instance_id", instanceID, "heartbeat_sec", heartbeatSec, "tunnel", opts.Tunnel)
+		slog.Info("registered successfully", "instance_id", instanceID, "heartbeat_sec", heartbeatSec)
 		backoff = time.Second
 
-		if opts.Tunnel {
-			// 隧道模式：在同一条连接上打开 Connect 双向流并服务解码请求。
-			// instance_id 通过 metadata 上报（④），宿主据此精确绑定本次注册，
-			// 不再依赖 Register/Connect 的到达顺序做 FIFO 猜测。
-			connectStream, err := client.Connect(
-				metadata.AppendToOutgoingContext(callCtx, TunnelInstanceIDKey, instanceID))
-			if err != nil {
-				slog.Warn("tunnel: open connect stream failed, retrying", "error", err, "backoff", backoff)
-				_ = conn.Close()
-				time.Sleep(backoff)
-				backoff = min(backoff*2, maxBackoff)
-				continue
-			}
-
-			// ① 隧道期间心跳照发：TCP 半开（对端消失但无 RST/FIN）时 Connect 流的
-			// Recv 不会报错，只有带超时的应用层心跳能发现对端已消失。
-			// 隧道断 / 心跳失联任一发生都走同一条退避重连路径。
-			hbCtx, hbCancel := context.WithCancel(callCtx)
-			heartbeatLost := make(chan struct{})
-			go heartbeatLoop(hbCtx, client, instanceID, time.Duration(heartbeatSec)*time.Second, heartbeatLost)
-
-			tunnelDone := make(chan error, 1)
-			go func() { tunnelDone <- runTunnel(hbCtx, connectStream, decoder) }()
-
-			var tunnelErr error
-			tunnelReturned := false
-			select {
-			case tunnelErr = <-tunnelDone:
-				tunnelReturned = true
-				slog.Warn("tunnel closed, reconnecting", "instance_id", instanceID, "error", tunnelErr)
-			case <-heartbeatLost:
-				slog.Warn("tunnel heartbeat lost, reconnecting", "instance_id", instanceID)
-			}
-			// 收尾：取消心跳并关闭连接。心跳失联时流的 Recv 不会自己报错，
-			// 必须关连接才能让 runTunnel 返回（否则 goroutine 泄漏）。
-			hbCancel()
+		// 隧道：在同一条连接上打开 Connect 双向流并服务解码请求。
+		// instance_id 通过 metadata 上报，宿主据此精确绑定本次注册。
+		connectStream, err := client.Connect(
+			metadata.AppendToOutgoingContext(callCtx, TunnelInstanceIDKey, instanceID))
+		if err != nil {
+			slog.Warn("tunnel: open connect stream failed, retrying", "error", err, "backoff", backoff)
 			_ = conn.Close()
-			if !tunnelReturned {
-				<-tunnelDone
-			}
-			<-heartbeatLost // 已关闭的 channel：立即返回，确认心跳 goroutine 已退出
 			time.Sleep(backoff)
 			backoff = min(backoff*2, maxBackoff)
 			continue
 		}
 
+		// 隧道期间心跳照发：TCP 半开（对端消失但无 RST/FIN）时 Connect 流的
+		// Recv 不会报错，只有带超时的应用层心跳能发现对端已消失。
+		// 隧道断 / 心跳失联任一发生都走同一条退避重连路径。
+		hbCtx, hbCancel := context.WithCancel(callCtx)
 		heartbeatLost := make(chan struct{})
-		go heartbeatLoop(callCtx, client, instanceID, time.Duration(heartbeatSec)*time.Second, heartbeatLost)
+		go heartbeatLoop(hbCtx, client, instanceID, time.Duration(heartbeatSec)*time.Second, heartbeatLost)
 
-		// 保持注册直到心跳失联（平台侧重启/升级/网络中断）。心跳失败即回到
-		// 循环顶部重新注册，获得新的 instance_id，插件进程无需重启；
-		// 与隧道模式「流断开即重连」的语义保持一致。
-		<-heartbeatLost
+		tunnelDone := make(chan error, 1)
+		go func() { tunnelDone <- ServeTunnel(hbCtx, connectStream, decoder) }()
+
+		var tunnelErr error
+		tunnelReturned := false
+		select {
+		case tunnelErr = <-tunnelDone:
+			tunnelReturned = true
+			slog.Warn("tunnel closed, reconnecting", "instance_id", instanceID, "error", tunnelErr)
+		case <-heartbeatLost:
+			slog.Warn("tunnel heartbeat lost, reconnecting", "instance_id", instanceID)
+		}
+		// 收尾：取消心跳并关闭连接。心跳失联时流的 Recv 不会自己报错，
+		// 必须关连接才能让 runTunnel 返回（否则 goroutine 泄漏）。
+		hbCancel()
 		_ = conn.Close()
-		slog.Warn("registry heartbeat lost, reconnecting", "instance_id", instanceID)
+		if !tunnelReturned {
+			<-tunnelDone
+		}
+		<-heartbeatLost // 已关闭的 channel：立即返回，确认心跳 goroutine 已退出
+		time.Sleep(backoff)
+		backoff = min(backoff*2, maxBackoff)
 	}
 }
 
@@ -268,93 +225,3 @@ func min(a, b time.Duration) time.Duration {
 	return b
 }
 
-// listenDecoder 启动插件的 Decoder gRPC server，并返回 (listener, advertiseAddr, error)。
-//
-// 监听模式：
-//   - 设置了 GT_DECODER_ADDR：在 host:port（或 unix:path）上监听 TCP/Unix。
-//   - 未设置：默认监听 TCP :0（随机端口），兼容 Windows / 跨机器。
-//
-// 上报地址（注册时回填给 pipeline 的拨号地址）优先级：
-//  1. GT_DECODER_PUBLIC_ADDR：显式指定，原样上报。平台侧部署在 Docker、插件运行在
-//     宿主机的场景下，把这里填成平台侧（容器）能拨号到的地址即可，例如宿主局域网 IP、
-//     host.docker.internal 或 Docker 网桥网关。
-//  2. listener 实际地址，但 host 部分是通配符（0.0.0.0 / :: / 空）时自动替换为本机
-//     首个非回环 IPv4 —— 通配符地址对平台侧（尤其是 Docker 容器内）不可拨号，
-//     默认 `:0` 与 `0.0.0.0:port` 两种常见用法因此都能上报可拨号地址。
-//  3. 显式绑定到具体 IP（如 192.168.1.10:port）时原样上报，尊重用户意图。
-func listenDecoder() (net.Listener, string, error) {
-	bind := os.Getenv("GT_DECODER_ADDR")
-	pub := os.Getenv("GT_DECODER_PUBLIC_ADDR")
-
-	if bind == "" {
-		lis, err := net.Listen("tcp", ":0")
-		if err != nil {
-			return nil, "", err
-		}
-		return lis, advertiseTCP(pub, lis.Addr().String()), nil
-	}
-
-	if strings.HasPrefix(bind, "unix:") {
-		path := strings.TrimPrefix(bind, "unix:")
-		_ = os.RemoveAll(path)
-		lis, err := net.Listen("unix", path)
-		if err != nil {
-			return nil, "", err
-		}
-		adv := pub
-		if adv == "" {
-			adv = "unix:" + path
-		}
-		return lis, adv, nil
-	}
-
-	lis, err := net.Listen("tcp", bind)
-	if err != nil {
-		return nil, "", err
-	}
-	return lis, advertiseTCP(pub, lis.Addr().String()), nil
-}
-
-// advertiseTCP 计算注册时上报给 pipeline 的 TCP 拨号地址。
-// pub 非空时原样返回（最高优先级，跨机器 / Docker 部署时手动指定）。
-// 否则取 actual（listener 实际地址），host 为通配符（空 / 0.0.0.0 / ::）时
-// 替换为本机首个非回环 IPv4；仍拿不到具体 IP 时保留原地址并告警。
-func advertiseTCP(pub, actual string) string {
-	if pub != "" {
-		return pub
-	}
-	host, port, err := net.SplitHostPort(actual)
-	if err != nil {
-		return actual
-	}
-	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
-		if ip := hostIPv4(); ip != "" {
-			host = ip
-		} else {
-			slog.Warn("no non-loopback IPv4 found; advertised address keeps the wildcard host and may not be dialable by gametrace-pipeline (e.g. when it runs inside Docker); set GT_DECODER_PUBLIC_ADDR to the reachable host:port", "addr", actual)
-		}
-	}
-	return net.JoinHostPort(host, port)
-}
-
-// hostIPv4 返回本机首个非回环 IPv4 地址，用于把通配符监听地址转换为平台侧
-// （可能部署在 Docker 中）可以拨号回连的地址；找不到时返回空串。
-// 多网卡 / VPN 环境下首个地址未必是目标网段，此时请显式设置 GT_DECODER_PUBLIC_ADDR。
-func hostIPv4() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return ""
-	}
-	for _, a := range addrs {
-		ipnet, ok := a.(*net.IPNet)
-		if !ok {
-			continue
-		}
-		ip := ipnet.IP.To4()
-		if ip == nil || ip.IsLoopback() {
-			continue
-		}
-		return ip.String()
-	}
-	return ""
-}

@@ -142,7 +142,7 @@ func TestRunTunnel_DecodeRoundTrip(t *testing.T) {
 	defer pipe.Close()
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- runTunnel(ctx, clientEnd{pipe}, echoDecoder) }()
+	go func() { errCh <- ServeTunnel(ctx, clientEnd{pipe}, echoDecoder) }()
 
 	se := serverEnd{pipe}
 
@@ -207,7 +207,6 @@ type fakeTunnelRegistry struct {
 	registered   bool
 	verifyOnce   sync.Once
 	sawToken     string
-	sawTunnel    bool
 	registerHits atomic.Int32
 	verifiedDone chan struct{} // 由测试注入，Register 校验通过后关闭
 	tunnelDone   chan struct{} // 由测试注入，隧道解码 round trip 完成后关闭
@@ -223,7 +222,6 @@ func (r *fakeTunnelRegistry) Register(ctx context.Context, req *pb.RegisterReque
 	}
 	already := r.registered
 	r.registered = true
-	r.sawTunnel = req.GetTunnel()
 	token := r.sawToken
 	r.mu.Unlock()
 
@@ -231,9 +229,6 @@ func (r *fakeTunnelRegistry) Register(ctx context.Context, req *pb.RegisterReque
 		// 重连后挂起，避免测试期间反复 Register
 		<-ctx.Done()
 		return nil, ctx.Err()
-	}
-	if req.GetTunnel() != true {
-		r.t.Error("expected RegisterRequest.tunnel=true")
 	}
 	if token != "Bearer test-token" {
 		r.t.Errorf("expected authorization Bearer token, got %q", token)
@@ -334,7 +329,7 @@ func TestTunnelKeepsHeartbeating(t *testing.T) {
 	go func() {
 		RunRegisterLoopWithOptions(
 			func(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error { return nil },
-			RegisterOptions{Tunnel: true},
+			RegisterOptions{},
 		)
 	}()
 
@@ -392,7 +387,7 @@ func TestRunRegisterLoopWithOptions_TunnelEndToEnd(t *testing.T) {
 	}
 
 	go func() {
-		RunRegisterLoopWithOptions(decodeFunc, RegisterOptions{Tunnel: true, AuthToken: "test-token"})
+		RunRegisterLoopWithOptions(decodeFunc, RegisterOptions{AuthToken: "test-token"})
 	}()
 
 	select {
@@ -409,9 +404,6 @@ func TestRunRegisterLoopWithOptions_TunnelEndToEnd(t *testing.T) {
 	defer reg.mu.Unlock()
 	if reg.sawToken != "Bearer test-token" {
 		t.Errorf("token metadata not propagated: %q", reg.sawToken)
-	}
-	if !reg.sawTunnel {
-		t.Error("tunnel flag not set on RegisterRequest")
 	}
 
 	// Connect 断开后（宿主侧 handler 返回），SDK 应按退避策略重新 Register + Connect
@@ -437,7 +429,7 @@ func TestRunTunnel_ConcurrentStreams(t *testing.T) {
 	pipe := newTunnelPipe(ctx)
 	defer pipe.Close()
 
-	go func() { _ = runTunnel(ctx, clientEnd{pipe}, echoDecoder) }()
+	go func() { _ = ServeTunnel(ctx, clientEnd{pipe}, echoDecoder) }()
 	se := serverEnd{pipe}
 
 	const n = 4
@@ -505,7 +497,7 @@ func TestRunTunnel_RequestAfterReset(t *testing.T) {
 	defer pipe.Close()
 
 	done := make(chan error, 1)
-	go func() { done <- runTunnel(ctx, clientEnd{pipe}, slowDecoder) }()
+	go func() { done <- ServeTunnel(ctx, clientEnd{pipe}, slowDecoder) }()
 	se := serverEnd{pipe}
 
 	// 同一 stream_id 连发多个 request（部分会与 reset 竞争），随后 reset
@@ -568,7 +560,7 @@ func TestRunTunnel_ConnectDrop(t *testing.T) {
 	pipe := newTunnelPipe(ctx)
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- runTunnel(ctx, clientEnd{pipe}, echoDecoder) }()
+	go func() { errCh <- ServeTunnel(ctx, clientEnd{pipe}, echoDecoder) }()
 
 	pipe.Close() // 模拟宿主侧 Connect 流断开
 

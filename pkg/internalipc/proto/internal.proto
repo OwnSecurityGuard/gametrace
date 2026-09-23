@@ -335,7 +335,7 @@ message PluginSummary {
   string protocol = 3;
   string type = 4;
   string api_version = 5;
-  string socket_path = 6;
+  reserved 6;              // 曾为 socket_path（宿主不再回拨插件，无回连地址可上报）
   bool online = 7;
   int64 last_heartbeat_unix = 8;
   string owner = 9; // 注册方属主（空串 = 匿名/系统插件）
@@ -347,11 +347,11 @@ message ListPluginsResponse {
   repeated PluginFailure recent_failures = 2;
 }
 
-// PluginFailure 最近的解码器注册失败记录（dial 插件地址不通等）。
+// PluginFailure 最近的解码器注册失败记录（manifest / 契约校验被拒等）。
 message PluginFailure {
   string name = 1;
-  string socket_path = 2;    // 注册时上报的地址
-  string error = 3;          // 拨号错误与诊断建议
+  reserved 2;                // 曾为 socket_path
+  string error = 3;          // 注册被拒原因
   string owner = 4;          // 注册方属主（空串 = 匿名/系统）
   int64 timestamp_unix = 5;
 }
@@ -408,8 +408,8 @@ message PluginEvent {
   string name = 3;             // 插件名（manifest.name）
   bool online = 4;             // 事件后是否在线
   int64 timestamp_unix = 5;    // 事件发生时间（Unix 秒）
-  string socket_path = 6;      // register_failed：注册时上报、拨号失败的插件地址
-  string error = 7;            // register_failed：拨号错误与诊断建议
+  reserved 6;                  // 曾为 socket_path
+  string error = 7;            // register_failed：注册被拒原因
   string owner = 8;            // 事件归属（register_failed 订阅侧按 owner 过滤）
 }
 

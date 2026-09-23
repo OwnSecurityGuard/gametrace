@@ -33,26 +33,16 @@ func TestRegister_OwnerScopedCoexistence(t *testing.T) {
 	s := NewRegistryServer(10)
 	defer s.Close()
 
-	reg := func(owner string) string {
-		sock, stop := startFakeDecoder(t)
-		defer stop()
-		resp, err := s.Register(ownerCtx(owner), &pb.RegisterRequest{
-			SocketPath: sock,
-			Manifest:   []byte(sharedManifest),
-		})
-		if err != nil {
-			t.Fatalf("register(owner=%s): %v", owner, err)
-		}
-		return resp.GetInstanceId()
-	}
-
-	aliceA := reg("alice")
-	bobA := reg("bob")
+	aliceA, stopA := registerFakeDecoder(t, s, ownerCtx("alice"), []byte(sharedManifest))
+	defer stopA()
+	bobA, stopB := registerFakeDecoder(t, s, ownerCtx("bob"), []byte(sharedManifest))
+	defer stopB()
 	if aliceA == bobA {
 		t.Fatal("expected distinct instances for different owners")
 	}
 	// 同 owner 重复注册替换自己的实例
-	aliceA2 := reg("alice")
+	aliceA2, stopA2 := registerFakeDecoder(t, s, ownerCtx("alice"), []byte(sharedManifest))
+	defer stopA2()
 	if aliceA2 == aliceA {
 		t.Fatal("same-owner re-register should replace with a new instance")
 	}
@@ -89,14 +79,8 @@ func TestRegister_FullKeyLookup(t *testing.T) {
 	s := NewRegistryServer(10)
 	defer s.Close()
 
-	sock, stop := startFakeDecoder(t)
+	_, stop := registerFakeDecoder(t, s, ownerCtx("alice"), []byte(sharedManifest))
 	defer stop()
-	if _, err := s.Register(ownerCtx("alice"), &pb.RegisterRequest{
-		SocketPath: sock,
-		Manifest:   []byte(sharedManifest),
-	}); err != nil {
-		t.Fatal(err)
-	}
 
 	if _, ok := s.FindByNameFor("bob", "alice/shared-decoder"); ok {
 		t.Fatal("bob must not address alice's plugin via full key")
@@ -106,19 +90,18 @@ func TestRegister_FullKeyLookup(t *testing.T) {
 	}
 }
 
-// TestTunnelRegisterAndBind 覆盖 tunnel=true 注册的绑定与生命周期：
-//   - Register(tunnel=true) 先到：实例等待隧道（离线、不可查）；
+// TestTunnelRegisterLifecycle 覆盖隧道注册的绑定与生命周期：
+//   - Register 先到：实例等待隧道（离线、不可查）；
 //   - Connect 到达后绑定：在线、可 FindByNameFor、DecodeV2 往返可用；
 //   - 隧道断开：offline 事件、不可查；
 //   - 重连后重新注册：替换旧实例并重新绑定；
-//   - 隧道插件不参与 CheckOffline 心跳超时。
+//   - 隧道实例同样受 CheckOffline 心跳超时约束（无模式例外）。
 func TestTunnelRegisterLifecycle(t *testing.T) {
 	s := NewRegistryServer(10)
 	defer s.Close()
 
 	// Register 先到：等待隧道
 	resp, err := s.Register(ownerCtx("alice"), &pb.RegisterRequest{
-		Tunnel:   true,
 		Manifest: []byte(sharedManifest),
 	})
 	if err != nil {
@@ -187,7 +170,6 @@ func TestTunnelRegisterLifecycle(t *testing.T) {
 	// 重连：重新注册（替换旧实例）→ Connect → 重新绑定可用
 	cancel()
 	resp2, err := s.Register(ownerCtx("alice"), &pb.RegisterRequest{
-		Tunnel:   true,
 		Manifest: []byte(sharedManifest),
 	})
 	if err != nil {
@@ -241,7 +223,6 @@ func TestAnonymousTunnelRegisterUnchanged(t *testing.T) {
 	defer s.Close()
 
 	resp, err := s.Register(context.Background(), &pb.RegisterRequest{
-		Tunnel:   true,
 		Manifest: []byte(sharedManifest),
 	})
 	if err != nil {
@@ -299,7 +280,6 @@ func TestTunnelUnboundReaped(t *testing.T) {
 	defer s.Close()
 
 	resp, err := s.Register(ownerCtx("alice"), &pb.RegisterRequest{
-		Tunnel:   true,
 		Manifest: []byte(sharedManifest),
 	})
 	if err != nil {
@@ -332,7 +312,6 @@ func TestTunnelBoundDeadClientOffline(t *testing.T) {
 	defer s.Close()
 
 	resp, err := s.Register(ownerCtx("alice"), &pb.RegisterRequest{
-		Tunnel:   true,
 		Manifest: []byte(sharedManifest),
 	})
 	if err != nil {
@@ -363,7 +342,6 @@ func TestHeartbeatRejectedForDeadTunnel(t *testing.T) {
 	defer s.Close()
 
 	resp, err := s.Register(ownerCtx("alice"), &pb.RegisterRequest{
-		Tunnel:   true,
 		Manifest: []byte(sharedManifest),
 	})
 	if err != nil {
@@ -427,16 +405,16 @@ func TestConcurrentRegisterAndLookup(t *testing.T) {
 	defer s.Close()
 
 	done := make(chan struct{})
-	sock, stop := startFakeDecoder(t)
-	defer stop()
 	for i := 0; i < 8; i++ {
 		go func(n int) {
 			defer func() { done <- struct{}{} }()
 			owner := string(rune('a' + n%4))
 			for j := 0; j < 50; j++ {
+				// 非隧道注册：只 Register（分配 instance_id），不绑定隧道也能
+				// 并发走 Register/Find/GetPluginManifest/List 全路径（本测试只验
+				// 并发安全，不关心是否在线）。
 				_, _ = s.Register(ownerCtx(owner), &pb.RegisterRequest{
-					SocketPath: sock,
-					Manifest:   []byte(sharedManifest),
+					Manifest: []byte(sharedManifest),
 				})
 				_, _ = s.FindByNameFor(owner, "shared-decoder")
 				_, _ = s.Find("tcp")

@@ -8,6 +8,7 @@ import (
 	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
 	"gametrace/pkg/auth"
 
+	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -62,33 +63,60 @@ func startWiredRegistry(t *testing.T, wireAuth bool, tokens string) (pb.PluginRe
 	return pb.NewPluginRegistryClient(conn), srv, stop
 }
 
-// regWithToken 用给定 Bearer token（可为空 = 不带 metadata）走一次真实 RPC 注册。
-func regWithToken(t *testing.T, c pb.PluginRegistryClient, sock, name, token string) error {
+// regWithToken 用给定 Bearer token（可为空 = 不带 metadata）走一次真实 RPC 注册，
+// 返回分配到的 instance_id。
+func regWithToken(t *testing.T, c pb.PluginRegistryClient, name, token string) (string, error) {
 	t.Helper()
 	ctx := context.Background()
 	if token != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 	}
-	_, err := c.Register(ctx, &pb.RegisterRequest{
-		SocketPath: sock,
-		Manifest:   []byte("api_version: gt.decoder/v2\nname: " + name + "\nprotocol: test_proto\ntype: decoder\nhints:\n  - tcp\n"),
+	resp, err := c.Register(ctx, &pb.RegisterRequest{
+		Manifest: []byte("api_version: gt.decoder/v2\nname: " + name + "\nprotocol: test_proto\ntype: decoder\nhints:\n  - tcp\n"),
 	})
-	return err
+	if err != nil {
+		return "", err
+	}
+	return resp.GetInstanceId(), nil
+}
+
+// connectTunnel 从插件侧打开一条 Connect 隧道，把 instance_id 与 token（owner）带上，
+// 等宿主 bindTunnelClient 把实例置为在线后返回。平台只认隧道注册（非隧道拨号已删除）：
+// 真实 RPC 注册只分配 instance_id，必须再经 Connect 精确绑定插件才可被 Find 命中。
+func connectTunnel(t *testing.T, c pb.PluginRegistryClient, token, instanceID string) pb.PluginRegistry_ConnectClient {
+	t.Helper()
+	ctx := context.Background()
+	if token != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+	}
+	ctx = metadata.AppendToOutgoingContext(ctx, sdk.TunnelInstanceIDKey, instanceID)
+	stream, err := c.Connect(ctx)
+	if err != nil {
+		t.Fatalf("connect tunnel: %v", err)
+	}
+	return stream
 }
 
 func TestRegistryWiring_TokenModeOwnerScoping(t *testing.T) {
-	sock, stopSock := startFakeDecoder(t)
-	defer stopSock()
-
 	c, registry, stop := startWiredRegistry(t, true, "alice=gt_a,bob=gt_b")
 	defer stop()
 
-	if err := regWithToken(t, c, sock, "my-plugin", "gt_a"); err != nil {
+	idA, err := regWithToken(t, c, "my-plugin", "gt_a")
+	if err != nil {
 		t.Fatalf("alice register: %v", err)
 	}
-	if err := regWithToken(t, c, sock, "my-plugin", "gt_b"); err != nil {
+	idB, err := regWithToken(t, c, "my-plugin", "gt_b")
+	if err != nil {
 		t.Fatalf("bob register: %v", err)
 	}
+
+	// 绑定隧道使插件在线（平台只认隧道注册）。
+	streamA := connectTunnel(t, c, "gt_a", idA)
+	defer streamA.CloseSend()
+	streamB := connectTunnel(t, c, "gt_b", idB)
+	defer streamB.CloseSend()
+	waitTunnelBound(t, registry, idA)
+	waitTunnelBound(t, registry, idB)
 
 	// 各 owner 只能命中自己的实例，同名不互相顶替。
 	if _, ok := registry.FindByNameFor("alice", "my-plugin"); !ok {
@@ -104,27 +132,30 @@ func TestRegistryWiring_TokenModeOwnerScoping(t *testing.T) {
 	}
 
 	// 错误 token 被拒。
-	if err := regWithToken(t, c, sock, "my-plugin", "gt_wrong"); err == nil {
+	if _, err := regWithToken(t, c, "my-plugin", "gt_wrong"); err == nil {
 		t.Fatal("错误 token 的 Register 应被拒绝")
 	}
 	// 无 token 也被拒。
-	if err := regWithToken(t, c, sock, "my-plugin", ""); err == nil {
+	if _, err := regWithToken(t, c, "my-plugin", ""); err == nil {
 		t.Fatal("无 token 的 Register 应被拒绝")
 	}
 }
 
 func TestRegistryWiring_AnonymousModeBareName(t *testing.T) {
-	sock, stopSock := startFakeDecoder(t)
-	defer stopSock()
-
 	// wireAuth=false 对应 main.go 匿名分支：不挂拦截器，无 Principal，
 	// 插件键必须是裸 name（FindByNameFor("", ...) 能命中），行为与改造前一致。
 	c, registry, stop := startWiredRegistry(t, false, "")
 	defer stop()
 
-	if err := regWithToken(t, c, sock, "my-plugin", ""); err != nil {
+	id, err := regWithToken(t, c, "my-plugin", "")
+	if err != nil {
 		t.Fatalf("anonymous register: %v", err)
 	}
+	// 绑定隧道使插件在线（平台只认隧道注册）。
+	stream := connectTunnel(t, c, "", id)
+	defer stream.CloseSend()
+	waitTunnelBound(t, registry, id)
+
 	if _, ok := registry.FindByNameFor("", "my-plugin"); !ok {
 		t.Fatal("匿名模式下 FindByNameFor(\"\", name) 应命中裸 name 键")
 	}
@@ -134,7 +165,7 @@ func TestRegistryWiring_AnonymousModeBareName(t *testing.T) {
 		}
 	}
 	// 心跳等后续调用同样无需 token。
-	if _, err := c.Heartbeat(context.Background(), &pb.HeartbeatRequest{InstanceId: registry.List()[0].InstanceID}); err != nil {
+	if _, err := c.Heartbeat(context.Background(), &pb.HeartbeatRequest{InstanceId: id}); err != nil {
 		t.Fatalf("anonymous heartbeat: %v", err)
 	}
 }
