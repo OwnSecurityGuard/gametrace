@@ -4,7 +4,8 @@
 **Status:** Proposed
 **Purpose:** Define the core event model used by GameTrace data pipeline, event storage, MCP query, replay, and analysis systems.
 
-> ⚠️ 本文是设计稿，部分 DDL 已落后于实现（如缺 `context` 列、`origin_id` 索引）。
+> ⚠️ 本文是设计稿，与实现仍存在差异：实际 events 表多 `scenario_id`/`replay_id` 两列（预留未填充）、
+> 多一个 `idx_events_session_time(session_id, timestamp)` 覆盖索引，且存储已是 SQLite + PostgreSQL 双驱动。
 > 线上真实 schema 以 `pkg/store` 建表代码为唯一事实来源。
 
 ---
@@ -730,7 +731,7 @@ Payload:
 
 Event Store uses:
 
-* SQLite
+* SQLite / PostgreSQL 双驱动（compose 部署默认 `GT_DB_DRIVER=postgres`）
 * Append Only
 * Event as Source of Truth
 
@@ -748,6 +749,9 @@ Forbidden:
 UPDATE Event
 DELETE Event
 ```
+
+> 注：append-only 指禁止对单条事件逐条改写/删除。仅有的两处整体清除路径是
+> 会话删除（`delete_session`）与离线重解码前的 `ClearDecodedData`。
 
 ---
 
@@ -786,7 +790,13 @@ CREATE TABLE events (
     payload BLOB NOT NULL,
 
 
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+
+
+    scenario_id TEXT,
+
+
+    replay_id TEXT
 );
 ```
 
@@ -845,6 +855,16 @@ ON events(origin_id);
 
 CREATE INDEX idx_events_causation
 ON events(causation_id);
+
+
+-- 实现中额外存在（SQLite 与 PG 均有）：
+CREATE INDEX idx_events_session_time
+ON events(session_id, timestamp);
+
+
+-- PG 侧额外存在：
+CREATE INDEX idx_raw_packets_session
+ON raw_packets(session_id);
 ```
 
 ---
@@ -887,6 +907,7 @@ Possible future additions:
 * Materialized Views
 * Vector Embedding
 * AI Reasoning Trace
+* Scenario / Replay 关联——`events.scenario_id` / `events.replay_id` 列已物理预留，填充待 Phase 2/3
 
 These should be extensions and must not violate the immutable Event core model.
 

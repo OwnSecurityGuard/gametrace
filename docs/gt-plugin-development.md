@@ -9,23 +9,20 @@
 ## 1. 概念模型
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  gt-pipeline                       │
-│                                                     │
-│  ┌──────────────┐    Register RPC    ┌───────────┐ │
-│  │ gt-mcp      │ ────────────────>  │ Registry  │ │
-│  │ (Agent 入口) │ <───────────────   │ Server    │ │
-│  └──────────────┘    List/Deregister └─────┬─────┘ │
-│                                            │       │
-│  ┌──────────────┐    Decode RPC           │       │
-│  │ 插件进程 A   │ ◄───────────────────────┘       │
-│  │ (http插件)   │   unix/npipe/tcp socket         │
-│  └──────────────┘                                 │
-│  ┌──────────────┐    Decode RPC                   │
-│  │ 插件进程 B   │ ◄────────────────────────────── │
-│  │ (dhcp插件)   │                                  │
-│  └──────────────┘                                  │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                        gt-pipeline                          │
+│                                                             │
+│  ┌──────────────┐   Register RPC + Connect 双向流（出站）    │
+│  │  Registry    │ ◄──────────────────────────────────────┐  │
+│  │  Server      │   插件自行拨号 TCP :9091，平台只观察    │  │
+│  │  (TCP :9091) │                                        │  │
+│  └──────────────┘   解码帧复用同一条 Connect 隧道         │  │
+│        ▲            （平台不启动、不回调插件进程）        │  │
+│        │  ◄──────────────────────────────  插件进程 A     │  │
+│        │                                （http 插件）     │  │
+│        │  ◄──────────────────────────────  插件进程 B     │  │
+│        │                                （dhcp 插件）     │  │
+└──────────────────────────────────────────────────────────┘
 ```
 
 **关键术语：**
@@ -36,8 +33,8 @@
 | `protocol` | 协议名称（slug），如 `http`、`dhcp` |
 | `protocol_version` | 协议版本，如 `1` |
 | `type` | 插件类型：`decoder`（数据解码） |
-| `hints` | 协议识别提示，逗号分隔的字符串数组 |
-| `event` | 输出事件名，与 contract.yaml 的 `registered_events[].event` 对齐 |
+| `hints` | 协议识别提示，字符串列表 |
+| `event` | 输出事件名，与插件 manifest 的事件/`semantic_rules` 声明对齐 |
 | `registry_addr` | 插件与注册中心通信的端点 |
 
 ---
@@ -158,8 +155,8 @@ export GT_AUTH_TOKEN=<get_plugin_env 的 notes 里给出的属主 token>
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `protocol_version` | int | `1` | 协议版本 |
-| `hints` | string | 空 | 逗号分隔的协议提示词，如 `tcp,dns` |
+| `protocol_version` | string | `"1"` | 协议版本 |
+| `hints` | string 列表 | 空 | 协议识别提示词列表，如 `["tcp", "dns"]` |
 | `event` | string | 同 `protocol` | 输出事件名 |
 | `meta` | map | 空 | 附加元数据 |
 
@@ -169,9 +166,11 @@ export GT_AUTH_TOKEN=<get_plugin_env 的 notes 里给出的属主 token>
 api_version: gt.decoder/v2
 name: gt-http
 protocol: http
-protocol_version: 1
+protocol_version: "1"
 type: decoder
-hints: tcp,dns
+hints:
+  - tcp
+  - dns
 event: http
 meta:
   author: gt-team
@@ -542,10 +541,8 @@ func main() {
 > 编译，缺 `instance_id`，宿主拒流），或心跳/隧道断连。此时**不要**去排查解码器监听地址：
 > 平台只有隧道一条路径，插件不监听任何端口，解码帧与注册/心跳共用同一条连接。
 
-> **`GT_REGISTRY_ADDR` 的真实取值**：由 gt-pipeline 启动时打印在日志 `GT_REGISTRY_ADDR` 字段中；MCP 工具 `get_registry_addr` 亦可直接获取。
-> - Windows（命名管道）：`npipe:\\.\pipe\gt-registry`
-> - Linux/macOS（Unix socket）：`unix:<workdir>/run/registry.sock`
-> - 跨机器（TCP）：`host:port`（gt-pipeline 用 `-registry-addr` 开启）
+> **`GT_REGISTRY_ADDR` 的真实取值**：默认 TCP `host:9091`（registry 监听地址），实际值以 MCP 工具
+> `get_registry_addr` / `get_plugin_env` 返回为准，插件不再使用命名管道或 Unix socket 注册。
 >
 > 插件进程运行时的工作目录需包含 `plugin.yaml`。
 
@@ -560,7 +557,7 @@ func main() {
 
 ### 退出处理
 
-- **正常退出**：插件进程 exit → 隧道流断 / Registry 心跳超时（默认 15s）→ 自动注销
+- **正常退出**：插件进程 exit → 隧道流断 / 连续 30s 无心跳（心跳间隔 10s）→ 自动注销
 - **异常退出**：同理，无需手动 deregister；进程被 kill -9 时由心跳超时与 gRPC keepalive 兜底发现
 - **优雅关闭**：建议捕获 SIGTERM，停止接收新包后退出
 

@@ -20,8 +20,10 @@ zip 已内置回连地址与凭证（`config.embedded.json` 与探针在同一�
 把编译好的插件二进制放进 gt-agent 同目录的 `plugins/` 下，然后：
 
 ```bash
-gt-agent --token gt_tok_xxxx --server <服务器IP>:9091
+gt-agent --token gt_tok_xxxx --server <服务器IP>:19091
 ```
+
+（compose 部署下 registry 对外是宿主端口 `19091`，容器内为 `9091`；裸机部署按实际监听端口填写。）
 
 gt-agent 会自动发现 `plugins/` 下的插件进程并拉起，以**隧道模式**注册到服务器——这是平台唯一受支持的运行方式：插件不起本地端口、服务器不回拨，注册/心跳/解码帧共用同一条到 `:9091` 的连接，所以成员机器在 NAT 后面也不需要开放入站端口。插件崩溃会被自动按退避重启。此后服务器侧 `list_registered_plugins` 就能看到你的插件。
 
@@ -31,7 +33,7 @@ gt-agent 会自动发现 `plugins/` 下的插件进程并拉起，以**隧道模
 
 ```bash
 start_capture(source="agent", plugin=<可选>)   # 记下 session_id
-gt-agent --token gt_tok_xxxx --server <服务器IP>:9091 \
+gt-agent --token gt_tok_xxxx --server <服务器IP>:19091 \
   --session <session_id> --iface <网卡> --filter "port 8984"
 ```
 
@@ -39,7 +41,7 @@ gt-agent --token gt_tok_xxxx --server <服务器IP>:9091 \
 - `--filter`：BPF 过滤表达式（建议加，控制上行带宽）；
 - `--session` 留空 = 只托管插件、不抓包。
 
-开发者想写/构建/验证插件，可在网页「更多 → 开发者工具」中完成（脚手架、编译、归因）。
+插件开发由你的 AI Agent 经 MCP 工具驱动（`scaffold_plugin` → `connect_plugin` → `verify_plugin` → `explain_plugin`），构建与运行都在你本机完成——平台不编译、不启动插件。
 
 ## 4. 常见问题
 

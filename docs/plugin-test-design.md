@@ -1,6 +1,7 @@
 # 插件测试功能设计（隐私安全的原始包测试通道）
 
 > 关联文档：`frontend-plugin-hotreload-design.md`（前端热更/切换整体方案）。
+> 后续演进：本设计之后平台又引入了 `verify_plugin` 分层验证（规则判定 + 证据），`test_plugin` 保持其"看解出了什么"的采样定位。
 > 目标：在「插件管理」页面增加**测试插件**能力——**在不完整暴露原始包**的前提下，把原始包临时交给插件解码，并只把**插件解出来的相关数据**（解码事件）展示出来。
 
 ## 1. 为什么需要新通道，而不复用 `decode_raw_packets`
@@ -13,13 +14,13 @@
 | 门控 | 需 `--enable-raw-debug` | **常驻可用**（不回传原始字节，安全） |
 | 返回内容 | 仅计数（total/decoded/errors） | 计数 + **事件类型分布** + **采样解码事件** + **错误样例** |
 
-核心判断：原始包字节只在 `gt-pipeline` 进程内被 `QueryRawPackets` 读取并喂给插件 `DecodeV2`，**从未序列化回 MCP / 前端**。插件输出的是「协议语义层事件」（`data.*`），不含链路层原始字节。因此该能力是**隐私安全**的，应作为常驻功能，而非 dev 调试开关。
+核心判断：原始包字节只在 `gt-pipeline` 进程内被 `QueryRawPackets` 读取并喂给插件 `DecodeV2`，**从未序列化回 MCP / 前端**。插件输出的是「协议语义层事件」（当时称 `data.*`；注：v2 契约已废止 `data`/`_fields` 约定，现为扁平 Value+Meta/Analysis，`data_json` 仅是历史遗留列名），不含链路层原始字节。因此该能力是**隐私安全**的，应作为常驻功能，而非 dev 调试开关。
 
 ## 2. 端到端数据流
 
 ```
 [前端 PluginPanel 测试区]
-   配置：目标插件 + 来源会话(offline) + 可选过滤 + 包上限
+   配置：目标插件 + 来源会话(offline/running 均可) + 可选过滤 + 包上限
         │  test_plugin(session_id, plugin, filter, limit, sample_limit)
         ▼
 [gt-mcp]  ──gRPC──►  [gt-pipeline / CaptureControl]
@@ -87,7 +88,7 @@ message TestPluginResponse {
 ### 3.3 `cmd/gt-pipeline/decode_raw.go`（或新 `test_plugin.go`）
 - **抽取共享解码循环**：把 `DecodeRawPackets` 中「分批读取 + `DecodeV2` + 累积」的逻辑抽成 helper（如 `decodeRawLoop(ctx, st, dispatcher, req, onEvent, onErr)`），两个入口复用，避免重复。
 - `pipelineService.TestPlugin`：
-  1. 拒绝运行中的 session（与 `DecodeRawPackets` 一致，避免与 captureTask 写冲突）。
+  1. 允许对运行中的 session 做只读测试（只 SELECT raw_packets、不回写会话库；WAL 下读不阻塞 captureTask 的写，无冲突。注：写库的 `DecodeRawPackets` 仍拒绝运行中会话）。
   2. 按名路由插件（`FindByName` → 退化 `Find`）。
   3. 分批 `QueryRawPackets`（原始字节仅此处存在于内存，**不回传**）。
   4. 每个解码事件累加直方图；保留前 `sample_limit` 个事件（含 `data.*` 拍平 JSON，截断大字段）；保留前若干错误（id/src/dst/err）。
@@ -102,7 +103,7 @@ message TestPluginResponse {
 
 ### 4.1 配置区（测试输入）
 - **目标插件**：下拉（注册插件列表，默认选中当前卡片插件 / 第一个在线）。
-- **原始包来源会话**：下拉（仅 `stopped` 会话可选；运行时过滤掉 `running`）。
+- **原始包来源会话**：下拉（`stopped` 与 `running` 会话均可选，只读测试不影响抓包）。
 - **可选过滤（可折叠）**：协议 / 源 IP / 目的 IP。
 - **测试包上限**：select `50 / 100 / 500 / 全部`。
 - **[运行测试]** 按钮（加载态；禁用条件：缺插件或会话）。
@@ -112,7 +113,7 @@ message TestPluginResponse {
 ### 4.2 展示区（插件解出来的相关数据）
 - **状态条**：`成功解码 X / 失败 Y（共 Z 包）` + 隐私徽标 `🔒 原始包未传前端`。
 - **事件类型分布**：横向条形/小表格（type → count），是「解出来的相关数据」的概览。
-- **采样事件预览**：表格（时间、类型、schema_id、`data.*` 关键字段），最多 `sample_limit` 条；行展开看 `data_json` 详情。
+- **采样事件预览**：表格（时间、类型、schema_id、`data.*` 关键字段——历史提法，v2 已改为扁平 Value+Meta/Analysis，`data_json` 仅是历史遗留列名），最多 `sample_limit` 条；行展开看 `data_json` 详情。
 - **解码错误样例**（折叠）：表格（包ID、src→dst、错误原因），**不含 raw**。
 - **隔离提示**：`本测试不修改会话真实解码数据（只读采样）`。
 
@@ -128,7 +129,7 @@ message TestPluginResponse {
 - 错误样例只含 `id/src/dst/error`，**不含 raw payload**。
 
 ## 6. 风险 / 限制
-- 测试用 **offline（stopped）** 会话的原始包；运行中的会话不接测试（与 `decode_raw_packets` 一致）。
+- 测试为**只读、不落库**，`stopped` 与 `running` 会话均可测（WAL 读不阻塞 captureTask 写；原「运行中的会话不接测试」限制已取消，见 `cmd/gt-pipeline/decode_raw.go` 的 `TestPlugin`）。
 - 测试结果**不持久化**（刷新/关闭即丢）。如需保留，可加 `run_id` 暂存（后续增强，本设计不做）。
 - 解码事件若含敏感业务字段，仍属「解出来的数据」，由插件 schema 决定；这与「不暴露原始包」不冲突（原始包=链路层字节，解码数据=应用层语义）。
 
@@ -144,5 +145,5 @@ message TestPluginResponse {
 全部 T1–T6 落地并通过编译/类型检查/构建：
 - 后端 `go build -tags pcap ./cmd/... ./pkg/...` 通过；`capturecontrol` 单测通过（补 `fakeEngine.SetSessionPlugin/SubscribePlugins/TestPlugin`）。
 - 前端 `tsc -b` 通过、`vite build` 1857 模块通过。
-- 行为：仅 stopped 会话可测；原始包仅服务端解码，不回传、不落库；返回计数+事件类型分布+采样事件(data_json 截断 4KB)+错误样例。
+- 行为（实施当时）：仅 stopped 会话可测；原始包仅服务端解码，不回传、不落库；返回计数+事件类型分布+采样事件(data_json 截断 4KB)+错误样例。（后续演进：现已允许对 running 会话做只读测试，见 §6。）
 - `test_plugin` 为常驻工具，**不**依赖 `--enable-raw-debug`（与 `list_raw_packets`/`decode_raw_packets` 的 dev 门控区分开）。

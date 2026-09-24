@@ -161,7 +161,7 @@
 - 新增 HTTP 路由 `mux.HandleFunc("/events/plugins", capture.handleEventsSSE)`：`text/event-stream`，事件名 `plugin`，data 为 JSON；15s 心跳保活；客户端断开即退出。
 
 ### 10.5 前端即时刷新（web）
-- `vite.config.ts` 增加 `/events` 代理到 `http://localhost:8087`。
+- `vite.config.ts` 增加 `/events` 代理到 `http://localhost:8087`。（历史记录：8087 为当时端口，现 `vite.config.ts` 各代理均指向 gt-mcp 的 `:8781`。）
 - `use-mcp.ts` 新增 `usePluginEventStream()`：浏览器 `EventSource('/events/plugins')`，收到 `plugin` 事件即 `invalidateQueries(['registeredPlugins'])` 与 `['sessions']`；`onerror` 仅记录，依赖浏览器自动重连 + 5s 轮询兜底。
 - `App.tsx`：`QueryClientProvider` 上移到 `main.tsx`，`App` 顶层挂载 `usePluginEventStream()`。
 

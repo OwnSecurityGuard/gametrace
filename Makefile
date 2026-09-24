@@ -1,4 +1,4 @@
-.PHONY: proto test build build-mcp build-pipeline build-agent build-agents build-examples run-mcp run-pipeline deploy release release-matrix web-build docs
+.PHONY: proto test build build-mcp build-pipeline build-agent build-agents build-examples run-mcp run-pipeline deploy release-matrix web-build docs
 
 TAGS := pcap
 
@@ -75,8 +75,9 @@ build-agent:
 # ============================================================================
 # 多平台下载 agent 预置矩阵（T-Web First） -> build/agents/
 #
-# 远程 agent 需要在"用户本机"做实时抓包。Docker 镜像已内建 linux/amd64 与
-# windows/amd64 两份可抓包探针（见 Dockerfile builder），本 target 供裸机部署
+# 远程 agent 需要在"用户本机"做实时抓包。Docker 镜像已内建 linux/windows/darwin
+# 三平台 × amd64/arm64 双架构共 6 份可抓包探针（其中 linux/arm64 受 BUILD_ARM_AGENT
+# 控制，见 Dockerfile builder），本 target 供裸机部署
 # 或补充平台时预置（产物同样会进 GT_AGENT_BIN_DIR 扫描）：
 #   - windows/amd64、windows/arm64：gopacket/pcap 在 Windows 是纯 Go（运行时加载
 #     wpcap.dll），CGO_ENABLED=0 即可交叉编译，无需 mingw；
@@ -169,8 +170,8 @@ deploy:
 		docker compose up -d --build --force-recreate
 	@echo
 	@echo "==> 运行版本核对（应与上面 VERSION/GIT_COMMIT/BUILD_TIME 一致才算部署成功）："
-	@echo "--- gt-pipeline ---"; docker exec gt-pipeline-1 /usr/local/bin/gt-pipeline -version 2>&1 || true
-	@echo "--- gt-mcp ---"; docker exec gt-mcp-1 /usr/local/bin/gt-mcp -version 2>&1 || true
+	@echo "--- gt-pipeline ---"; docker compose exec pipeline /usr/local/bin/gt-pipeline -version 2>&1 || true
+	@echo "--- gt-mcp ---"; docker compose exec mcp /usr/local/bin/gt-mcp -version 2>&1 || true
 
 # 重新生成 README 中的 MCP 工具目录（与 cmd/gt-mcp/main.go 对齐）。
 docs:

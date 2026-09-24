@@ -185,9 +185,9 @@ services:
       - "${GT_MCP_PORT:-18781}:8781" # MCP HTTP/SSE + Web UI（浏览器访问 http://<host>:18781）
     volumes:
       - gt-data:/data
-      # 远程 agent 预置产物已由镜像内建（Dockerfile builder 编译 linux/amd64、
-      # windows/amd64 与 darwin/amd64、darwin/arm64 四份可抓包探针，见
-      # /opt/gametrace/agents；darwin 经 osxcross，可用 GT_BUILD_DARWIN_AGENT=0
+      # 远程 agent 预置产物已由镜像内建（Dockerfile builder 编译 linux/windows/darwin
+      # 三平台 × amd64/arm64 双架构共 6 份可抓包探针，其中 linux/arm64 受
+      # BUILD_ARM_AGENT 控制；darwin 经 osxcross，可用 GT_BUILD_DARWIN_AGENT=0
       # 关闭），无需宿主 `make build-agents` + 挂载。仍需补充平台时，可在宿主机
       # 放一份产物并用 GT_AGENT_BIN_DIR 环境变量指过去。
 

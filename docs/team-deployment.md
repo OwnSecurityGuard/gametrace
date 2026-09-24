@@ -11,7 +11,8 @@
 │  ├─ 抓包推流 ─────────┼── :9092 ──►│  AgentIngest gRPC                │   │  Authorization:      │
 │  └─ 托管插件 ─────────┼── :9091 ──►│  PluginRegistry gRPC（隧道注册）  │   │   Bearer gt_xxx ────┼──► :8781
 └──────────────────────┘            │  CaptureControl gRPC :9888       │   └──────────────────────┘
-                                    │  └─ control.sqlite / sessions/   │
+                                    │  └─ 事件/控制元数据 → postgres      │
+                                    │     （卷 gt-pgdata；/data 只放非库文件）│
                                     │ gt-mcp 容器 ── HTTP/SSE :8781 ──┼──► 前端 / MCP 工具
                                     └──────────────────────────────────┘
 ```
@@ -23,7 +24,7 @@
 | 9092 | AgentIngest gRPC | gt-agent 抓包推流 |
 | 8781 | gt-mcp HTTP/SSE（`/sse`+`/message`、`/mcp`、`/events/plugins`） | 团队成员的 AI Agent / 浏览器 |
 
-数据落在共享卷 `/data`（control.sqlite + sessions/，SQLite WAL 模式，pipeline 与 mcp 跨进程并发安全）。
+数据默认走 **postgres 模式**（compose 默认 `GT_DB_DRIVER=postgres`）：事件与控制元数据统一存 PostgreSQL（数据卷 `gt-pgdata`），共享卷 `/data` 只放非库文件（日志、地址回写文件等）。SQLite 模式（`/data/control.sqlite` + `sessions/`，WAL，pipeline 与 mcp 跨进程并发安全）仅作为回滚路径保留。
 
 ## 1. 准备
 
@@ -110,7 +111,7 @@ docker compose up -d --force-recreate
 # 怀疑缓存异常/要完全干净重建：禁用层缓存
 GT_BUILD_NO_CACHE=true docker compose up -d
 
-docker compose ps          # pipeline、mcp 两个服务应为 running
+docker compose ps          # pipeline、mcp、postgres 三个服务都应为 running
 docker compose logs pipeline | tail
 ```
 
@@ -126,9 +127,9 @@ docker compose logs pipeline | tail
 
 ```bash
 # 无 token → 401 unauthorized（鉴权已生效）
-curl -s -o /dev/null -w '%{http_code}\n' http://10.0.0.5:8781/mcp
+curl -s -o /dev/null -w '%{http_code}\n' http://10.0.0.5:18781/mcp
 # 正确 token → 非 401（405/400 等取决于 HTTP 方法，不再是 unauthorized）
-curl -s -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer gt_tok_bbb' http://10.0.0.5:8781/mcp
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Authorization: Bearer gt_tok_bbb' http://10.0.0.5:18781/mcp
 ```
 
 HTTP 路由：`/sse`、`/message`、`/mcp`、`/events/plugins` 均在鉴权链内（Bearer 校验，未带 token 返回 401）；`/singbox/profile` 是唯一豁免端点（手机客户端无法自定义请求头，且只输出代理地址信息）。
@@ -147,7 +148,7 @@ HTTP 路由：`/sse`、`/message`、`/mcp`、`/events/plugins` 均在鉴权链�
 | `add_project_member` / `remove_project_member` | 项目成员增删；角色仅 `admin`/`member` 两档，不做复杂 RBAC |
 | `transfer_project_owner` | 转移项目 Owner（独立的敏感安全操作；新 Owner 必须已是项目内成员） |
 | `set_project_plugins` / `set_project_rules` | 项目持有的插件/规则条目（关联数据，非独立管理后台） |
-| `move_session_to_project` | 把既有会话移入项目（或空串解除）；`set_session_project` 为其兼容别名 |
+| `move_session_to_project` | 把既有会话移入项目（或空串解除） |
 
 角色与权限（2026-09-05 钉死，角色层级：global admin > Project Owner > Project Admin > Project Member）：
 
@@ -162,6 +163,8 @@ HTTP 路由：`/sse`、`/message`、`/mcp`、`/events/plugins` 均在鉴权链�
 - **可见性**：项目对 Owner、成员、全局 `:admin` 可见；**项目是协作边界**——成员可见项目内全部会话（含他人创建的），个人会话（未归属项目）仅创建者可见。
 - **会话移动**：`move_session_to_project` 需要调用者对源会话有管理权、对目标项目有成员身份，且租户一致；不是任意可调的裸更新。
 - **一手体验**：Web 首页「我的项目」展示项目在线/离线状态与最近会话；从项目发起抓包自动携带 `project_id`，会话持久化到 `sessions.project_id`。
+
+（示意：用任意 MCP 客户端/agent 调用）
 
 ```bash
 # 通过 MCP 创建项目并加成员
@@ -180,7 +183,6 @@ mcp call start_capture '{"source":"agent","project_id":"'$PROJECT_ID'"}'   # 自
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | 构建卡在 `go mod download`，报 `proxy.golang.org ... connection refused` | builder 镜像默认 `GOPROXY` 是 proxy.golang.org，国内网络不可达 | 镜像已默认改用 `goproxy.cn`；如仍失败显式换源：`docker compose build --build-arg GOPROXY=https://goproxy.cn,direct` |
-| `mcp` 容器反复重启，日志 `flag provided but not defined: -spawn-agent` | compose 只覆盖了 `entrypoint` 未写 `command`，镜像 `CMD ["-spawn-agent=false"]` 被追加给了 `gt-mcp`（该 flag 属于 pipeline） | mcp 服务必须显式写 `command`（见 `docker-compose.yml`），不要留空 |
 | `mcp` 报 `open control store: unable to open database file (14)`，路径是 `/control.sqlite` | 工作目录没落到 `/data`，锚到了容器根目录，而进程以非 root 的 `gametrace` 用户运行 | 确认 `GT_HOME=/data` 已传入且镜像 `WORKDIR /data` 生效；数据目录应是 `/data/control.sqlite` |
 
 排查第一步建议先分清是**构建失败**还是**容器 restart loop**：前者看 build 输出，后者直接
@@ -238,4 +240,4 @@ gt-agent --token gt_tok_bbb --server 10.0.0.5:19091 --session <session_id> --ifa
 - `gt-mcp` 用 `GT_CONTROL_ADDR` 指向 pipeline 的 9888；
 - 其余环境变量与上文一致（见 `pkg/config/app.go`）。
 
-更多配置细节：`examples/gametrace.yaml`（统一配置文件示例）、`.env.example`。
+更多配置细节：`examples/gt.yaml`（统一配置文件示例）、`.env.example`。
