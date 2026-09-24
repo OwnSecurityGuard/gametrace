@@ -76,7 +76,7 @@ func dialRegistry(ctx context.Context, addr string) (net.Conn, error) {
 // 应用层心跳能发现宿主已经消失。
 // opts.AuthToken 非空时，所有 RPC 附带 `authorization: Bearer <token>` metadata。
 func RunRegisterLoopWithOptions(decodeFuncV2 DecodeFuncV2, opts RegisterOptions) {
-	decoder := &Decoder{decodeFuncV2: decodeFuncV2}
+	decoder := NewDecoder(decodeFuncV2)
 
 	registryAddr := ResolveRegistryAddr()
 	if registryAddr == "" {
