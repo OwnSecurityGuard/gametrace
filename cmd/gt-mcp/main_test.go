@@ -1,328 +1,213 @@
-//go:build pcap
-
 package main
 
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"google.golang.org/grpc"
-	plugindev "gametrace/pkg/plugindev"
-	plugindevclient "gametrace/pkg/plugindev/client"
+
+	"gametrace/pkg/plugindev"
 )
 
-func TestResolvePluginsDirDefaultNextToExecutable(t *testing.T) {
-	// Create a fake executable directory with a plugins subdir.
-	tmp := t.TempDir()
-	pluginsDir := filepath.Join(tmp, "plugins")
-	if err := os.MkdirAll(pluginsDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Simulate being run from a different working directory by changing into tmp.
-	// resolvePluginsDir("plugins") should still find the executable-relative dir.
-	resolved, err := resolvePluginsDir("plugins")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// When running under `go test`, os.Executable points to a test binary in a
-	// temp dir that has no plugins dir, so it falls back to cwd-relative. We can
-	// only assert the result is absolute and clean.
-	if !filepath.IsAbs(resolved) {
-		t.Fatalf("expected absolute path, got %q", resolved)
-	}
+// toolReq 构造一个带参数的 MCP 工具调用请求。
+func toolReq(args map[string]any) mcp.CallToolRequest {
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = args
+	return req
 }
 
-func TestResolvePluginsDirAbsolute(t *testing.T) {
-	tmp := t.TempDir()
-	resolved, err := resolvePluginsDir(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved != filepath.Clean(tmp) {
-		t.Fatalf("expected %q, got %q", filepath.Clean(tmp), resolved)
-	}
-}
-
-// embeddedPluginDev starts an in-process PluginDev gRPC server rooted at
-// pluginsDir and returns a client connected over loopback, exactly as gt-mcp
-// does when GT_PLUGINDEV_ADDR is unset. This lets the discovery handlers be
-// exercised without a separate process. The connection is closed via
-// t.Cleanup; the embedded server runs for the test binary's lifetime (the same
-// lifetime model gt-mcp uses for its embedded Developer Plane).
-func embeddedPluginDev(t *testing.T, pluginsDir string) (plugindevclient.PluginDev, *grpc.ClientConn) {
+// toolText 取出工具结果的 JSON 文本。
+func toolText(t *testing.T, res *mcp.CallToolResult) string {
 	t.Helper()
-	client, conn, err := dialPluginDev(pluginsDir, "")
-	if err != nil {
-		t.Fatalf("embeddedPluginDev: %v", err)
+	if res == nil || len(res.Content) == 0 {
+		t.Fatal("expected tool content")
 	}
-	t.Cleanup(func() { _ = conn.Close() })
-	return client, conn
+	tc, ok := res.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", res.Content[0])
+	}
+	return tc.Text
 }
 
-func TestHandleListPluginsMissingDir(t *testing.T) {
-	pluginsDir := filepath.Join(t.TempDir(), "does-not-exist")
-	client, conn := embeddedPluginDev(t, pluginsDir)
-	m := &mcpCapture{pluginsDir: pluginsDir, pdClient: client, pdConn: conn}
-	res, err := m.handleListPlugins(context.Background(), mcp.CallToolRequest{})
+// TestHandleScaffoldPluginReturnsContentsOnly 锁定平台侧不落盘：scaffold 只返回
+// 文件清单与内容，不返回任何输出目录，也不创建任何文件 —— 源码由 Agent 在自己的
+// workspace 落盘，平台不持有用户插件源码。
+func TestHandleScaffoldPluginReturnsContentsOnly(t *testing.T) {
+	m := &mcpCapture{}
+	res, err := m.handleScaffoldPlugin(context.Background(), toolReq(map[string]any{
+		"name":     "my-game-decoder",
+		"protocol": "my_game",
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Content) == 0 {
-		t.Fatal("expected content")
-	}
-	text := res.Content[0].(mcp.TextContent).Text
-	if !contains(text, `"ok":true`) {
-		t.Fatalf("expected ok=true for missing dir, got %s", text)
-	}
-	if !contains(text, `"plugins":[]`) {
-		t.Fatalf("expected empty plugins list, got %s", text)
-	}
-}
+	text := toolText(t, res)
 
-func TestHandleListPluginsListsBinaries(t *testing.T) {
-	tmp := t.TempDir()
-	ext := ""
-	if runtime.GOOS == "windows" {
-		ext = ".exe"
-	}
-	if err := os.WriteFile(filepath.Join(tmp, "http"+ext), []byte("fake"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(tmp, "tcp"+ext), []byte("fake"), 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	client, conn := embeddedPluginDev(t, tmp)
-	m := &mcpCapture{pluginsDir: tmp, pdClient: client, pdConn: conn}
-	res, err := m.handleListPlugins(context.Background(), mcp.CallToolRequest{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := res.Content[0].(mcp.TextContent).Text
-	if !contains(text, `"http"`) {
-		t.Fatalf("expected http plugin, got %s", text)
-	}
-	if !contains(text, `"tcp"`) {
-		t.Fatalf("expected tcp plugin, got %s", text)
-	}
-}
-
-// TestHandleListPluginsDiscoversSubdirectoryPlugins locks in the fix for
-// plugins laid out as <plugins_dir>/<name>/<name>.exe (the form produced by
-// create_plugin). The old code skipped subdirectories entirely, so freshly
-// scaffolded plugins were never listed.
-func TestHandleListPluginsDiscoversSubdirectoryPlugins(t *testing.T) {
-	tmp := t.TempDir()
-	ext := exeExt()
-	// create_plugin form: plugins/my-game/my-game.exe
-	dir := filepath.Join(tmp, "my-game")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "my-game"+ext), []byte("fake"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Subdirectory with a non-matching binary name should still be discovered
-	// (prefer <name>/<name>.exe, but fall back to any exe).
-	dir2 := filepath.Join(tmp, "http")
-	if err := os.MkdirAll(dir2, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir2, "http-plugin"+ext), []byte("fake"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	client, conn := embeddedPluginDev(t, tmp)
-	m := &mcpCapture{pluginsDir: tmp, pdClient: client, pdConn: conn}
-	res, err := m.handleListPlugins(context.Background(), mcp.CallToolRequest{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := res.Content[0].(mcp.TextContent).Text
 	var parsed struct {
-		OK      bool `json:"ok"`
-		Plugins []struct {
-			Name   string `json:"name"`
-			Binary string `json:"binary"`
-			Dir    string `json:"dir"`
-		} `json:"plugins"`
+		Name     string            `json:"name"`
+		Template string            `json:"template"`
+		Files    []string          `json:"files"`
+		Contents map[string]string `json:"contents"`
+		Notes    []string          `json:"notes"`
 	}
 	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
-		t.Fatalf("failed to parse result %q: %v", text, err)
+		t.Fatalf("unmarshal scaffold result: %v\n%s", err, text)
 	}
-	if !parsed.OK {
-		t.Fatalf("expected ok=true, got %s", text)
+	if parsed.Template == "" {
+		t.Errorf("expected a template id, got %s", text)
 	}
-	if len(parsed.Plugins) != 2 {
-		t.Fatalf("expected 2 plugins, got %d: %s", len(parsed.Plugins), text)
+	if len(parsed.Files) == 0 {
+		t.Fatalf("expected files, got %s", text)
 	}
-	byName := make(map[string]struct {
-		Binary string
-		Dir    string
-	})
-	for _, p := range parsed.Plugins {
-		byName[p.Name] = struct {
-			Binary string
-			Dir    string
-		}{p.Binary, p.Dir}
-	}
-	mg, ok := byName["my-game"]
-	if !ok {
-		t.Fatalf("expected my-game plugin, got %s", text)
-	}
-	wantBinary := filepath.Join(tmp, "my-game", "my-game"+ext)
-	if filepath.Clean(mg.Binary) != filepath.Clean(wantBinary) {
-		t.Fatalf("expected binary %q, got %q", wantBinary, mg.Binary)
-	}
-	if filepath.Clean(mg.Dir) != filepath.Clean(filepath.Join(tmp, "my-game")) {
-		t.Fatalf("expected dir inside subdirectory, got %q", mg.Dir)
-	}
-	if _, ok := byName["http"]; !ok {
-		t.Fatalf("expected http plugin, got %s", text)
-	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
+	for _, f := range parsed.Files {
+		if parsed.Contents[f] == "" {
+			t.Errorf("file %q has no content: %s", f, text)
 		}
 	}
-	return false
+	if strings.Contains(text, "output_dir") {
+		t.Errorf("scaffold must not return an output_dir (the platform writes nothing): %s", text)
+	}
+	if len(parsed.Notes) == 0 {
+		t.Errorf("expected usage notes, got %s", text)
+	}
 }
 
-// TestHandleStatusPluginUnknown exercises the dual-state aggregation path: an
-// unknown plugin should report artifact.state=unknown, a runtime view of
-// offline (no registry link in this test), and a build_plugin next_action.
-func TestHandleStatusPluginUnknown(t *testing.T) {
-	pluginsDir := t.TempDir()
-	client, conn := embeddedPluginDev(t, pluginsDir)
-	m := &mcpCapture{pluginsDir: pluginsDir, pdClient: client, pdConn: conn}
+func TestHandleScaffoldPluginValidatesInput(t *testing.T) {
+	m := &mcpCapture{}
+	cases := []struct {
+		name string
+		args map[string]any
+	}{
+		{"missing name", map[string]any{"protocol": "my_game"}},
+		{"bad kebab-case", map[string]any{"name": "My_Game", "protocol": "my_game"}},
+		{"missing protocol", map[string]any{"name": "my-game"}},
+	}
+	for _, c := range cases {
+		res, err := m.handleScaffoldPlugin(context.Background(), toolReq(c.args))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if text := toolText(t, res); !strings.Contains(text, `"ok":false`) {
+			t.Errorf("%s: expected a validation error, got %s", c.name, text)
+		}
+	}
+}
 
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": "ghost"}
-	res, err := m.handleStatusPlugin(context.Background(), req)
+// TestHandleStatusPluginOffline 锁定单一状态视图：平台没有制品/dev 进程视角，
+// 未注册的插件报 runtime.state=offline、无验证证明，并把用户推向 connect_plugin。
+func TestHandleStatusPluginOffline(t *testing.T) {
+	m := &mcpCapture{}
+	res, err := m.handleStatusPlugin(context.Background(), toolReq(map[string]any{"name": "ghost"}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := res.Content[0].(mcp.TextContent).Text
+	text := toolText(t, res)
 
 	var parsed struct {
-		Ok       bool   `json:"ok"`
 		Name     string `json:"name"`
-		Artifact struct {
-			State string `json:"state"`
-		} `json:"artifact"`
-		Runtime struct {
+		Runtime  struct {
 			State string `json:"state"`
 		} `json:"runtime"`
+		Validation struct {
+			Validated bool `json:"validated"`
+		} `json:"validation"`
 		NextAction map[string]any `json:"next_action"`
 	}
 	if err := json.Unmarshal([]byte(text), &parsed); err != nil {
 		t.Fatalf("unmarshal status: %v\n%s", err, text)
 	}
-	if !parsed.Ok {
-		t.Fatalf("expected ok=true, got %s", text)
-	}
 	if parsed.Name != "ghost" {
-		t.Fatalf("expected name=ghost, got %q", parsed.Name)
-	}
-	if parsed.Artifact.State != "unknown" {
-		t.Fatalf("expected artifact.state=unknown, got %q", parsed.Artifact.State)
+		t.Errorf("expected name=ghost, got %q", parsed.Name)
 	}
 	if parsed.Runtime.State != "offline" {
-		t.Fatalf("expected runtime.state=offline (no registry link), got %q", parsed.Runtime.State)
+		t.Errorf("expected runtime.state=offline (no registry link), got %q", parsed.Runtime.State)
 	}
-	if parsed.NextAction == nil {
-		t.Fatalf("expected a next_action for an unknown plugin, got %s", text)
+	if parsed.Validation.Validated {
+		t.Errorf("expected no validation proof for an unknown plugin: %s", text)
+	}
+	if parsed.NextAction == nil || parsed.NextAction["tool"] != "connect_plugin" {
+		t.Errorf("expected next_action.tool=connect_plugin, got %v", parsed.NextAction)
+	}
+	if strings.Contains(text, "artifact") || strings.Contains(text, "dev_process") {
+		t.Errorf("status must not expose artifact/dev_process: %s", text)
 	}
 }
 
-// TestHandleExplainPluginForwards records a failed build in the shared
-// Developer Plane tracker and verifies handleExplainPlugin forwards the
-// structured attribution (category + SDK rule_id) produced by the embedded
-// PluginDev service.
-func TestHandleExplainPluginForwards(t *testing.T) {
-	pluginsDir := t.TempDir()
-	client, conn := embeddedPluginDev(t, pluginsDir)
-	m := &mcpCapture{pluginsDir: pluginsDir, pdClient: client, pdConn: conn}
+// TestHandleConnectPluginValidatesName 锁定 connect 的入参校验（name 必填且 kebab-case）。
+func TestHandleConnectPluginValidatesName(t *testing.T) {
+	m := &mcpCapture{}
+	for _, args := range []map[string]any{{}, {"name": "Bad_Name"}} {
+		res, err := m.handleConnectPlugin(context.Background(), toolReq(args))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if text := toolText(t, res); !strings.Contains(text, `"ok":false`) {
+			t.Errorf("args %v: expected a validation error, got %s", args, text)
+		}
+	}
+}
 
-	name := "explain-fwd"
-	plugindev.DefaultTracker().RecordBuild(name, 0, &plugindev.BuildResponse{
-		OK:     false,
-		Errors: []*plugindev.BuildError{{File: "main.go", Line: 7, Col: 3, Message: "undefined: event.ValueInt32"}},
+// TestHandleExplainPluginInlineVerify 锁定 in-process 归因：verify 参数里的高熵 +
+// 多数不可解被归成 suspected-encryption，并引用 contract.yaml 的 rule_id。
+func TestHandleExplainPluginInlineVerify(t *testing.T) {
+	m := &mcpCapture{}
+	res, err := m.handleExplainPlugin(context.Background(), toolReq(map[string]any{
+		"name": "explain-inline",
+		"verify": map[string]any{
+			"verdict": "fail",
+			"quality": map[string]any{
+				"input":  map[string]any{"raw": 10, "candidate": 10},
+				"decode": map[string]any{"success": 2, "unknown": 8, "unknown_ratio": 0.8, "errors": 0},
+				"entropy_estimate": 7.8,
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := toolText(t, res)
+	for _, want := range []string{"suspected-encryption", "inspect-bytes-first", "expl_"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("explain result missing %q: %s", want, text)
+		}
+	}
+}
+
+// TestHandleExplainPluginNoRecordedVerify 锁定「没有 verify 结果可归因」时的兜底：
+// 给出去跑 verify_plugin 的下一步，而不是编造结论。
+func TestHandleExplainPluginNoRecordedVerify(t *testing.T) {
+	m := &mcpCapture{}
+	res, err := m.handleExplainPlugin(context.Background(), toolReq(map[string]any{"name": "never-verified"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := toolText(t, res)
+	if !strings.Contains(text, "no verify result recorded") {
+		t.Errorf("expected the no-result fallback: %s", text)
+	}
+	if !strings.Contains(text, "verify_plugin") {
+		t.Errorf("expected next_action to point at verify_plugin: %s", text)
+	}
+}
+
+// TestHandleExplainPluginRecordedVerify 锁定兜底路径：调用方不传 verify 时，用
+// plugindev 进程内 Tracker 记下的最近一次 verify 结果归因。
+func TestHandleExplainPluginRecordedVerify(t *testing.T) {
+	name := "recorded-verify"
+	plugindev.RecordVerify(name, &plugindev.VerifyResult{
+		Verdict: "fail",
+		Quality: &plugindev.QualityStats{InputCandidate: 4, DecodeUnknown: 4},
 	})
 
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": name}
-	res, err := m.handleExplainPlugin(context.Background(), req)
+	m := &mcpCapture{}
+	res, err := m.handleExplainPlugin(context.Background(), toolReq(map[string]any{"name": name}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := res.Content[0].(mcp.TextContent).Text
-	if !containsHelper(text, "undefined-symbol") {
-		t.Fatalf("explain not forwarded: %s", text)
-	}
-	if !containsHelper(text, "value-accessor-ok") {
-		t.Fatalf("rule_id not forwarded: %s", text)
-	}
-	if !containsHelper(text, "expl_") {
-		t.Fatalf("explain_ref missing: %s", text)
-	}
-}
-
-// TestHandleExplainPluginForwardsVerify locks in P3b end-to-end: the MCP layer
-// is a pure forwarder — it only maps the `verify` JSON argument onto the gRPC
-// VerifyResult and forwards it. The embedded Developer Plane does the actual
-// decode-attribution (here: high entropy + majority undecodable => suspected
-// encryption, referencing contract.yaml rule_id inspect-bytes-first).
-func TestHandleExplainPluginForwardsVerify(t *testing.T) {
-	pluginsDir := t.TempDir()
-	client, conn := embeddedPluginDev(t, pluginsDir)
-	m := &mcpCapture{pluginsDir: pluginsDir, pdClient: client, pdConn: conn}
-
-	name := "explain-verify-fwd"
-	verifyArg := map[string]any{
-		"verdict": "fail",
-		"quality": map[string]any{
-			"input": map[string]any{
-				"raw":       10,
-				"candidate": 10,
-			},
-			"decode": map[string]any{
-				"success":       2,
-				"unknown":       8,
-				"unknown_ratio": 0.8,
-				"errors":        0,
-			},
-			"entropy_estimate": 7.8,
-		},
-	}
-	req := mcp.CallToolRequest{}
-	req.Params.Arguments = map[string]any{"name": name, "verify": verifyArg}
-	res, err := m.handleExplainPlugin(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := res.Content[0].(mcp.TextContent).Text
-	if !containsHelper(text, "suspected-encryption") {
-		t.Fatalf("decode attribution not forwarded: %s", text)
-	}
-	if !containsHelper(text, "inspect-bytes-first") {
-		t.Fatalf("rule_id not forwarded: %s", text)
-	}
-	if !containsHelper(text, "expl_") {
-		t.Fatalf("explain_ref missing: %s", text)
+	text := toolText(t, res)
+	if !strings.Contains(text, "all-unknown") {
+		t.Errorf("expected the recorded verify to be attributed as all-unknown: %s", text)
 	}
 }

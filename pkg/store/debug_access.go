@@ -12,7 +12,7 @@ import (
 type DebugAccess struct {
 	ID               int64
 	At               time.Time
-	Actor            string // who triggered: "mcp" | "pipeline" | "plugin-dev"
+	Actor            string // who triggered: "mcp" | "pipeline"
 	Tool             string // e.g. "sample_bytes"
 	Plugin           string
 	SessionID        string

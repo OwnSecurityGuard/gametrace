@@ -1,4 +1,4 @@
-.PHONY: proto test build build-mcp build-pipeline build-plugin-dev build-agent build-agents build-examples run-mcp run-pipeline run-plugin-dev deploy release release-matrix web-build docs
+.PHONY: proto test build build-mcp build-pipeline build-agent build-agents build-examples run-mcp run-pipeline deploy release release-matrix web-build docs
 
 TAGS := pcap
 
@@ -47,15 +47,11 @@ RELEASE_CMDS := gt-pipeline gt-mcp gt-agent
 # 插件线上契约（plugin.proto）已并入仓库内 SDK 子模块 ./sdk，在那边 make proto 生成
 # （sdk/Makefile）。gametrace 与 SDK 各生成一份会在 protobuf 全局注册表里撞同一个
 # 文件路径并 panic，因此契约代码只由 ./sdk 产出一份。
-# 这里覆盖两个 gametrace 自有协议：internalipc（抓包控制面）与 plugindev（开发平面
-# 控制面，P1 平面拆分引入）。
+# 这里只覆盖 gametrace 自有协议中的 internalipc（抓包控制面）。
 proto:
 	protoc --go_out=. --go_opt=paths=source_relative \
 		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
 		pkg/internalipc/proto/internal.proto
-	protoc --go_out=. --go_opt=paths=source_relative \
-		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
-		pkg/plugindev/proto/plugindev.proto
 	protoc --go_out=. --go_opt=paths=source_relative \
 		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
 		pkg/capture/mobile/proto/mobile.proto
@@ -71,11 +67,6 @@ build-mcp:
 
 build-pipeline:
 	go build -tags $(TAGS) -ldflags '$(LDFLAGS)' -o bin/gt-pipeline.exe ./cmd/gt-pipeline
-
-# Developer Plane 独立二进制。默认由 gt-mcp 内嵌（dialPluginDev 在
-# GT_PLUGINDEV_ADDR 为空时起进程内实例），只有需要物理隔离开发平面时才用它。
-build-plugin-dev:
-	go build -tags $(TAGS) -o bin/gt-plugin-dev.exe ./cmd/gt-plugin-dev
 
 # 移动端流量入口（sing-box 侧 → GameTrace）：TCP 中继 + gRPC 推送连接级数据。
 build-agent:
@@ -115,7 +106,7 @@ build-agents:
 	if [ -n "$$failed" ]; then echo "WARN: skipped platforms:$$failed (darwin requires a macOS host)"; fi; \
 	ls -la build/agents/
 
-build: build-mcp build-pipeline build-plugin-dev build-agent
+build: build-mcp build-pipeline build-agent
 
 # ============================================================================
 # SDK 维护与对外发布（SDK 已并入本 monorepo 的 ./sdk）
@@ -162,9 +153,6 @@ run-mcp:
 
 run-pipeline:
 	go run -tags $(TAGS) ./cmd/gt-pipeline
-
-run-plugin-dev:
-	go run -tags $(TAGS) ./cmd/gt-plugin-dev
 
 # deploy：Docker 部署与"确认跑的是刚构建的新版本"一键流程。
 #

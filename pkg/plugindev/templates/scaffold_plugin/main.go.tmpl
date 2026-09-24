@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	// 平台统一以隧道模式运行：gt-agent 托管与 Developer Plane activate_plugin
+	// 平台统一以隧道模式运行：gt-agent 托管与用户本地自启
 	// 都会注入 GT_TUNNEL=1 / GT_AUTH_TOKEN，插件不起本地端口、宿主不回拨，
 	// 注册/心跳/解码帧共用同一条到 registry 的连接——插件在 NAT / 容器 / 手机
 	// 后面也能直接接入，不需要任何入站端口。
@@ -101,7 +101,7 @@ func done(stream pb.Decoder_DecodeV2Server, req *pb.DecodeRequest) error {
 // 响应。插件内吞掉 panic 反而会让 done=true 漏发、错误信息丢失。
 //
 // 注意：当前固定引用的 github.com/OwnSecurityGuard/gametrace/sdk 版本
-// 【不包含】framing 包（create_plugin 返回 framing_available=false）。因此这里不提供
+// 【不包含】framing 包（scaffold_plugin 返回 framing_available=false）。因此这里不提供
 // link_type 剥离与 TCP 重组工具。对 pcap 类源，DecodeRequest.payload 仍是完整链路层帧——
 // 请改用含 framing 的 SDK 版本（framing.ExtractL7 / framing.NewReassembler），
 // 或在此自行实现链路层剥离与字节流重组，再解析业务字段。

@@ -5,7 +5,7 @@
 // 总页数（否则 totalPages 恒为 1 → 翻页按钮永远不出现 → 只能看到前 20 个包）。
 // 改成无总数翻页：本页填满就允许「下一页」，不满即到末尾。
 import { useState, useMemo, useEffect, useRef, Fragment, memo } from "react";
-import { useRawPackets, useListPlugins, useDecodeRawPackets } from "@/hooks/use-mcp";
+import { useRawPackets, useRegisteredPlugins, useDecodeRawPackets } from "@/hooks/use-mcp";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -201,9 +201,10 @@ export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
     setDstInput("");
   }
 
-  const { data: pluginsData } = useListPlugins();
+  // 插件候选来自注册表：平台不再扫描插件目录，插件实例必须自己注册上来才可选。
+  const { data: pluginsData } = useRegisteredPlugins();
   const decodeMutation = useDecodeRawPackets();
-  const plugins = pluginsData?.plugins ?? [];
+  const plugins = useMemo(() => pluginsData?.plugins ?? [], [pluginsData]);
 
   // 插件列表加载后默认选第一个
   useEffect(() => {

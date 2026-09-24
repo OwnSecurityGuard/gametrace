@@ -42,8 +42,8 @@ GT_REGISTRY_ADDR=127.0.0.1:9091 ./http-stream-decoder
 ```
 
 方式二：通过 gametrace-mcp 开发工具链（推荐，见主项目 `get_plugin_dev_guide`）：
-把本目录连同 `plugin.yaml` 复制为独立模块（参考主项目 `plugins/go.mod.template`），
-然后走 `build_plugin` → `activate_plugin` → `verify_plugin` 闭环。
+用 `scaffold_plugin` 拿到模板内容（落在你自己的 workspace，平台不保存插件源码），
+在本机 `go build` 并启动插件，再走 `connect_plugin` → `verify_plugin` 闭环。
 
 ## 契约要点（v0.10.0）
 

@@ -44,29 +44,32 @@
 
 ## 2. 三步开发流程
 
-### 步骤 1：创建项目骨架
+### 步骤 1：创建项目骨架（在你自己的 workspace 里）
 
-使用 MCP 工具 `create_plugin` 自动生成：
+MCP 工具 `scaffold_plugin` **只渲染模板内容并返回，不在平台落盘**：平台不保存插件源码，
+源码永远在你的机器上（Agent workspace / 本地仓库）。
 
 ```json
 {
   "name": "my-http",
   "protocol": "http",
   "protocol_version": "1",
-  "hints": "tcp,dns",
-  "output_dir": "./plugins/my-http"
+  "hints": "tcp,dns"
 }
 ```
 
-生成的目录结构：
+返回 `{template, files, contents, sdk_version, framing_available}`：把 `contents` 里每个 key
+作为相对路径写进你自己的插件目录，就得到：
 
 ```
-plugins/my-http/
+<你的插件目录>/
 ├── plugin.yaml          # Manifest 配置文件
 ├── main.go              # 插件入口
-├── go.mod               # 模块定义（仅 require github.com/OwnSecurityGuard/gametrace/sdk）
-└── README.md            # 说明文档
+└── go.mod               # 模块定义（仅 require github.com/OwnSecurityGuard/gametrace/sdk）
 ```
+
+`decode.go` / 解析器 / 单测 / `.env` / `.gitignore` 都由你自行补齐。构建也在本机完成
+（`go build`）——**平台不编译、不拉起插件进程**。
 
 ### 步骤 2：实现 Decode 函数（这是最容易写错的一步）
 
@@ -115,17 +118,28 @@ func main() {
 
 > **千万不要**把 `req.GetPayload()` 当 HTTP/TCP 报文正文直接解析。pcap 类来源（回环、以太网、RawIP 等）交付的是**带链路层头的完整帧**，直接按 L7 解析会得到 0 事件（详见 §7 排查手册）。只有 `ProxyPayload`(1001) / `TLSPlaintext`(1002) 两种 link_type 才是已剥好的纯 L7。
 
-### 步骤 3：构建并运行
+### 步骤 3：在本机构建并启动，然后告知平台
+
+构建与启动都由你完成（平台不编译、不拉起插件进程）：
 
 ```bash
-cd plugins/my-http
+cd <你的插件目录>
 go build -o my-http-plugin .
+
+# 用 get_registry_addr / get_plugin_env 拿到【对外可达】的 registry 地址与属主 token
+export GT_REGISTRY_ADDR=<get_registry_addr 返回值>
+export GT_TUNNEL=1
+export GT_AUTH_TOKEN=<get_plugin_env 的 notes 里给出的属主 token>
+./my-http-plugin
 # 插件会自动：
 # 1. 读取 plugin.yaml 中的 manifest
-# 2. 连接到 gt-pipeline 的注册中心（GT_REGISTRY_ADDR）
-# 3. 注册为 Decoder 插件
-# 4. 启动心跳循环
+# 2. 按 GT_REGISTRY_ADDR 连接注册中心
+# 3. 注册为 Decoder 插件（拿到 instance_id）
+# 4. 打开 Connect 双向流 + 启动心跳循环
 ```
+
+插件跑起来后，用 `connect_plugin(name=...)` 让平台确认它已注册上来：结论只有
+`status=ready|failed`，`failed` 时看 `stage`（断点 `auth|connection|manifest`）+ `reason` + `next`。
 
 ---
 
@@ -493,7 +507,7 @@ func main() {
 
 ### 插件启动流程
 
-平台**统一以隧道模式运行插件**（gt-agent 托管与 Developer Plane `activate_plugin` 都注入
+平台**统一以隧道模式运行插件**（gt-agent 托管，或你自己在本机启动插件时注入
 `GT_TUNNEL=1`）：插件不监听本地 Decode 端口，注册后在同一条 gRPC 连接上开 `Connect` 双向流，
 解码请求经隧道帧往返，宿主**不回拨**插件。
 
@@ -648,13 +662,16 @@ addr := sdk.ResolveRegistryAddr()
 |------|------|
 | `get_plugin_contract` | 获取 SDK `contract/contract.yaml` 全文（**SSOT**，写/审插件代码前必读） |
 | `get_plugin_dev_guide` | 获取本开发指南 |
-| `create_plugin` | 生成最小插件骨架（**仅 `go.mod` / `main.go` / `plugin.yaml` 三个文件**，decode.go / 解析器 / 测试 / `.env` / `.gitignore` 由开发者补齐）。🚫 **不要传 `output_dir`**：后续 `build_plugin` / `activate_plugin` / `status_plugin` 按 `<plugins_root>/<name>` 定位插件，传了不在 root 下的目录会让它们找不到刚生成的插件 |
+| `scaffold_plugin` | 渲染最小插件骨架并**返回文件内容**（`go.mod` / `main.go` / `plugin.yaml` 三个文件），**不写任何文件**：源码落在你自己的 workspace。decode.go / 解析器 / 测试 / `.env` / `.gitignore` 由你补齐，构建与启动也都在本机 |
 | `sample_bytes_plugin` | **看首个包的字节**，确认 link_type 与帧结构（0 事件排查第一步）。有硬上限（≤20 包 / 每包 ≤64 字节），只能形成假设，不是帧结构已确认的证据 |
 | `test_plugin` | 离线回放解码并采样：`decoded` / `decode_errors` / `type_histogram` / `sample_events`——回答"到底解出了什么"。**不落库** |
 | `verify_plugin` | 离线回放 + 契约校验，给出 `pass\|warn\|fail` 判定与证据。**不落库**，不是"事件已写库"的信号 |
 | `list_connection_frames` | 查询连接内的原始帧（需 `conn_id`），用于看**连接级/重组后**的事实，补 `sample_bytes_plugin` 只看首 64 字节的不足 |
 | `explain_plugin` | 对解码结果（含 0 事件）做归因与修复建议 |
-| `list_registered_plugins` | 列出已注册（运行中/离线）插件；Developer Plane 已连接时每条附 `artifact` 视图（`source_dir` 源目录 / `binary_path` 构建产物 / `binary_stale` 是否过期），用于核对"当前运行实例到底跑的是哪个源码目录、哪份构建产物"。注意 `binary_stale` 只是 mtime 辅助信号（比对目录内 `*.go` / `go.mod` / `plugin.yaml`）：**改过任何插件源码就重新 `build_plugin`**，不要拿 `binary_stale=false` 当免构建依据 |
+| `connect_plugin` | 告诉平台「我的插件已经启动，请连接它」：平台不 exec、不注入，只按 `GT_REGISTRY_ADDR` / `get_registry_addr` 的地址轮询 registry 接入状态，返回 `status=ready\|failed`（failed 时带 `stage`/`reason`/`next`） |
+| `status_plugin` | 两个视角：`runtime`（registry：`offline\|registered\|active`）与 `validation`（该插件实例是否通过过 `verify_plugin`，证据在平台数据库）。平台**没有制品/二进制视角** |
+| `get_registry_addr` / `get_plugin_env` | 取插件应连接的**对外** registry 地址与属主 token：插件在你机器上运行，这些环境变量由你自己提供，平台不代注入 |
+| `list_registered_plugins` | 列出已注册（运行中/离线）插件。平台不扫描磁盘、不持有插件目录，因此**没有 `artifact` / 源目录 / 构建产物字段** |
 | `get_plugin_manifest` | 获取插件 manifest |
 | `deregister_plugin` | 注销插件 |
 | `set_session_plugin` | 运行时热切换会话绑定的解码插件（无需停抓） |

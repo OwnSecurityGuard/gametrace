@@ -122,4 +122,7 @@ const (
 	// 该 verdict 不触发 validated 立证（仅 pass 立证），也不进入 pass|warn|fail
 	// 的质量判定。
 	VerdictNotApplicable = "not_applicable"
+	// VerdictPass 是唯一会立证（plugin_validations）的 verdict：只有会话适用且
+	// 解码/语义两轴都通过的插件实例才算「已验证」。
+	VerdictPass = "pass"
 )

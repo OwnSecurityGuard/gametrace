@@ -42,9 +42,15 @@ func readSkillMarkdown(skill SkillInfo) (string, error) {
 
 // buildSkillInstructions 依据 Skill Catalog 生成 MCP 服务器的初始化 instructions：
 // 概览可用技能工作流及对应 resource URI，指引 AI agent 在任务匹配时先读技能。
+//
+// instructions 里恒定声明插件源码的归属：插件源码由 Agent 在自己的 workspace 创建，
+// 平台既不保存也不代写 —— 这是「平台侧是否持有用户插件代码」这个问题的直接答案，
+// 必须在初始化阶段就说清楚，而不是等 Agent 调了工具才猜。
 func buildSkillInstructions(skills []SkillInfo) string {
 	var b strings.Builder
 	b.WriteString("You are connected to GameTrace MCP.")
+	b.WriteString("\n\nPlugin source code is created in YOUR workspace: GameTrace does not store plugin source code,")
+	b.WriteString("\nnor does it compile or launch plugins. Plugins run on your machine and register out to the platform.")
 	if len(skills) == 0 {
 		b.WriteString("\n\nNo skill workflows are available on this server.")
 		return b.String()

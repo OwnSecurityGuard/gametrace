@@ -1,6 +1,6 @@
 ---
 name: "decoder-plugin-guide"
-description: "指引用户或 AI Agent 用 Go 编写解码插件（gt.decoder/v2，基于 gametrace/sdk）接入 GameTrace 平台：协议分析、编码前必交的数据包处理链路、Event 字段与持久化声明、插件骨架、TCP 重组与握手处理、plugin.yaml、decode 诊断指标、兜底判断、必交材料清单、测试与验证；§0 为 Agent 执行工作流——GameTrace MCP 工具时序（create/build/activate/test/verify 的两阶段验证、落库验证路径、本地托管与远程运行两条路、binary_stale 不可作免构建依据）。semantic_rules 的选取标准、约束、校验机制与验收标准见 §5.2–§5.6。当用户要为新协议编写解码插件、接入自定义游戏协议、解析网络协议为业务事件，要编写/审查/修正 semantic_rules，或 Agent 要经 MCP 开发/运行/验证解码插件时调用。"
+description: "指引用户或 AI Agent 用 Go 编写解码插件（gt.decoder/v2，基于 gametrace/sdk）接入 GameTrace 平台：协议分析、编码前必交的数据包处理链路、Event 字段与持久化声明、插件骨架、TCP 重组与握手处理、plugin.yaml、decode 诊断指标、兜底判断、必交材料清单、测试与验证；§0 为 Agent 执行工作流——GameTrace MCP 工具时序（scaffold/connect/test/verify 的两阶段验证、落库验证路径、插件源码与进程都在用户本机/workspace、平台不保存源码也不编译不拉起插件）。semantic_rules 的选取标准、约束、校验机制与验收标准见 §5.2–§5.6。当用户要为新协议编写解码插件、接入自定义游戏协议、解析网络协议为业务事件，要编写/审查/修正 semantic_rules，或 Agent 要经 MCP 开发/运行/验证解码插件时调用。"
 ---
 
 # GameTrace 解码插件开发指南
@@ -27,8 +27,10 @@ description: "指引用户或 AI Agent 用 Go 编写解码插件（gt.decoder/v2
 
 ### 0.1 两类工具别混
 
-- **GameTrace MCP 工具**：抓包/会话、插件生命周期、运行验证、事件查询（`create_plugin` / `build_plugin` / `activate_plugin` / `test_plugin` / `verify_plugin` / `sample_bytes_plugin` / `list_decoded_data` 等）。
+- **GameTrace MCP 工具**：抓包/会话、插件接入、运行验证、事件查询（`scaffold_plugin` / `connect_plugin` / `status_plugin` / `test_plugin` / `verify_plugin` / `sample_bytes_plugin` / `list_decoded_data` 等）。
 - **Agent 自身工具**：读源码、写文件、跑 `go test` / `go vet`、访问协议官方文档。写代码、跑单测是 Agent 自己的事，不走 MCP。
+
+> 平台初始化 instructions 恒定声明：**"Plugin source code is created in YOUR workspace: GameTrace does not store plugin source code, nor does it compile or launch plugins."**
 
 本 skill 本身会注册为 MCP resource（`gametrace://skills/decoder-plugin-guide`），MCP 初始化即可读；`get_plugin_dev_guide` 是开发指南的 MCP 版本，本 skill 已含工作流时不必重复拉取整份文档——需要核对 SDK/平台最新契约细节时再读。
 
@@ -37,86 +39,82 @@ description: "指引用户或 AI Agent 用 Go 编写解码插件（gt.decoder/v2
 | 阶段 | 该做什么 | 不要做什么 |
 |---|---|---|
 | 协议分析 | 优先找**已有抓包**：`get_session_status` / `list_all_sessions` 确定可用 session → `sample_bytes_plugin` 拿字节事实（≤20 包、每包 ≤64 字节）→ 需要**连接级事实**（重组后的完整帧）再 `list_connection_frames` | 不为"写插件"默认 `start_capture`；`sample_bytes_plugin` 只能形成协议**假设**，不构成帧结构/握手已确认的证据——确认靠协议源码/文档/`test_plugin` |
-| 编码 | `create_plugin` 拿最小骨架 → 补齐 decode.go / 解析器 / 测试 / `.gitignore`（见 0.3）→ Agent 自己跑 `go test` / `go vet` | 不反复 `get_capabilities` 探索工具（只在不确定工具职责时调一次） |
-| 构建 | `build_plugin`；失败优先看返回的 file/line/col/message 直接修 | 普通编译错误不调 `explain_plugin`（它做的是运行期归因，不是编译器） |
-| 运行 | `get_plugin_env` → 把 `env_file` 原样写入插件目录 `.env` → `activate_plugin` | `get_plugin_env` **只在准备实际启动/注册时调**；协议分析阶段不需要 |
+| 编码 | `scaffold_plugin` 拿模板内容（`{template, files, contents, sdk_version, framing_available}`）→ 把 `contents` 每个 key 作为相对路径写进**自己的 workspace** → 补齐 decode.go / 解析器 / 测试 / `.gitignore`（见 0.3）→ Agent 自己跑 `go test` / `go vet` | 不反复 `get_capabilities` 探索工具（只在不确定工具职责时调一次） |
+| 构建 | 在**本机** `go build` 出二进制；编译错误看本机 go 输出直接修 | 普通编译错误不调 `explain_plugin`（它做的是运行期归因，不是编译器） |
+| 运行 | 本机设置 `GT_REGISTRY_ADDR`（`get_registry_addr` 的对外地址）/ `GT_TUNNEL=1` / `GT_AUTH_TOKEN`（`get_plugin_env` 的属主 token）→ **自己启动插件进程** → `connect_plugin` 让平台确认 | `get_registry_addr` / `get_plugin_env` **只在准备实际启动插件时调**；协议分析阶段不需要 |
 | 验证 | `test_plugin` → `verify_plugin`（见 0.5 两层语义） | 把 `verify_plugin` 当成"事件已落库" |
 
-### 0.3 `create_plugin` 只是最小骨架
+### 0.3 `scaffold_plugin` 只是最小骨架
 
-`create_plugin` 当前**只生成 3 个文件**：`go.mod`、`main.go`、`plugin.yaml`。`decode.go`、解析器文件、`docs/packet-line.md`、单测、`.env`、`.gitignore` 都是 **Agent 自行补齐**的交付物（清单见 §2 / §7.3），不要误判"骨架已完整"。
+`scaffold_plugin` **只渲染模板内容并返回** `{template, files, contents, sdk_version, framing_available}`，**不在平台落盘，也没有指定输出目录的参数**。它当前只含 3 个文件：`go.mod`、`main.go`、`plugin.yaml`。Agent 必须把返回的 `contents` 里**每个 key 作为相对路径**写进**自己的 workspace**；`decode.go`、解析器文件、`docs/packet-line.md`、单测、`.env`、`.gitignore` 都是 **Agent 自行补齐**的交付物（清单见 §2 / §7.3），不要误判"骨架已完整"。
 
-**🚫 禁忌：不要传 `output_dir`。** `build_plugin` / `activate_plugin` / `status_plugin` 一律按 Developer Plane plugins root 下的 `<plugins_root>/<name>` 定位插件，而 `create_plugin` 会**严格尊重**你传入的 `output_dir`——两者不是同一套路径语义。传了不在 root 下的目录，后续三个工具全都找不到刚生成的插件，你会卡在"文件明明生成了但 build 说找不到"。
+平台**不保存插件源码、不编译、不拉起插件进程**，也没有插件目录——`scaffold_plugin` 的产物落在你自己的机器上，后续构建、启动、验证都在本机完成（§0.4）。
 
-- 默认**省略该参数**（此时 create 写入 `<plugins_root>/<name>`，与后续工具一致）。
-- 唯一例外：你明确知道该目录就是 plugins root 下的 `<root>/<name>`。
-- **这不是平台 bug，不要试图"修"工具或绕过它**——按约定省略参数即可。
+### 0.4 插件在你自己的机器上运行
 
-### 0.4 插件运行的两条路
-
-- **本机 Developer Plane 托管**：`build_plugin` → `get_plugin_env` → 写 `.env` → `activate_plugin`。`activate_plugin` 只给一个结论：`status="ready"`（接入完成，`integrated=true`）或 `status="failed"`（带 `stage` 失败环节 + `reason` 原因 + `next` 可执行步骤）。`failed` 时先按 `next` 处理（多为刷新 token / 重启插件），仍不通再 `status_plugin` → `explain_plugin` 诊断；机器字段（`process_launched` / `registered` / `online` / `manifest_present`）保留用于自查，但不要拿它当结论读。
-- **远程机器运行**：`activate_plugin` 只管理 Developer Plane 自己启动的本地进程。远程插件 = 本地写码构建 → 部署到远端 → `get_plugin_env(host=远端可达地址)` → 远端自行启动 → `list_registered_plugins` / `get_plugin_manifest` 确认注册。不要把本地 activate 当远程启动器。
+- **插件源码、二进制、进程全部在你的机器上**：`scaffold_plugin` 拿模板内容写进自己的 workspace → 本机编码 + 单测 → 本机 `go build` 出二进制 → 本机设置 `GT_REGISTRY_ADDR`（`get_registry_addr` 的对外地址）/ `GT_TUNNEL=1` / `GT_AUTH_TOKEN`（`get_plugin_env` 的属主 token）→ **自己启动插件进程** → `connect_plugin` 让平台连接它。平台**不 exec、不注入、也不编译**，只轮询 registry 的接入状态。
+- **`connect_plugin` 只给一个结论**：`status="ready"`（已接入）或 `status="failed"`（带 `stage` 失败环节——取值 `auth` / `connection` / `manifest`——+ `reason` 原因 + `next[]` 可执行步骤）。`failed` 时先按 `next` 处理（多为刷新 token / 重启插件），仍不通再 `status_plugin` → `explain_plugin` 诊断。
+- **远程机器运行**：插件进程始终跑在**用户自己的机器**上（可能不是调用 MCP 的那台）。跨机时用 `get_registry_addr` / `get_plugin_env` 取**对外可达**的 registry 地址与属主 token，由**用户自己在插件所在机器**设置并启动进程，再用 `connect_plugin` 确认；`list_registered_plugins` / `get_plugin_manifest` 复核注册。平台不做任何远程启动。
 
 ### 0.5 验证分两层（关键：哪些工具不落库）
 
 - **第一层 快速验证（离线回放，不落库）**：`test_plugin`——看"到底解出了什么"（`decoded` / `decode_errors` / `type_histogram` / `sample_events` / `error_samples`）；再 `verify_plugin`——看分层结论：`session_profile`（这个会话有多少包、命中 target port 多少）→ `applicability`（会话是否适用）→ `checks`（decode / semantic 两条轴）→ `verdict`。两者都是对离线会话的隔离回放，**不修改 session events**。连 `sample_events` 都没看就直接 verify，容易陷入"verdict=warn 但不知道改哪"。
 - **`verdict=not_applicable` ≠ 插件坏了**：它表示该会话窗口里没有插件该解的流量（`applicability.result=not_match`，`quality` 为 `null`）。这时要做的是**换一个带该协议流量的会话重跑**，不要去改插件。
 - **quality 的分母**：`quality.input.raw` 是窗口内全部原始包，`quality.input.candidate` 才是命中 target port、插件真正该解的包；`quality.decode.*`（含 `unknown_ratio`）只对 candidate 统计。看到 `unknown` 很多先看 `candidate` 是多少——candidate 很小说明问题在会话选择，不在解码。
-- **第二层 持久化验证（真实落库）**：要看 `list_decoded_data` 的真实宿主结果，必须先产生持久化事件——要么 live capture（插件 `integrated=true` 后在测试 session 使用该插件并产生流量），要么 `decode_raw_packets`（**raw-debug 能力，服务端 `-enable-raw-debug` 才注册，默认不存在**）→ 然后 `list_decoded_data` 下钻、`get_protocol_catalog` 做解码成功后的协议索引。
+- **第二层 持久化验证（真实落库）**：要看 `list_decoded_data` 的真实宿主结果，必须先产生持久化事件——要么 live capture（插件 `connect_plugin` 返回 `status=ready` 后在测试 session 使用该插件并产生流量），要么 `decode_raw_packets`（**raw-debug 能力，服务端 `-enable-raw-debug` 才注册，默认不存在**）→ 然后 `list_decoded_data` 下钻、`get_protocol_catalog` 做解码成功后的协议索引。
 
 `get_protocol_catalog` 是**成功解码后的索引**（msg_name 分布、字段、pair 覆盖），不是未知协议的分析入口；`unnamed_events > 0` 优先查 name 规则或 payload，不是猜协议。
 
-### 0.6 `binary_stale` 不是免构建依据
+### 0.6 构建与启动都在本机（平台不编译、不拉起）
 
-`status_plugin` 的 `binary_stale` 只对比 `*.go` / `go.mod` / `plugin.yaml` 与 binary 的 mtime，是**辅助信号**。原则：**只要改过任何插件源码，一律重新 `build_plugin`**，不得因 `binary_stale=false` 跳过构建。
+插件是**独立进程、独立 module**，构建与启动完全在你的机器上完成：源码就绪后在本机 `go build` 出二进制，由你自己启动进程（自行提供 `GT_REGISTRY_ADDR` / `GT_TUNNEL` / `GT_AUTH_TOKEN`），再用 `connect_plugin` 让平台确认接入。**平台不保存插件源码、不编译、不拉起插件进程**——任何"改过源码要不要让平台重新构建"的顾虑都不成立：改完源码就在本机重新 `go build` 并重启插件即可。
 
 ### 0.7 最小默认链（本机新插件）
 
 ```
-读本 skill → create_plugin → 编码+单测 → build_plugin
-→ get_plugin_env → 写 .env → activate_plugin
+读本 skill → scaffold_plugin（把 contents 写进自己的 workspace）→ 编码+单测 → 本机 go build
+→ 本机设 GT_REGISTRY_ADDR / GT_TUNNEL / GT_AUTH_TOKEN 并启动插件 → connect_plugin
 → test_plugin → verify_plugin
 → （需要真实落库时）live capture / decode_raw_packets
 → list_decoded_data → get_protocol_catalog
 ```
 
-问题路径才加：`status_plugin` / `explain_plugin` / `get_registry_addr` / `sample_bytes_plugin` / `list_connection_frames`。不要为"完整"把所有工具调一遍。
+问题路径才加：`status_plugin` / `explain_plugin` / `get_registry_addr` / `get_plugin_env` / `sample_bytes_plugin` / `list_connection_frames`。不要为"完整"把所有工具调一遍。
 
 ### 0.8 插件运行环境详情（4 变量 / .env / 加载器 / 注册排错）
 
-插件通过环境变量连接平台。**准备让插件实际运行时**，变量**全部自动获取**：调一次平台工具 `get_plugin_env`，把返回的 `env_file` 原样写入 `.env` 即可，无需任何手填。协议分析、编码、单测阶段都不需要调它（时序见 §0.2）。
+插件通过环境变量连接平台。插件在**用户自己的机器**上运行，这些环境变量**由用户自己提供，平台不代注入**：从 `get_registry_addr` 取**对外可达**的 registry 地址，从 `get_plugin_env` 取属主 token，然后在**插件所在机器**上设置后启动插件。协议分析、编码、单测阶段都不需要它们（时序见 §0.2）。
 
-**平台统一以隧道模式运行插件**：`activate_plugin` 与 gt-agent 托管都注入 `GT_TUNNEL=1`，
+**平台统一以隧道模式运行插件**：用户在本机启动进程时设置 `GT_TUNNEL=1`，
 插件不起本地端口、宿主不回拨，解码流量与注册/心跳共用同一条连接 —— 插件在 NAT / 容器 / 手机
 后面也能直接接入。插件代码只透传 `GT_TUNNEL`，**不要**在代码里分支判断模式。
 
 | 变量 | 含义 | 获取方式 |
 |---|---|---|
-| `GT_REGISTRY_ADDR` | registry 端点（注册 + 心跳 + 隧道帧都走它） | **自动**：`get_plugin_env` 的 `registry_addr` |
-| `GT_TUNNEL` | 非空即隧道模式；由**运行方**注入 | `activate_plugin` / gt-agent 注入 `1`，插件代码只读透传 |
-| `GT_AUTH_TOKEN` | 注册鉴权 Bearer token | **自动**：`get_plugin_env` 返回调用者自己的 token；agent 托管下平台自动注入，可留空 |
+| `GT_REGISTRY_ADDR` | registry 端点（注册 + 心跳 + 隧道帧都走它） | `get_registry_addr` 的**对外可达**地址 |
+| `GT_TUNNEL` | 非空即隧道模式；由**运行方**注入 | 用户在本机启动插件时设为 `1`，插件代码只读透传 |
+| `GT_AUTH_TOKEN` | 注册鉴权 Bearer token | `get_plugin_env` 返回调用者自己的**属主 token**；匿名模式（平台未配 token）下为空属正常 |
 
 确认步骤：
 
 1. 问用户平台部署形态：**本机单机** / **Docker 局域网** / **远端公网**。
-2. 调 `get_plugin_env`（跨机部署、插件与调用方不在同一台机器时，参数 `host` 传插件所在机器视角的可达主机；平台已配 `GT_PUBLIC_HOST` 的公网/Docker 部署可省略）→ 把返回的 `env_file` 原样写入插件目录 `.env`。匿名模式（平台未配 token）下 `auth_token` 为空属正常。
-3. 写错了也不怕：注册失败时平台会记录诊断（含注册连接来源 IP 建议值），`status_plugin` 返回的 `register_failure` 字段可查，按其提示修正 `.env` 后重新 `activate_plugin`。隧道模式下「注册成功但一直不在线」的典型原因是 Connect 没建起来（插件用旧 SDK 编译、缺 `instance_id`，宿主拒流）——升级 SDK 重新 `build_plugin`。
+2. 调 `get_registry_addr`（跨机部署、插件与调用方不在同一台机器时，参数 `host` 传插件所在机器视角的可达主机；平台已配 `GT_PUBLIC_HOST` 的公网/Docker 部署可省略）拿对外地址，`get_plugin_env` 拿属主 token，交由用户在**插件所在机器**上设置。
+3. 写错了也不怕：用户在插件机器上设置 `GT_REGISTRY_ADDR` / `GT_TUNNEL=1` / `GT_AUTH_TOKEN` 并启动进程，跑起来后调 `connect_plugin`——只看 `status=ready|failed`；`failed` 时按返回的 `stage` / `reason` / `next[]` 处理（多为刷新 token / 重启插件）。隧道模式下「注册成功但一直不在线」的典型原因是 Connect 没建起来（插件用旧 SDK 编译、缺 `instance_id`，宿主拒流）——升级 SDK 在本机重新 `go build` 并重启。
 
 #### 0.8.1 用 `.env` 集中管理连接配置（推荐）
 
 不要在代码里写死地址；插件目录放 `.env`（**直接生成，不再用 `.env.example` 占位模板**），main.go 启动时加载。
 
-**零手填、零复制**：让用户（或引导 agent）调 `get_plugin_env`，把返回的 `env_file` **直接写入插件目录 `.env`**——内容已含正确值与注释，无需任何改动：
+**由用户在本机填写**：调 `get_registry_addr` 拿对外可达的 registry 地址、`get_plugin_env` 拿属主 token，写进插件所在机器的 `.env`（或同名环境变量）：
 
 ```
-# .env —— 内容由 get_plugin_env 的 env_file 原样写入；
-#        同名环境变量优先于本文件。
-GT_REGISTRY_ADDR=<get_plugin_env 的 registry_addr>
-GT_AUTH_TOKEN=<get_plugin_env 的 auth_token；agent 托管 GT_TUNNEL 下可留空>
-GT_TUNNEL=1                     # 由运行方注入；activate_plugin / gt-agent 都会注入
+# .env —— 由用户在插件所在机器设置；同名环境变量优先于本文件。
+GT_REGISTRY_ADDR=<get_registry_addr 的对外地址>
+GT_AUTH_TOKEN=<get_plugin_env 的属主 token；匿名模式可留空>
+GT_TUNNEL=1                     # 用户在本机启动插件时注入；插件代码只透传
 ```
 
-> 提醒：`.env` 含用户 token，**不提交 git**——`create_plugin` 不生成 `.gitignore`，Agent 自行创建（内容一行 `.env`），不要省略。
+> 提醒：`.env` 含用户 token，**不提交 git**——`scaffold_plugin` 只返回 3 个模板文件、不含 `.gitignore`，Agent 自行创建（内容一行 `.env`），不要省略。
 
 main.go 顶部加轻量加载器（不覆盖已存在的环境变量，无文件时静默跳过，不引第三方依赖）：
 
@@ -189,7 +187,7 @@ func loadDotEnv(path string) {
 
 ### 2. 插件骨架
 
-**`create_plugin` 只生成其中 3 个文件**（`go.mod` / `main.go` / `plugin.yaml`），其余（decode.go、解析器、`.env`、`.gitignore`、单测、docs/）都是 Agent 自行补齐的交付物（§0.3）。最终目录形态：
+**`scaffold_plugin` 只返回其中 3 个文件的内容**（`go.mod` / `main.go` / `plugin.yaml`，需由你写入自己的 workspace），其余（decode.go、解析器、`.env`、`.gitignore`、单测、docs/）都是 Agent 自行补齐的交付物（§0.3）。在**你自己的 workspace** 下，最终目录形态：
 
 目录：`plugins/<protocol>-decoder/`，文件清单：
 
@@ -200,7 +198,7 @@ plugins/<protocol>-decoder/
 ├── decode.go       # 核心：Decode(req) → []*Event
 ├── <fmt>.go        # 负载解析器（解压/解帧/解文本）
 ├── plugin.yaml     # manifest：semantic_rules
-├── .env            # 连接配置：内容按「§0.8」调 get_plugin_env 的 env_file 原样写入，零手填
+├── .env            # 连接配置：由用户在本机设置 GT_REGISTRY_ADDR / GT_TUNNEL / GT_AUTH_TOKEN（§0.8）
 ├── .gitignore      # 一行 .env——token 是用户凭证，不入库
 ├── <fmt>_test.go   # 解析器单测
 └── decode_test.go  # 全链路解码测试 + manifest 一致性
@@ -231,14 +229,14 @@ import (
 )
 
 func main() {
-	// 连接配置优先 .env（见「§0.8」）；同名环境变量（如 agent 托管注入的
+	// 连接配置优先 .env（见「§0.8」）；同名环境变量（如用户在本机注入的
 	// GT_AUTH_TOKEN）优先于文件。
 	loadDotEnv(".env")
 
 	d := newDecoder()
 	// GT_REGISTRY_ADDR 由 SDK 原生读取（隧道模式下注册/心跳/解码帧都走它）。
 	// 这里只需显式传入鉴权 token；平台统一以隧道模式运行：
-	// activate_plugin 与 gt-agent 都会注入 GT_TUNNEL=1，代码只透传不判断。
+	// 用户在本机启动插件时注入 GT_TUNNEL=1，代码只透传不判断。
 	sdk.RunRegisterLoopWithOptions(d.decodePacket, sdk.RegisterOptions{
 		AuthToken: os.Getenv("GT_AUTH_TOKEN"),
 	})
@@ -805,8 +803,8 @@ go test -count=1 ./...   # 必须 -count=1：go test 缓存会掩盖问题
 - [ ] SYN/RST 重置了握手簿记（坑 1；仅 TCP 需要，UDP 跳过）
 - [ ] 长度字段字节序正确（wesnoth 为 big-endian）
 - [ ] 解析器不 panic：宽容解析 + 消息级跳过；stream 层（decodePacket）**没有**吞 panic 的 recover（panic 边界归 SDK 外层，吞掉会漏发 done）
-- [ ] `create_plugin` 只给了 3 个文件，decode.go / 解析器 / `.env` / `.gitignore` / 单测 / docs 已自行补齐（§0.3）
-- [ ] `create_plugin` **没有传 `output_dir`**（§0.3 禁忌：否则 build/activate/status 按 `<plugins_root>/<name>` 找不到插件）
+- [ ] 已用 `scaffold_plugin` 拿到模板内容并把 `contents` 写进自己的 workspace；它只含 3 个文件，decode.go / 解析器 / `.env` / `.gitignore` / 单测 / docs 已自行补齐（§0.3）
+- [ ] 已在本机 `go build` 并启动插件（自行设置 `GT_REGISTRY_ADDR` / `GT_TUNNEL` / `GT_AUTH_TOKEN`），并用 `connect_plugin` 确认 `status=ready`（§0.4）
 - [ ] 续行拼接补了 `\n`，注释跳过了整行
 - [ ] 没有臆造转义（反引号等以源码为准）
 - [ ] Payload 全部字段可在协议中找到出处（硬约束：无协议外字段）
@@ -827,6 +825,6 @@ go test -count=1 ./...   # 必须 -count=1：go test 缓存会掩盖问题
 - [ ] **诊断指标已核对**（§7.1）：会话 `decode_errors`、`decode_error_groups` 分组合理、错误模板参数稳定（`<n>` 占位符）
 - [ ] **兜底判断四层齐备**（§7.2）：recover + ExtractL7 !ok 回 done；消息级跳过；Reassembler 上限 + Forget；未识别消息不臆造 payload
 - [ ] **必交材料齐全**（§7.3）：packet-line 文档、语义证据表、覆盖率回放表、plugin.yaml、测试与固件
-- [ ] **运行实例 ↔ 制品一致**（§7.3）：`list_registered_plugins` 返回的 `artifact.source_dir/binary_path` 与改动目录一致；**改过任何插件源码（decode.go / parser.go 等）就重新 `build_plugin`**——`binary_stale=true` 一定是旧产物，但 `binary_stale=false` 不是免构建依据（mtime 辅助信号，§0.6）
+- [ ] **运行实例 ↔ 本机源码一致**（§7.3）：`list_registered_plugins` 返回的运行实例与你的 workspace 中源码对应；**改过任何插件源码（decode.go / parser.go 等）就重新在本机 `go build` 并重启插件**（平台不编译、不保留二进制）
 - [ ] `go vet` + `go build` + `go test -count=1` 全过
 - [ ] 宿主日志无 semantic rules error；前端消息名正确显示

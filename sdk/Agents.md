@@ -134,7 +134,7 @@ heartbeat (+ tunnel serving concurrently)
 
 **Tunnel mode is the only mode.** Registration always opens a `Connect` stream and DecodeV2
 runs over it — there is no local listener and the host never dials back. gt-agent managed
-plugins and Developer Plane `activate_plugin` both inject `GT_TUNNEL=1`; plugin code just
+plugins get `GT_TUNNEL=1` injected, and so does a plugin you launch yourself; plugin code just
 passes the token through and never branches on anything.
 
 ```go

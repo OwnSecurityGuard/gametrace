@@ -39,8 +39,8 @@ go mod edit -replace github.com/OwnSecurityGuard/gametrace/sdk=./sdk
    （`plugin.yaml` + 解码回调）。
 2. 实现 `DecodeFuncV2`：`framing.ExtractL7(payload, link_type)` →
    `framing.Reassembler` 重组 → 解析应用消息 → `event.Draft` 发送。
-3. `go build` 后设置 `GT_REGISTRY_ADDR` 运行，或在 GameTrace 宿主内走
-   `build_plugin` → `activate_plugin` → `verify_plugin` 闭环。
+3. `go build` 后设置 `GT_REGISTRY_ADDR` 在本机运行插件，再走 GameTrace 侧
+   `connect_plugin` → `verify_plugin` 闭环（平台不编译、不拉起插件，也不保存其源码）。
 
 ## 包结构
 

@@ -15,7 +15,7 @@ import type {
 } from "@/types/state-change";
 import type { ListRawPacketsResult } from "@/types/raw-packet";
 import type { QueryDecodeErrorsResult } from "@/types/decode-error";
-import type { ListPluginsResult, DecodeRawPacketsResult } from "@/types/decode";
+import type { DecodeRawPacketsResult } from "@/types/decode";
 import type {
   ListRegisteredPluginsResult,
   SetSessionPluginResult,
@@ -27,13 +27,6 @@ import type {
   SessionStatusResult,
   DeleteSessionResult,
 } from "@/types/session-extra";
-import type {
-  CreatePluginResult,
-  BuildPluginResult,
-  PluginStatusResult,
-  ExplainPluginResult,
-  PluginManifestResult,
-} from "@/types/plugin-dev";
 import type { ListConnectionsResult, GetConnectionDetailResult, ListConnectionStreamsResult, ListConnectionFramesResult } from "@/types/connection";
 import type {
   ListProxyLeasesResult,
@@ -223,15 +216,6 @@ export function useRawPackets(
     enabled: !!sessionId,
     placeholderData: keepPreviousData, // 翻页时沿用上一页数据，避免骨架屏闪烁
     refetchInterval: sessionId ? 2000 : false,
-  });
-}
-
-/** 列出可用解码插件 */
-export function useListPlugins() {
-  return useQuery({
-    queryKey: ["plugins"],
-    queryFn: () => mcpClient.callTool<ListPluginsResult>("list_plugins"),
-    staleTime: 60_000, // 插件列表变化不频繁，缓存 1 分钟
   });
 }
 
@@ -611,73 +595,6 @@ export function useSetProjectRules(projectId?: string) {
         rules: JSON.stringify(v.rules),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["project", projectId] }),
-  });
-}
-
-// ===== 插件开发平面（脚手架 / 编译 / 状态 / 归因 / manifest）=====
-
-/** create_plugin：从模板脚手架一个新解码插件工程。 */
-export function useCreatePlugin() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (vars: {
-      name: string;
-      protocol: string;
-      protocolVersion?: string;
-      hints?: string[];
-      outputDir?: string;
-    }) =>
-      mcpClient.callTool<CreatePluginResult>("create_plugin", {
-        name: vars.name,
-        protocol: vars.protocol,
-        protocol_version: vars.protocolVersion ?? "",
-        hints: vars.hints && vars.hints.length > 0 ? JSON.stringify(vars.hints) : "",
-        output_dir: vars.outputDir ?? "",
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["plugins"] });
-    },
-  });
-}
-
-/** build_plugin：编译脚手架插件，返回结构化诊断。 */
-export function useBuildPlugin() {
-  return useMutation({
-    mutationFn: (vars: { name: string; timeoutSec?: number }) =>
-      mcpClient.callTool<BuildPluginResult>("build_plugin", {
-        name: vars.name,
-        timeout_sec: vars.timeoutSec ?? 120,
-      }),
-  });
-}
-
-/** status_plugin：查询插件双态视图（制品态 + 运行时态）。 */
-export function usePluginStatus(name: string | null) {
-  return useQuery({
-    queryKey: ["pluginStatus", name],
-    queryFn: () => mcpClient.callTool<PluginStatusResult>("status_plugin", { name: name! }),
-    enabled: !!name,
-    refetchInterval: name ? 5000 : false,
-  });
-}
-
-/** explain_plugin：归因插件最近一次构建/激活失败。 */
-export function useExplainPlugin() {
-  return useMutation({
-    mutationFn: (vars: { name: string; action?: string }) =>
-      mcpClient.callTool<ExplainPluginResult>("explain_plugin", {
-        name: vars.name,
-        action: vars.action ?? "",
-      }),
-  });
-}
-
-/** get_plugin_manifest：返回已注册插件的 plugin.yaml 原文。 */
-export function usePluginManifest(name: string | null) {
-  return useQuery({
-    queryKey: ["pluginManifest", name],
-    queryFn: () => mcpClient.callTool<PluginManifestResult>("get_plugin_manifest", { name: name! }),
-    enabled: !!name,
   });
 }
 

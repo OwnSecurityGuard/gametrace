@@ -48,15 +48,12 @@ var authzExemptions = map[string]string{
 
 	// 插件工具族：插件命名空间由 pipeline 按 owner 隔离（owner/name），
 	// plugin↔project 绑定落地（方案 D6/P2）后再接 ActionPlugin*。
-	"list_plugins":            "公开插件目录",
 	"get_plugin_contract":     "公开契约文档",
 	"get_plugin_dev_guide":    "公开开发指南",
-	"create_plugin":           "pipeline 侧 owner 命名空间",
-	"build_plugin":            "pipeline 侧 owner 命名空间",
-	"activate_plugin":         "pipeline 侧 owner 命名空间",
-	"deactivate_plugin":       "pipeline 侧 owner 命名空间",
-	"status_plugin":           "pipeline 侧 owner 命名空间",
-	"explain_plugin":          "公开解释器",
+	"scaffold_plugin":         "无资源可鉴权：只渲染模板内容并返回，不在平台落盘、不持有插件源码",
+	"connect_plugin":          "插件进程由用户自己启动；平台只读 registry 接入状态",
+	"status_plugin":           "插件实例状态由 pipeline 按 owner 作用域返回",
+	"explain_plugin":          "公开解释器，仅归因（不触碰跨用户资源）",
 	"list_registered_plugins": "pipeline 侧 owner 作用域列表",
 	"get_plugin_manifest":     "公开 manifest 查询",
 	"deregister_plugin":       "pipeline 侧 owner 校验（注销他人插件被 pipeline 拒绝）",

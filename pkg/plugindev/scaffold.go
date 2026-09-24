@@ -2,120 +2,85 @@ package plugindev
 
 import (
 	"bytes"
-	"context"
 	"embed"
 	"fmt"
-	"os"
-	"path/filepath"
 	"text/template"
 )
 
-//go:embed templates/create_plugin/*.tmpl
-var createPluginTemplates embed.FS
+//go:embed templates/scaffold_plugin/*.tmpl
+var scaffoldTemplates embed.FS
 
-// RenderCreatePluginTemplates renders the create_plugin skeleton templates with
-// the provided data. Expects a map with keys: Name, Protocol, ProtocolVersion
-// (optional), Hints (optional []string). The generated project depends only on
-// the published github.com/OwnSecurityGuard/gametrace/sdk module — no
-// source-relative replace directives — so it builds anywhere the SDK module is
-// reachable. Returns template filename -> rendered content.
-func RenderCreatePluginTemplates(data map[string]any) (map[string]string, error) {
-	out := make(map[string]string)
-	files := []string{"go.mod.tmpl", "main.go.tmpl", "plugin.yaml.tmpl"}
-	for _, f := range files {
-		raw, err := createPluginTemplates.ReadFile("templates/create_plugin/" + f)
+// scaffoldTemplateName 是脚手架模板的标识，随结果返回给调用方。
+const scaffoldTemplateName = "decoder-plugin-template"
+
+// scaffoldOutputs 固定「模板文件 -> 输出文件」映射，顺序即返回的 Files 顺序。
+var scaffoldOutputs = []struct{ tmpl, file string }{
+	{"go.mod.tmpl", "go.mod"},
+	{"main.go.tmpl", "main.go"},
+	{"plugin.yaml.tmpl", "plugin.yaml"},
+}
+
+// renderScaffoldTemplates 渲染脚手架模板，返回 模板文件名 -> 渲染后内容。
+//
+// 模板数据键：Name、Protocol、ProtocolVersion（可选）、Hints（可选 []string）、
+// SDKVersion、FramingAvailable。生成的项目只依赖已发布的
+// github.com/OwnSecurityGuard/gametrace/sdk 模块，不含任何 source-relative
+// replace，因此只要 SDK 模块可达就能在任意位置构建。
+func renderScaffoldTemplates(data map[string]any) (map[string]string, error) {
+	out := make(map[string]string, len(scaffoldOutputs))
+	for _, o := range scaffoldOutputs {
+		raw, err := scaffoldTemplates.ReadFile("templates/scaffold_plugin/" + o.tmpl)
 		if err != nil {
-			return nil, fmt.Errorf("read template %s: %w", f, err)
+			return nil, fmt.Errorf("read template %s: %w", o.tmpl, err)
 		}
-		t, err := template.New(f).Parse(string(raw))
+		t, err := template.New(o.tmpl).Parse(string(raw))
 		if err != nil {
-			return nil, fmt.Errorf("parse template %s: %w", f, err)
+			return nil, fmt.Errorf("parse template %s: %w", o.tmpl, err)
 		}
 		var buf bytes.Buffer
 		if err := t.Execute(&buf, data); err != nil {
-			return nil, fmt.Errorf("render template %s: %w", f, err)
+			return nil, fmt.Errorf("render template %s: %w", o.tmpl, err)
 		}
-		out[f] = buf.String()
+		out[o.tmpl] = buf.String()
 	}
 	return out, nil
 }
 
-// Scaffold renders the create_plugin skeleton and writes it to the resolved
-// output directory. Resolution order for the output dir (strictly honors the
-// caller's output_dir):
-//   - req.OutputDir 非空 → 直接使用该目录（MCP create_plugin 的 output_dir）；
-//   - 否则回退到 req.Root/req.Name（服务端配置的 plugins 目录）。
+// ScaffoldPlugin 渲染解码插件脚手架，并**只返回文件内容，不写任何文件**。
 //
-// 返回的 OutputDir 是文件实际写入的绝对路径；SDKVersion / FramingAvailable 透传
-// 自请求，便于调用方（MCP）如实返回「实际 SDK 版本」与「framing 是否可用」。
-func Scaffold(_ context.Context, req *ScaffoldRequest) (*ScaffoldResponse, error) {
-	if req.Name == "" {
+// 平台不持有用户插件源码：调用方（Agent）必须把 Contents 写入自己的 workspace，
+// 再在本地构建、运行插件，最后用 connect_plugin 告知平台「插件已经跑起来了」。
+// 返回的 Files 是相对路径（go.mod / main.go / plugin.yaml），顺序稳定。
+func ScaffoldPlugin(name, protocol, protocolVersion string, hints []string) (*ScaffoldResult, error) {
+	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	if req.Protocol == "" {
+	if protocol == "" {
 		return nil, fmt.Errorf("protocol is required")
 	}
 
-	// 解析输出目录：优先使用显式 output_dir，否则回退 Root/Name。
-	var outputDir string
-	if req.OutputDir != "" {
-		outputDir = req.OutputDir
-	} else {
-		if req.Root == "" {
-			return nil, fmt.Errorf("root (plugins dir) is required when output_dir is not set")
-		}
-		outputDir = filepath.Join(req.Root, req.Name)
-	}
-	if abs, err := filepath.Abs(outputDir); err == nil {
-		outputDir = abs
-	}
-
-	// 版本/framing 默认值：调用方未显式声明时回退到本包常量，保证单一事实来源。
-	sdkVersion := req.SDKVersion
-	if sdkVersion == "" {
-		sdkVersion = SDKVersion
-	}
-	framingAvailable := req.FramingAvailable
-	if !framingAvailable {
-		// 未显式声明（如直接调用/测试）时回退到本包常量；当 SDK 确实不含
-		// framing 时，调用方必须显式置 false 以生成「framing 不可用」分支。
-		framingAvailable = FramingAvailable
-	}
-
-	rendered, err := RenderCreatePluginTemplates(map[string]any{
-		"Name":             req.Name,
-		"Protocol":         req.Protocol,
-		"ProtocolVersion":  req.ProtocolVersion,
-		"Hints":            req.Hints,
-		"SDKVersion":       sdkVersion,
-		"FramingAvailable": framingAvailable,
+	rendered, err := renderScaffoldTemplates(map[string]any{
+		"Name":             name,
+		"Protocol":         protocol,
+		"ProtocolVersion":  protocolVersion,
+		"Hints":            hints,
+		"SDKVersion":       SDKVersion,
+		"FramingAvailable": FramingAvailable,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create output dir: %w", err)
+	res := &ScaffoldResult{
+		Template:         scaffoldTemplateName,
+		Files:            make([]string, 0, len(scaffoldOutputs)),
+		Contents:         make(map[string]string, len(scaffoldOutputs)),
+		SDKVersion:       SDKVersion,
+		FramingAvailable: FramingAvailable,
 	}
-
-	outputs := map[string]string{
-		"go.mod.tmpl":      "go.mod",
-		"main.go.tmpl":     "main.go",
-		"plugin.yaml.tmpl": "plugin.yaml",
+	for _, o := range scaffoldOutputs {
+		res.Files = append(res.Files, o.file)
+		res.Contents[o.file] = rendered[o.tmpl]
 	}
-	created := make([]string, 0, len(outputs))
-	for tmpl, fname := range outputs {
-		path := filepath.Join(outputDir, fname)
-		if err := os.WriteFile(path, []byte(rendered[tmpl]), 0o644); err != nil {
-			return nil, fmt.Errorf("write %s: %w", path, err)
-		}
-		created = append(created, path)
-	}
-	return &ScaffoldResponse{
-		Name:             req.Name,
-		OutputDir:        outputDir,
-		Created:          created,
-		SDKVersion:       sdkVersion,
-		FramingAvailable: framingAvailable,
-	}, nil
+	return res, nil
 }

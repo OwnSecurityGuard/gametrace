@@ -273,8 +273,9 @@ rather than mixing old and new decoder behavior in one dataset.
 
 ## 12. Registration / tunnel troubleshooting
 
-The platform runs plugins in tunnel mode only (`GT_TUNNEL=1`, injected by gt-agent and by
-Developer Plane `activate_plugin`): the plugin opens no listener and the host never dials back.
+The platform runs plugins in tunnel mode only (`GT_TUNNEL=1`, injected by gt-agent for managed
+plugins, or set by you when you launch the plugin yourself): the plugin opens no listener and the
+host never dials back.
 "Registered but never online / no decoding" therefore means the `Connect` stream failed —
 almost always a plugin built with an older SDK that does not send `instance_id` in the stream
 metadata (the host rejects it), or a dropped tunnel/heartbeat. Rebuild with the current SDK

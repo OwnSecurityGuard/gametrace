@@ -97,6 +97,11 @@ type ControlStoreBackend interface {
 	RecordDebugAccess(ctx context.Context, d DebugAccess) (int64, error)
 	// DebugAccesses 返回某会话的审计行（最新在前）。
 	DebugAccesses(ctx context.Context, sessionID string) ([]DebugAccess, error)
+	// 插件验证证明（plugin_validations）：该插件实例已通过 verify 的跨平面证据。
+	// gt-pipeline 的 verify 写入/清除，gt-mcp 的 status_plugin 读取。
+	UpsertPluginValidation(ctx context.Context, v PluginValidation) error
+	GetPluginValidation(ctx context.Context, owner, name string) (*PluginValidation, error)
+	ClearPluginValidation(ctx context.Context, owner, name string) error
 	// 探针注册表（probes / probe_archive_segments，见 probe_store.go）。
 	UpsertProbe(ctx context.Context, m ProbeMeta) error
 	GetProbe(ctx context.Context, probeID string) (*ProbeMeta, error)
@@ -119,14 +124,14 @@ var (
 	_ ControlStoreBackend = (*PGControlStore)(nil)
 )
 
-// OpenControlStore 打开控制元数据存储（sessions + plugin_debug_access）。
+// OpenControlStore 打开控制元数据存储（sessions + plugin_debug_access + plugin_validations）。
 //
 // driver=="sqlite"：dsnOrPath 为 control.sqlite 文件路径（projects / users
 // 等同文件共置）。
 //
-// driver=="postgres"：dsnOrPath 为共享 PG 连接串；sessions 与 plugin_debug_access
-// 落到 PG。注意：projects / users 等组织-访问子系统仍使用本地 sqlite 文件
-// （见 gt-mcp/main.go 的装配逻辑），不在本次 PG 化范围内。
+// driver=="postgres"：dsnOrPath 为共享 PG 连接串；sessions / plugin_debug_access /
+// plugin_validations 落到 PG。注意：projects / users 等组织-访问子系统仍使用本地
+// sqlite 文件（见 gt-mcp/main.go 的装配逻辑），不在本次 PG 化范围内。
 func OpenControlStore(driver, dsnOrPath string) (ControlStoreBackend, error) {
 	if IsPostgres(driver) {
 		db, err := openPG(dsnOrPath)

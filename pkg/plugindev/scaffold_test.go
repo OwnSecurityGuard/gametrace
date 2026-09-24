@@ -1,7 +1,6 @@
 package plugindev_test
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,10 +10,56 @@ import (
 	"gametrace/pkg/plugindev"
 )
 
-// TestScaffoldSmokeBuild verifies that Scaffold renders a buildable plugin
-// skeleton and that the rendered go.mod depends only on the published SDK
-// module (no baked-in local paths) — the core invariant of the P1 plane
-// split: scaffolding must not couple to the gametrace source tree.
+// TestScaffoldPluginReturnsContentsOnly locks in the core invariant of the
+// external-plugin model: ScaffoldPlugin renders the skeleton and hands the
+// content back to the caller — it never writes to disk, because the platform
+// does not hold user plugin sources. The agent writes these files into its own
+// workspace.
+func TestScaffoldPluginReturnsContentsOnly(t *testing.T) {
+	res, err := plugindev.ScaffoldPlugin("smokeplugin", "sample", "v1", []string{"length-prefixed"})
+	if err != nil {
+		t.Fatalf("ScaffoldPlugin returned error: %v", err)
+	}
+	wantFiles := []string{"go.mod", "main.go", "plugin.yaml"}
+	if len(res.Files) != len(wantFiles) {
+		t.Fatalf("files=%v want %v", res.Files, wantFiles)
+	}
+	for i, f := range wantFiles {
+		if res.Files[i] != f {
+			t.Fatalf("files[%d]=%q want %q (order must be stable)", i, res.Files[i], f)
+		}
+		if strings.TrimSpace(res.Contents[f]) == "" {
+			t.Fatalf("contents[%q] is empty", f)
+		}
+	}
+	if res.Template == "" {
+		t.Fatal("template name must be reported so the user knows the file origin")
+	}
+	if res.SDKVersion == "" {
+		t.Fatal("sdk_version must be reported")
+	}
+	if containsHardcodedPath(res.Contents["go.mod"]) {
+		t.Fatalf("generated go.mod must not contain a local path:\n%s", res.Contents["go.mod"])
+	}
+	if !contains(res.Contents["main.go"], "sdk.RunRegisterLoop") {
+		t.Fatalf("generated main.go missing RunRegisterLoop entrypoint:\n%s", res.Contents["main.go"])
+	}
+}
+
+// TestScaffoldPluginValidatesInput verifies the required parameters are enforced
+// locally (the platform never forwards a request it can reject itself).
+func TestScaffoldPluginValidatesInput(t *testing.T) {
+	if _, err := plugindev.ScaffoldPlugin("", "sample", "", nil); err == nil {
+		t.Fatal("expected an error for a missing name")
+	}
+	if _, err := plugindev.ScaffoldPlugin("foo", "", "", nil); err == nil {
+		t.Fatal("expected an error for a missing protocol")
+	}
+}
+
+// TestScaffoldSmokeBuild verifies that the rendered skeleton actually compiles
+// once written into a workspace, and that its go.mod depends only on the
+// published SDK module (no baked-in local paths).
 //
 // The build step is best-effort: it is skipped when the repository SDK
 // submodule (./sdk) is unavailable (e.g. a partial checkout) so the unit
@@ -24,28 +69,21 @@ func TestScaffoldSmokeBuild(t *testing.T) {
 		t.Skip("skipping scaffold smoke build in -short mode")
 	}
 
-	root := t.TempDir()
 	name := "smokeplugin"
-	resp, err := plugindev.Scaffold(context.Background(), &plugindev.ScaffoldRequest{
-		Name:     name,
-		Protocol: "sample",
-		Root:     root,
-	})
+	res, err := plugindev.ScaffoldPlugin(name, "sample", "", nil)
 	if err != nil {
-		t.Fatalf("Scaffold returned error: %v", err)
-	}
-	if len(resp.Created) == 0 {
-		t.Fatalf("Scaffold created no files")
+		t.Fatalf("ScaffoldPlugin returned error: %v", err)
 	}
 
-	dir := filepath.Join(root, name)
-	goMod := readFile(t, filepath.Join(dir, "go.mod"))
-	if containsHardcodedPath(goMod) {
-		t.Fatalf("generated go.mod must not contain a local path:\n%s", goMod)
+	// The caller (agent) owns the workspace: write the returned content there.
+	dir := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	mainGo := readFile(t, filepath.Join(dir, "main.go"))
-	if !contains(mainGo, "sdk.RunRegisterLoop") {
-		t.Fatalf("generated main.go missing RunRegisterLoop entrypoint:\n%s", mainGo)
+	for _, f := range res.Files {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte(res.Contents[f]), 0o644); err != nil {
+			t.Fatalf("write %s: %v", f, err)
+		}
 	}
 
 	// Best-effort build: wire a local replace to the sibling SDK repo, tidy
@@ -102,15 +140,6 @@ func findLocalSDK(t *testing.T) string {
 		return ""
 	}
 	return sdk
-}
-
-func readFile(t *testing.T, path string) string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return string(data)
 }
 
 func contains(s, sub string) bool {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -250,4 +251,48 @@ ORDER BY at DESC`, sessionID)
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// UpsertPluginValidation 覆盖写入一个插件实例的验证证明（PG 实现）。
+func (cs *PGControlStore) UpsertPluginValidation(ctx context.Context, v PluginValidation) error {
+	if v.Owner == "" || v.Name == "" {
+		return fmt.Errorf("plugin validation: owner and name are required")
+	}
+	if v.At.IsZero() {
+		v.At = time.Now()
+	}
+	_, err := cs.db.ExecContext(ctx, `
+INSERT INTO plugin_validations (owner, name, verify_run_id, session_id, verdict, at)
+VALUES ($1,$2,$3,$4,$5,$6)
+ON CONFLICT(owner, name) DO UPDATE SET
+    verify_run_id=excluded.verify_run_id,
+    session_id=excluded.session_id,
+    verdict=excluded.verdict,
+    at=excluded.at`,
+		v.Owner, v.Name, v.VerifyRunID, v.SessionID, v.Verdict, v.At,
+	)
+	return err
+}
+
+// GetPluginValidation 读取某 owner 下某插件的验证证明；不存在返回 (nil, nil)。
+func (cs *PGControlStore) GetPluginValidation(ctx context.Context, owner, name string) (*PluginValidation, error) {
+	var v PluginValidation
+	err := cs.db.QueryRowContext(ctx, `
+SELECT owner, name, verify_run_id, session_id, verdict, at
+FROM plugin_validations
+WHERE owner=$1 AND name=$2`, owner, name,
+	).Scan(&v.Owner, &v.Name, &v.VerifyRunID, &v.SessionID, &v.Verdict, &v.At)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+// ClearPluginValidation 删除某插件的验证证明（PG 实现）。
+func (cs *PGControlStore) ClearPluginValidation(ctx context.Context, owner, name string) error {
+	_, err := cs.db.ExecContext(ctx, `DELETE FROM plugin_validations WHERE owner=$1 AND name=$2`, owner, name)
+	return err
 }

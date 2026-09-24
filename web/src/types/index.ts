@@ -13,22 +13,6 @@ export type {
   DeleteSessionResult,
 } from "./session-extra";
 export type {
-  CreatePluginResult,
-  BuildError,
-  BuildPluginResult,
-  PluginStatusArtifact,
-  PluginStatusRuntime,
-  PluginStatusDevProcess,
-  PluginStatusAttemptError,
-  PluginStatusLastAttempt,
-  PluginStatusNextAction,
-  PluginStatusResult,
-  ExplainFindingError,
-  ExplainFinding,
-  ExplainPluginResult,
-  PluginManifestResult,
-} from "./plugin-dev";
-export type {
   CaptureContext,
   ConnectionSummary,
   ConnectionDetail,

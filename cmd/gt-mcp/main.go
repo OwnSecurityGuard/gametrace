@@ -36,8 +36,6 @@ import (
 	"gametrace/pkg/internalipc"
 	pb "gametrace/pkg/internalipc/proto"
 	"gametrace/pkg/logging"
-	plugindevclient "gametrace/pkg/plugindev/client"
-	plugindevserver "gametrace/pkg/plugindev/server"
 	"gametrace/pkg/store"
 	"gametrace/pkg/version"
 
@@ -104,11 +102,10 @@ type captureReader interface {
 }
 
 type mcpCapture struct {
-	mu          sync.Mutex
-	pluginsDir  string
-	workDir     string
-	mcpServer   *server.MCPServer
-	sessionMgr  *sessionManager
+	mu         sync.Mutex
+	workDir    string
+	mcpServer  *server.MCPServer
+	sessionMgr *sessionManager
 	projects    *projectStore
 	users       *userStore
 	// 自助注册（/access/register）：envResolver 做保留名检查；openRegister 由
@@ -136,13 +133,6 @@ type mcpCapture struct {
 	// gRPC client 连接 gt-pipeline
 	pipelineClient pb.CaptureControlClient
 	grpcConn       *grpc.ClientConn
-
-	// Developer Plane client (PluginDev gRPC). gt-mcp forwards scaffold/list/
-	// build/activate to it and never touches the filesystem or subprocesses
-	// directly. Nil means the Developer Plane is not configured for this
-	// capture instance.
-	pdClient plugindevclient.PluginDev
-	pdConn   *grpc.ClientConn
 
 	// ControlStore 读取会话元数据（db_path 等）
 	controlStore store.ControlStoreBackend
@@ -249,11 +239,6 @@ func (sm *sessionManager) createSession(metadata sessionMetadata) (string, error
 
 	sessionDir := sm.sessionDir(metadata.SessionID)
 	if err := os.MkdirAll(sessionDir, 0755); err != nil {
-		return "", err
-	}
-
-	pluginsDir := filepath.Join(sessionDir, "plugins")
-	if err := os.MkdirAll(pluginsDir, 0755); err != nil {
 		return "", err
 	}
 
@@ -408,7 +393,7 @@ func (sm *sessionManager) deleteSession(sessionID, owner string) error {
 	return os.RemoveAll(sessionDir)
 }
 
-func newMCPCapture(pluginsDir, workDir, pipelineAddr, httpAddr string, mcpServer *server.MCPServer, enableRawDebug bool, dbDriver, dbDSN string) (*mcpCapture, error) {
+func newMCPCapture(workDir, pipelineAddr, httpAddr string, mcpServer *server.MCPServer, enableRawDebug bool, dbDriver, dbDSN string) (*mcpCapture, error) {
 	// gRPC client 连接 gt-pipeline。
 	// 默认拨号 :9888（TCP），可通过 -pipeline-addr 覆盖。
 	// token 模式下 pipeline 的 CaptureControl 挂了 Bearer 拦截器：
@@ -424,16 +409,6 @@ func newMCPCapture(pluginsDir, workDir, pipelineAddr, httpAddr string, mcpServer
 		return nil, fmt.Errorf("dial pipeline: %w", err)
 	}
 	client := pb.NewCaptureControlClient(conn)
-
-	// Developer Plane client. By default an embedded PluginDev gRPC server is
-	// started (rooted at pluginsDir) so gt-mcp works standalone for local
-	// development. In production, set GT_PLUGINDEV_ADDR to point at the
-	// standalone gt-plugin-dev binary for physical isolation.
-	pdClient, pdConn, err := dialPluginDev(pluginsDir, os.Getenv("GT_PLUGINDEV_ADDR"))
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("dial plugin dev: %w", err)
-	}
 
 	// ControlStore：sqlite 走 control.sqlite 文件路径；postgres 走共享 PG DSN。
 	controlPath := filepath.Join(workDir, "control.sqlite")
@@ -485,7 +460,6 @@ func newMCPCapture(pluginsDir, workDir, pipelineAddr, httpAddr string, mcpServer
 	}
 
 	m := &mcpCapture{
-		pluginsDir: pluginsDir,
 		workDir:        workDir,
 		mcpServer:      mcpServer,
 		sessionMgr:     newSessionManager(workDir),
@@ -497,8 +471,6 @@ func newMCPCapture(pluginsDir, workDir, pipelineAddr, httpAddr string, mcpServer
 		oauthCodes:     oauthCodes,
 		pipelineClient: client,
 		grpcConn:       conn,
-		pdClient:       pdClient,
-		pdConn:         pdConn,
 		controlStore:   controlStore,
 		readerOpener: func(path, sessionID string) (captureReader, error) {
 			if store.IsPostgres(dbDriver) {
@@ -515,39 +487,6 @@ func newMCPCapture(pluginsDir, workDir, pipelineAddr, httpAddr string, mcpServer
 	// 现场编译器装配（agent_build.go）：全局并发上限见 agentBuildGlobalLimit。
 	m.agentBuild = newAgentBuildManager(m, agentBuildGlobalLimit)
 	return m, nil
-}
-
-// dialPluginDev resolves the Developer Plane client. When addr is non-empty it
-// dials the standalone gt-plugin-dev server at that address. Otherwise it
-// starts an embedded PluginDev gRPC server rooted at pluginsDir and dials it
-// over loopback, so local development needs no separate process. The returned
-// conn must be closed by the caller (it is the client-side connection; the
-// embedded server runs for the process lifetime).
-func dialPluginDev(pluginsDir, addr string) (plugindevclient.PluginDev, *grpc.ClientConn, error) {
-	if addr != "" {
-		conn, err := internalipc.DialGRPCAddr(addr)
-		if err != nil {
-			return nil, nil, fmt.Errorf("dial plugindev %q: %w", addr, err)
-		}
-		return plugindevclient.NewGRPCClient(conn), conn, nil
-	}
-
-	lis, err := internalipc.ListenAddr("127.0.0.1:0")
-	if err != nil {
-		return nil, nil, fmt.Errorf("listen embedded plugindev: %w", err)
-	}
-	srv := plugindevserver.New(pluginsDir)
-	go func() {
-		// Serve blocks; on listener close it returns. Errors are logged, not fatal.
-		if serveErr := srv.Serve(lis); serveErr != nil {
-			slog.Warn("embedded plugindev server stopped", "error", serveErr)
-		}
-	}()
-	conn, err := internalipc.DialGRPCAddr(lis.Addr().String())
-	if err != nil {
-		return nil, nil, fmt.Errorf("dial embedded plugindev: %w", err)
-	}
-	return plugindevclient.NewGRPCClient(conn), conn, nil
 }
 
 func (m *mcpCapture) handleStartCapture(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -925,29 +864,6 @@ func sessionMetaToFsMeta(s *store.SessionMeta) sessionMetadata {
 	return fs
 }
 
-func (m *mcpCapture) handleListPlugins(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Discovery lives in the Developer Plane (pkg/plugindev). gt-mcp is a pure
-	// forwarder — it never touches the filesystem here.
-	if m.pdClient == nil {
-		return errorResult(fmt.Errorf("plugin dev not available (Developer Plane not configured)")), nil
-	}
-	resp, err := m.pdClient.ListPlugins(ctx)
-	if err != nil {
-		slog.Error("list_plugins failed", "error", err)
-		return errorResult(err), nil
-	}
-	plugins := make([]map[string]string, 0, len(resp.Plugins))
-	for _, p := range resp.Plugins {
-		plugins = append(plugins, map[string]string{
-			"name":   p.Name,
-			"binary": p.Binary,
-			"dir":    p.Dir,
-		})
-	}
-	slog.Info("list_plugins completed", "count", len(plugins))
-	return successResult(map[string]any{"plugins": plugins, "count": len(plugins)}), nil
-}
-
 // exeExt returns the executable suffix for the current platform (".exe" on
 // Windows, empty elsewhere).
 func exeExt() string {
@@ -992,14 +908,6 @@ func (m *mcpCapture) handleListRegisteredPlugins(ctx context.Context, req mcp.Ca
 			"online":         p.GetOnline(),
 			"last_heartbeat": p.GetLastHeartbeatUnix(),
 			"owner":          p.GetOwner(),
-		}
-		// 制品透明化：运行中实例的源目录/构建产物/是否过期来自 Developer Plane
-		// 的磁盘视图（与 status_plugin 的 artifact 同源）。未配置 Dev Plane 或
-		// 查询失败时不挂载——运行实例列表不因磁盘视图缺失而失败。
-		if m.pdClient != nil {
-			if art := m.devPlaneArtifact(ctx, p.GetName()); art != nil {
-				entry["artifact"] = art
-			}
 		}
 		plugins = append(plugins, entry)
 	}
@@ -2380,40 +2288,10 @@ func visibleToSubscriber(ev pluginEventJSON, sub *auth.Principal, hasSub bool) b
 	return false
 }
 
-// resolvePluginsDir resolves the plugins directory to an absolute path.
-// When the default relative value "plugins" is used, it is resolved relative
-// to the running executable so that built binaries find plugins next to them.
-// If that executable-relative path does not exist, it falls back to resolving
-// relative to the current working directory to keep `go run` usable.
-func resolvePluginsDir(input string) (string, error) {
-	if filepath.IsAbs(input) {
-		return filepath.Clean(input), nil
-	}
-
-	// For the default value, prefer a directory next to the executable.
-	if input == "plugins" {
-		exePath, err := os.Executable()
-		if err == nil {
-			exeDir := filepath.Dir(exePath)
-			candidate := filepath.Join(exeDir, input)
-			if _, err := os.Stat(candidate); err == nil {
-				return filepath.Abs(candidate)
-			}
-		}
-	}
-
-	abs, err := filepath.Abs(input)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Clean(abs), nil
-}
-
 func main() {
 	// 统一配置（T10）：-config 指向 gametrace.yaml（可选）。优先级 flag > 环境变量 GT_* > 配置文件 > 默认值。
 	cfgPath := flag.String("config", "", "统一配置文件 gametrace.yaml 路径（可选；优先级 flag > 环境变量 GT_* > 配置文件 > 默认值）")
 	addr := flag.String("addr", ":8781", "SSE server address（支持 :0 动态分配，实际地址回写 <workdir>/addr.mcp.json）")
-	pluginsDir := flag.String("plugins-dir", "plugins", "plugins directory")
 	// 手机所在 LAN 中可达的本机 IPv4。docker / Hyper-V 环境下启发式探测容易被
 	// 虚拟网卡带偏（例如 docker bridge 172.18.x），此时必须显式覆盖——
 	// 例如 -lan-ip=192.168.1.10 或 GT_LAN_IP=192.168.1.10。
@@ -2517,13 +2395,6 @@ func main() {
 	logCfg = logging.FromEnv(logCfg)
 	logging.MustInit(logCfg)
 
-	resolvedPluginsDir, err := resolvePluginsDir(*pluginsDir)
-	if err != nil {
-		slog.Error("resolve plugins directory failed", "error", err)
-		os.Exit(1)
-	}
-	slog.Info("using plugins directory", "plugins_dir", resolvedPluginsDir)
-
 	// Skill Catalog → MCP 初始化 instructions + resources：
 	// 1) instructions 概述可用技能工作流（含因应场景），让 client 在 initialize
 	//    阶段就知道什么任务匹配哪个技能；
@@ -2567,16 +2438,13 @@ func main() {
 	// *workDir 的 flag 默认值是 "."，直接传给 newMCPCapture 会让数据目录锚在进程
 	// CWD 上，从而完全绕过 GT_HOME（容器里 CWD=/ 时表现为
 	// "open control store: unable to open database file (14)"）。
-	capture, err := newMCPCapture(resolvedPluginsDir, absWorkDir, *pipelineAddr, *addr, s, *enableRawDebug, *dbDriver, *dbDSN)
+	capture, err := newMCPCapture(absWorkDir, *pipelineAddr, *addr, s, *enableRawDebug, *dbDriver, *dbDSN)
 	if err != nil {
 		slog.Error("init mcp capture", "error", err)
 		os.Exit(1)
 	}
 	defer capture.grpcConn.Close()
 	defer capture.controlStore.Close()
-	if capture.pdConn != nil {
-		defer capture.pdConn.Close()
-	}
 
 	// 把 -lan-ip / GT_LAN_IP 注入 lanIP 探测（proxy_lease.go / agent_download.go /
 	// singbox_profile.go 都通过该函数拿 host:port 拼二维码）。
@@ -2633,46 +2501,29 @@ func main() {
 		mcp.WithString("session_id", mcp.Description("Session ID to query; defaults to current session")),
 	), capture.handleGetSessionStatus)
 
-	s.AddTool(mcp.NewTool("list_plugins",
-		mcp.WithDescription("List available decoder plugins"),
-	), capture.handleListPlugins)
-
-	s.AddTool(mcp.NewTool("create_plugin",
-		mcp.WithDescription("Scaffold a new decoder plugin project (plugin.yaml + main.go + go.mod) from templates. The skeleton registers itself via github.com/OwnSecurityGuard/gametrace/sdk. IMPORTANT: the generated decoder receives a COMPLETE link-layer frame (not L7) for pcap sources — when the pinned SDK ships the framing package, the scaffold uses framing.ExtractL7 + framing.Reassembler; otherwise it is explicitly marked framing-unavailable. Returns the actual output_dir (absolute), the exact sdk_version pinned, and whether framing is available. The generated go.mod carries NO replace directive: it compiles as soon as the pinned SDK version is fetchable from github.com/OwnSecurityGuard/gametrace/sdk (tag sdk/vX.Y.Z). Inside the gametrace monorepo, add a replace to the in-repo ./sdk for local development."),
+	s.AddTool(mcp.NewTool("scaffold_plugin",
+		mcp.WithDescription("Render a decoder plugin project skeleton (plugin.yaml + main.go + go.mod) and RETURN THE FILE CONTENTS — the platform writes nothing. The skeleton registers itself via github.com/OwnSecurityGuard/gametrace/sdk. IMPORTANT: the generated decoder receives a COMPLETE link-layer frame (not L7) for pcap sources — when the pinned SDK ships the framing package, the scaffold uses framing.ExtractL7 + framing.Reassembler; otherwise it is explicitly marked framing-unavailable. Write every entry of `contents` into your OWN workspace as a relative path (the plugin source lives on your machine; GameTrace does not store plugin source code), then build the binary locally. Returns template, files, contents, the exact sdk_version pinned, and whether framing is available. The generated go.mod carries NO replace directive: it compiles as soon as the pinned SDK version is fetchable from github.com/OwnSecurityGuard/gametrace/sdk (tag sdk/vX.Y.Z). Inside the gametrace monorepo, add a replace to the in-repo ./sdk for local development."),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Plugin name, kebab-case, e.g. my-game-decoder")),
 		mcp.WithString("protocol", mcp.Required(), mcp.Description("Protocol the plugin decodes, e.g. my_game")),
 		mcp.WithString("protocol_version", mcp.Description("Optional protocol version, e.g. game/v3")),
 		mcp.WithString("hints", mcp.Description("Optional match hints as JSON array of strings or comma-separated, e.g. [\"tcp\",\"port:7000\"]")),
-		mcp.WithString("output_dir", mcp.Description("Strict target directory for the generated project; files are written directly there. Defaults to <plugins_dir>/<name> when omitted.")),
-	), capture.handleCreatePlugin)
+	), capture.handleScaffoldPlugin)
 
-	s.AddTool(mcp.NewTool("build_plugin",
-		mcp.WithDescription("Compile a scaffolded plugin project via the Developer Plane. Returns structured file:line:col diagnostics on failure so the AI can fix the exact location without reading SDK files. On success the artifact state advances scaffolded → compiled and any prior validated proof is invalidated."),
-		mcp.WithString("name", mcp.Required(), mcp.Description("Plugin name (kebab-case), e.g. my-game-decoder")),
-		mcp.WithNumber("timeout_sec", mcp.Description("Optional build timeout in seconds (default 120)")),
-	), capture.handleBuildPlugin)
-
-	s.AddTool(mcp.NewTool("activate_plugin",
-		mcp.WithDescription("Launch the local plugin binary and inject GT_REGISTRY_ADDR so it registers with the runtime. The Developer Plane owns only the process it launches; deactivate_plugin tears it down. registry_addr resolves in order: explicit arg → GT_REGISTRY_ADDR env → the pipeline's actual registry address (read via get_registry_addr), so you usually don't need to pass it. Returns ONE product-facing conclusion: status=ready means the plugin is fully integrated (registered + online + manifest_present), status=failed carries stage (artifact | auth | launch | connection | manifest), a human reason and a next[] list of concrete steps. Machine fields (process_launched / registered / online / manifest_present) are still returned for self-checking, but status is the answer."),
-		mcp.WithString("name", mcp.Required(), mcp.Description("Plugin name (kebab-case) to launch")),
-		mcp.WithString("registry_addr", mcp.Description("Runtime registry address, e.g. :9091. Defaults to env GT_REGISTRY_ADDR, then to the pipeline's address (via get_registry_addr)")),
-	), capture.handleActivatePlugin)
-
-	s.AddTool(mcp.NewTool("deactivate_plugin",
-		mcp.WithDescription("Stop the plugin process the Developer Plane launched for name, and best-effort force-deregister it from the runtime registry. Safe to call when the plugin is already offline."),
-		mcp.WithString("name", mcp.Required(), mcp.Description("Plugin name (kebab-case) to stop")),
-	), capture.handleDeactivatePlugin)
+	s.AddTool(mcp.NewTool("connect_plugin",
+		mcp.WithDescription("Tell the platform that a plugin you already started ON YOUR OWN MACHINE should now be connected, then wait for it to register. This tool does NOT compile or launch anything: plugin source, binary and process all live on your machine; the platform only manages the runtime side (registry / heartbeat / decode). Also resolves and returns the external registry_addr plus the caller's auth_token, so you can start the plugin with the right GT_REGISTRY_ADDR / GT_AUTH_TOKEN. registry_addr resolves in order: explicit arg → GT_REGISTRY_ADDR env → the platform's advertised address (read via get_registry_addr), so you usually don't need to pass it. Returns ONE product-facing conclusion: status=ready means the plugin is fully integrated (registered + online + manifest_present), status=failed carries stage (auth | connection | manifest), a human reason and a next[] list of concrete steps. Machine fields (registered / online / manifest_present) are still returned for self-checking, but status is the answer."),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Plugin name (kebab-case) that is already running on your machine")),
+		mcp.WithString("registry_addr", mcp.Description("Runtime registry address to register against, e.g. host:9091. Defaults to env GT_REGISTRY_ADDR, then to the platform's advertised address (via get_registry_addr)")),
+	), capture.handleConnectPlugin)
 
 	s.AddTool(mcp.NewTool("status_plugin",
-		mcp.WithDescription("Return the dual-state view of a plugin (design §2): artifact (unknown→scaffolded→compiled→validated, from disk) merged with runtime (offline→registered→active, from the registry), plus the last build/activate attempt for failure attribution and a suggested next_action. Use this as the per-iteration entry point."),
+		mcp.WithDescription("Return the single-state view of a plugin instance: runtime (offline → registered → active, from the registry) merged with the validation proof (whether this plugin instance passed verify, from the control store), plus the last register failure and a suggested next_action. There is no artifact/dev_process state: the platform does not hold plugin source, build output or processes. Use this as the per-iteration entry point."),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Plugin name (kebab-case), e.g. my-game-decoder")),
 	), capture.handleStatusPlugin)
 
 	s.AddTool(mcp.NewTool("explain_plugin",
-		mcp.WithDescription("Attribute the most recent build or activate failure of a plugin (design §2.3 / P3a). Reads the Developer Plane's last attempt and returns structured findings (category + optional SDK contract rule_id + why + fix), plus a next_action. The returned ref is what status_plugin's last_attempt.explain_ref points back to. On a failed build/activate the Developer Plane already auto-runs this, so status surfaces the ref immediately."),
+		mcp.WithDescription("Attribute the most recent verify result of a plugin and return structured findings (category + optional SDK contract rule_id + why + fix), plus a next_action. The returned ref is what a later call can point back to. Decode-class attribution only fires when a verify verdict is available (inline via the verify argument, or the most recent one recorded by verify_plugin)."),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Plugin name (kebab-case), e.g. my-game-decoder")),
-		mcp.WithString("action", mcp.Description("Optional: which attempt to explain (build | activate | deactivate). Omit to explain the latest attempt")),
-		mcp.WithObject("verify", mcp.Description("Optional verify result from plugin.verify, shape {violations, quality, checks, verdict}. quality uses the same nested input.raw/input.candidate + decode.* shape returned by verify_plugin (null when the session was not applicable). When provided, decode-class attribution is derived from it; when omitted, the Developer Plane attributes the most recent recorded verify result.")),
+		mcp.WithObject("verify", mcp.Description("Optional verify result from verify_plugin, shape {violations, quality, checks, verdict}. quality uses the same nested input.raw/input.candidate + decode.* shape returned by verify_plugin (null when the session was not applicable). When provided, decode-class attribution is derived from it; when omitted, the most recent recorded verify result is attributed.")),
 	), capture.handleExplainPlugin)
 
 	s.AddTool(mcp.NewTool("get_plugin_contract",
@@ -2795,7 +2646,7 @@ func main() {
 	), capture.handleGetRegistryAddr)
 
 	s.AddTool(mcp.NewTool("get_plugin_env",
-		mcp.WithDescription("Return the complete .env for a decoder plugin: GT_REGISTRY_ADDR/GT_AUTH_TOKEN plus a ready-to-write env_file block. The token is the caller's own registration token (anonymous mode returns empty). Scaffold a plugin, call this once, write env_file to .env — zero manual fill. The platform runs plugins in tunnel mode (GT_TUNNEL=1 is injected by activate_plugin and by gt-agent); the host never dials back, so there is no decoder listen port to configure."),
+		mcp.WithDescription("Return the complete .env for a decoder plugin: GT_REGISTRY_ADDR/GT_AUTH_TOKEN plus a ready-to-write env_file block. The token is the caller's own registration token (anonymous mode returns empty). Scaffold a plugin, call this once, write env_file into YOUR plugin working directory — the plugin runs on your machine, so you must supply these yourself (the platform never injects them). The platform runs plugins in tunnel mode: the plugin dials out to GT_REGISTRY_ADDR and multiplexes register/heartbeat/decode frames over that one connection; the host never dials back, so there is no decoder listen port to configure."),
 		mcp.WithString("host", mcp.Description("Explicit externally reachable host, same semantics as get_registry_addr (used when the plugin runs on a different machine than this caller)")),
 	), capture.handleGetPluginEnv)
 
@@ -2809,7 +2660,7 @@ func main() {
 	), capture.handleGetCapabilities)
 
 	s.AddTool(mcp.NewTool("list_registered_plugins",
-		mcp.WithDescription("List all plugins currently registered with the pipeline (active via gRPC PluginRegistry). Different from list_plugins which scans the plugins directory for binary files. When the Developer Plane is connected, each plugin also carries an artifact view (source_dir/binary_path/binary_stale) showing which source directory and build artifact produced the running instance."),
+		mcp.WithDescription("List all plugins currently registered with the pipeline (active via gRPC PluginRegistry) with their runtime state (instance_id / online / last_heartbeat / owner). There is no disk view: plugins run on their owners' machines and the platform never scans or stores plugin sources."),
 	), capture.handleListRegisteredPlugins)
 
 	s.AddTool(mcp.NewTool("get_plugin_manifest",
@@ -2940,10 +2791,10 @@ func main() {
 	), capture.handleTestPlugin)
 
 	// verify_plugin：契约+质量校验，产出 verdict + applicability。verdict==pass
-	// 时把 artifact.state 升到 validated（磁盘 proof，跨进程可见）。纯转发到
+	// 时把验证证明写进 control store 的 plugin_validations 表（跨进程可见）。纯转发到
 	// Runtime Plane（gt-pipeline）；MCP 零归因逻辑。
 	s.AddTool(mcp.NewTool("verify_plugin",
-		mcp.WithDescription("Verify a plugin by decoding an offline session's raw packets and checking contract violations (each tagged with a contract.yaml rule_id and a layer) plus gt-side quality stats. Returns LAYERED results so 'wrong session' and 'broken plugin' stay distinguishable: session_profile (packets / target_port / target_port_hits) → applicability (result match | not_match) → checks (decode / semantic axes) → verdict (pass | warn | fail | not_applicable). quality is null when the session is not applicable; when present it splits input.raw (whole window) from input.candidate (packets matching the session's target port) and only decode.* stats cover candidates. not_applicable means the session carries no traffic the plugin should decode — pick another session instead of fixing the plugin; only verdict=pass promotes the artifact.state to validated (with a disk proof). Pure forwarder to the Runtime Plane; MCP owns no attribution logic."),
+		mcp.WithDescription("Verify a plugin by decoding an offline session's raw packets and checking contract violations (each tagged with a contract.yaml rule_id and a layer) plus gt-side quality stats. Returns LAYERED results so 'wrong session' and 'broken plugin' stay distinguishable: session_profile (packets / target_port / target_port_hits) → applicability (result match | not_match) → checks (decode / semantic axes) → verdict (pass | warn | fail | not_applicable). quality is null when the session is not applicable; when present it splits input.raw (whole window) from input.candidate (packets matching the session's target port) and only decode.* stats cover candidates. not_applicable means the session carries no traffic the plugin should decode — pick another session instead of fixing the plugin; only verdict=pass records the validation proof in the control store (plugin_validations table). Pure forwarder to the Runtime Plane; MCP owns no attribution logic."),
 		mcp.WithString("session_id", mcp.Required(), mcp.Description("Stopped session whose raw packets to verify against")),
 		mcp.WithString("plugin", mcp.Required(), mcp.Description("Plugin name to verify, e.g. http or tcp")),
 		mcp.WithString("protocol", mcp.Description("Optional: only verify packets with this protocol, e.g. tcp")),

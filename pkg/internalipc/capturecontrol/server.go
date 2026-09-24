@@ -48,7 +48,8 @@ type CaptureEngine interface {
 	// 原始包字节仅进程内使用，不回传；结果不落库（隔离测试）。
 	TestPlugin(ctx context.Context, req TestPluginRequest) (TestPluginResult, error)
 	// Verify 用指定插件对离线会话的 raw_packets 解码并做契约+质量校验，
-	// 产出 violations + quality + verdict，并把 validated 证明回写 Developer Plane。
+	// 产出 violations + quality + verdict，并把 validated 证明回写控制库
+	// （plugin_validations 表）。
 	Verify(ctx context.Context, req VerifyRequest) (VerifyResult, error)
 	// SampleBytes 读取会话原始包前若干字节（事实），并在 plugin_debug_access 留审计。
 	SampleBytes(ctx context.Context, req SampleBytesRequest) (SampleBytesResult, error)

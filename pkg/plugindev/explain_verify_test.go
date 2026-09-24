@@ -33,7 +33,7 @@ func findFinding(findings []*ExplainFinding, category string) *ExplainFinding {
 func TestExplainVerifyAllUnknown(t *testing.T) {
 	res, err := Explain(context.Background(), &ExplainRequest{
 		Name:   "all-unknown",
-		Action: "verify",
+		
 		Verify: &VerifyResult{
 			Verdict: "fail",
 			Quality: &QualityStats{InputCandidate: 10, DecodeUnknown: 10},
@@ -66,7 +66,7 @@ func TestExplainVerifyAllUnknown(t *testing.T) {
 func TestExplainVerifyWrongFraming(t *testing.T) {
 	res, err := Explain(context.Background(), &ExplainRequest{
 		Name:   "wrong-framing",
-		Action: "verify",
+		
 		Verify: &VerifyResult{
 			Verdict: "fail",
 			Violations: []*Violation{
@@ -95,7 +95,7 @@ func TestExplainVerifyWrongFraming(t *testing.T) {
 func TestExplainVerifySuspectedEncryption(t *testing.T) {
 	res, err := Explain(context.Background(), &ExplainRequest{
 		Name:   "enc",
-		Action: "verify",
+		
 		Verify: &VerifyResult{
 			Verdict: "fail",
 			Quality: &QualityStats{
@@ -124,7 +124,7 @@ func TestExplainVerifySuspectedEncryption(t *testing.T) {
 func TestExplainVerifySuspectedReassembly(t *testing.T) {
 	res, err := Explain(context.Background(), &ExplainRequest{
 		Name:   "reasm",
-		Action: "verify",
+		
 		Verify: &VerifyResult{
 			Verdict: "warn",
 			Quality: &QualityStats{
@@ -150,7 +150,7 @@ func TestExplainVerifySuspectedReassembly(t *testing.T) {
 func TestExplainVerifyPass(t *testing.T) {
 	res, err := Explain(context.Background(), &ExplainRequest{
 		Name:   "ok",
-		Action: "verify",
+		
 		Verify: &VerifyResult{Verdict: "pass", Quality: &QualityStats{InputCandidate: 3, DecodeUnknown: 0}},
 	})
 	if err != nil {
@@ -167,7 +167,7 @@ func TestExplainVerifyPass(t *testing.T) {
 // TestExplainVerifyNoResult verifies a verify request with no recorded result
 // (and no inline result) is a graceful no-op rather than an error.
 func TestExplainVerifyNoResult(t *testing.T) {
-	res, err := Explain(context.Background(), &ExplainRequest{Name: "no-result", Action: "verify"})
+	res, err := Explain(context.Background(), &ExplainRequest{Name: "no-result"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestExplainVerifyRecorded(t *testing.T) {
 		Verdict: "fail",
 		Quality: &QualityStats{InputCandidate: 4, DecodeUnknown: 4},
 	})
-	res, err := Explain(context.Background(), &ExplainRequest{Name: name, Action: "verify"})
+	res, err := Explain(context.Background(), &ExplainRequest{Name: name})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestExplainVerifyRecorded(t *testing.T) {
 func TestExplainVerifyFailNoPattern(t *testing.T) {
 	res, err := Explain(context.Background(), &ExplainRequest{
 		Name:   "other",
-		Action: "verify",
+		
 		Verify: &VerifyResult{
 			Verdict: "fail",
 			Violations: []*Violation{
@@ -214,17 +214,34 @@ func TestExplainVerifyFailNoPattern(t *testing.T) {
 	}
 }
 
-// TestRecordVerifyClearedOnBuild verifies the validated-invalidation rule: a
-// successful build clears the last verify result, so a subsequent explain can no
-// longer fall back to it (design §2.2).
-func TestRecordVerifyClearedOnBuild(t *testing.T) {
-	name := "cleared"
-	RecordVerify(name, &VerifyResult{Verdict: "fail", Quality: &QualityStats{InputCandidate: 2, DecodeUnknown: 2}})
-	if DefaultTracker().LastVerify(name) == nil {
-		t.Fatal("expected verify result recorded")
+// TestExplainNoAttempt verifies a plugin with no recorded verify result yields a
+// graceful no-op conclusion rather than an error.
+func TestExplainNoAttempt(t *testing.T) {
+	res, err := Explain(context.Background(), &ExplainRequest{Name: "explain-no-attempt-unique"})
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
 	}
-	DefaultTracker().RecordBuild(name, 0, &BuildResponse{OK: true})
-	if DefaultTracker().LastVerify(name) != nil {
-		t.Fatal("successful build must clear last verify result")
+	if res.Findings != nil {
+		t.Fatalf("expected nil findings, got %+v", res.Findings)
+	}
+	if res.Ref == "" {
+		t.Fatal("expected an explain_ref")
+	}
+}
+
+// TestExplainInlineBesideRecorded verifies an inline verify result wins over the
+// recorded one (the caller's own corpus is authoritative).
+func TestExplainInlineBesideRecorded(t *testing.T) {
+	name := "inline-wins"
+	RecordVerify(name, &VerifyResult{Verdict: "pass", Quality: &QualityStats{InputCandidate: 1}})
+	res, err := Explain(context.Background(), &ExplainRequest{
+		Name:   name,
+		Verify: &VerifyResult{Verdict: "fail", Quality: &QualityStats{InputCandidate: 3, DecodeUnknown: 3}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinding(res.Findings, "all-unknown") {
+		t.Fatalf("expected inline result to be attributed, got %+v", res.Findings)
 	}
 }

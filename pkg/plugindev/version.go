@@ -4,7 +4,7 @@ package plugindev
 //
 // 这是「开发指南（SDK Agents.md）/ 脚手架 / SDK」三者同版本发布的单一事实来源：
 //   - go.mod.tmpl 通过 {{.SDKVersion}} 渲染 require 版本；
-//   - create_plugin 把它作为 sdk_version 字段返回给调用方；
+//   - scaffold_plugin 把它作为 sdk_version 字段返回给调用方；
 //   - 升级 SDK 时，必须同步修改本常量、SDK 自身版本与 Agents.md 中引用的版本，三者保持一致。
 //
 // 当前值对应 SDK 模块 tag sdk/v0.10.0（连接路径只剩隧道一种：插件注册后主动拨出

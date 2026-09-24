@@ -142,12 +142,7 @@ services:
       pipeline:
         condition: service_started
     entrypoint: ["/usr/local/bin/gt-mcp"]
-    # 必须显式清空 command：只覆盖 entrypoint 时，镜像 CMD（["-spawn-agent=false"]）
-    # 会被原样追加给 gt-mcp，而 gt-mcp 没有该 flag，容器会以
-    # "flag provided but not defined: -spawn-agent" 退出并陷入 restart loop。
-    # 监听地址等配置一律走下面的 GT_* 环境变量；这里只需把插件目录指到共享卷
-    # （默认 "plugins" 是相对路径，会锚到容器 CWD，落盘不到 gt-data 卷上）。
-    command: ["-plugins-dir=/data/plugins"]
+    command: []
     environment:
       GT_HOME: /data
       GT_AUTH_TOKENS: ${GT_AUTH_TOKENS:?GT_AUTH_TOKENS is required (see .env.example)}
@@ -155,12 +150,10 @@ services:
       GT_CONTROL_ADDR: pipeline:9888
       # MCP HTTP/SSE 监听地址
       GT_MCP_ADDR: ${GT_MCP_ADDR:-:8781}
-      # 容器内可达的 registry 地址：Developer Plane（activate_plugin）在本容器内拉起
-      # 插件进程，并把 GT_REGISTRY_ADDR 注入给它。registry 实际在 pipeline 容器里，
-      # 不配这个变量插件就回退 SDK 默认 :9091 —— 那是 mcp 容器自己的 9091，什么都没
-      # 监听，插件必然注册失败并无限重试。
+      # registry 地址：插件 / 探针跑在用户自己的机器上，由它们主动连上来注册。
+      # 这里是 compose 网络内的地址（供容器内组件自查/转发使用），
       # 注意与下面的 GT_PUBLIC_REGISTRY_PORT 区分：那是给容器外的探针/插件看的宿主
-      # 发布端口（19091），这里是 compose 网络内地址（pipeline:9091）。
+      # 发布端口（19091），也是 connect_plugin 返回给用户的注册地址来源。
       GT_REGISTRY_ADDR: ${GT_INTERNAL_REGISTRY_ADDR:-pipeline:9091}
       # CORS 允许的 Origin（逗号分隔）；留空不返回 CORS 头（同源用法不受影响）
       GT_MCP_ALLOWED_ORIGINS: ${GT_MCP_ALLOWED_ORIGINS:-}

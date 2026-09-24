@@ -50,10 +50,9 @@ func buildCapabilityCatalog() capabilityDoc {
 			},
 			{
 				Name:        "plugin-dev",
-				Description: "Developer Plane：脚手架 / 编译 / 拉起 / 归因",
+				Description: "插件开发：脚手架渲染（不落盘）与实例接入 / 归因",
 				Tools: []string{
-					"create_plugin", "build_plugin", "activate_plugin", "deactivate_plugin",
-					"status_plugin", "explain_plugin",
+					"scaffold_plugin", "connect_plugin", "status_plugin", "explain_plugin",
 				},
 			},
 			{
@@ -65,7 +64,7 @@ func buildCapabilityCatalog() capabilityDoc {
 				Name:        "plugin-runtime",
 				Description: "注册表观测与 manifest",
 				Tools: []string{
-					"list_plugins", "list_registered_plugins",
+					"list_registered_plugins",
 					"get_plugin_manifest", "deregister_plugin", "get_registry_addr",
 					"get_plugin_env",
 				},
@@ -82,15 +81,16 @@ func buildCapabilityCatalog() capabilityDoc {
 			},
 		},
 		TypicalFlow: []string{
-			"接入新协议: get_plugin_dev_guide -> create_plugin(仅生成 go.mod/main.go/plugin.yaml，其余交付物自行补齐) -> 编码 + 单测 -> build_plugin -> get_plugin_env(写入 .env) -> activate_plugin(只看 status=ready|failed) -> test_plugin(看解码结果，不落库) -> verify_plugin(分层结论 session_profile/applicability/checks/verdict，不落库)",
+			"接入新协议: get_plugin_dev_guide -> scaffold_plugin(把返回的 contents 写进你自己的 workspace；平台不存插件源码) -> 本机编码 + 单测 + go build -> get_plugin_env(把 env_file 写进插件工作目录 .env) -> 在本机启动插件进程 -> connect_plugin(只看 status=ready|failed) -> test_plugin(看解码结果，不落库) -> verify_plugin(分层结论 session_profile/applicability/checks/verdict，不落库)",
 			"真实落库验证: live capture 使用该插件 或 decode_raw_packets(需 -enable-raw-debug) -> list_decoded_data -> get_protocol_catalog",
 			"定位解码为空: status_plugin -> get_registry_addr -> sample_bytes_plugin -> explain_plugin",
 		},
 		Notes: []string{
+			"插件源码、二进制与进程都在用户自己的机器上：平台不编译、不拉起、也不保存插件源码；scaffold_plugin 只返回文件内容，落盘由 Agent 完成",
 			"test_plugin / verify_plugin 都是对离线会话的隔离回放，结果不写 events 表；要看真实落库数据必须走 live capture 或 decode_raw_packets",
-			"activate_plugin 的结论只有一个 status=ready|failed；failed 时看 stage(断点) + reason(原因) + next(该做什么)，机器字段 process_launched/registered/online 仅供自查",
+			"connect_plugin 的结论只有一个 status=ready|failed；failed 时看 stage(断点 auth|connection|manifest) + reason(原因) + next(该做什么)，机器字段 registered/online/manifest_present 仅供自查",
 			"verify_plugin 的 verdict=not_applicable 表示会话里没有插件该解的流量（applicability.result=not_match，quality 为 null）——换会话重跑，不要去改插件",
-			"status_plugin 的 binary_stale 只对目录内 *.go / go.mod / plugin.yaml 的 mtime 做辅助判断；改过任何插件源码就重新 build_plugin，别拿 binary_stale=false 当免构建依据",
+			"status_plugin 只有两个视角：runtime（registry：offline|registered|active）与 validation（该插件实例是否通过过 verify，证据在平台数据库）；平台没有制品/二进制视角",
 		},
 	}
 }

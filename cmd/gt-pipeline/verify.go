@@ -33,8 +33,8 @@ const (
 //
 // 它是 Runtime Plane 的 verify 执行（设计 §1.3 / §7）：拥有真实流量与 registry，
 // 调度解码、产出语料，再交给 quality.Verify 合并 SDK 违规与 gametrace 统计得 verdict。
-// 完成后把 validated 证明持久化到 plugins/<name>/.gametrace/validation.json
-//（跨平面：Runtime 写、Developer Plane status 读，见 pkg/plugindev/proof.go）。
+// 完成后把 validated 证明写入控制库的 plugin_validations 表（按 owner+name），
+// 供 gt-mcp 的 status_plugin 读取。
 func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyRequest) (capturecontrol.VerifyResult, error) {
 	if req.SessionID == "" {
 		return capturecontrol.VerifyResult{}, fmt.Errorf("session_id is required")
@@ -136,13 +136,16 @@ func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyR
 	}
 
 	// 跨平面回写：validated 证明必须跨进程可见（Runtime Plane verify 写、
-	// Developer Plane status 读），进程内 Tracker 在 docker 部署（两平面不同
-	// 进程）下会丢，导致 verify pass 后 status 停留 compiled。方案 B：持久化
-	// 到 plugins/<name>/.gametrace/validation.json（两进程共享 <workdir>/plugins）。
-	// 仅 verdict == "pass" 才立证；warn/fail 显式清除旧证明（防旧 pass 残留）。
+	// gt-mcp status_plugin 读）。平台不持有用户插件目录，所以这条证据存在控制库
+	// 的 plugin_validations 表，按 (owner, name) 唯一，不再落盘。
+	// 仅 verdict == "pass" 才立证；warn/fail/not_applicable 显式清除旧证明
+	// （防旧 pass 残留）。
 	runID := fmt.Sprintf("verify_%d", time.Now().UnixNano())
-	if result.Verdict == "pass" {
-		if perr := plugindev.PersistValidation(s.pluginsDir, req.Plugin, &plugindev.ValidatedProof{
+	owner := auth.OwnerFrom(ctx)
+	if result.Verdict == plugindev.VerdictPass {
+		if perr := s.controlStore.UpsertPluginValidation(ctx, store.PluginValidation{
+			Owner:       owner,
+			Name:        req.Plugin,
 			VerifyRunID: runID,
 			SessionID:   req.SessionID,
 			Verdict:     result.Verdict,
@@ -150,8 +153,8 @@ func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyR
 		}); perr != nil {
 			logger.Warn("verify: persist validation proof failed", "error", perr)
 		}
-	} else {
-		plugindev.ClearValidation(s.pluginsDir, req.Plugin)
+	} else if cerr := s.controlStore.ClearPluginValidation(ctx, owner, req.Plugin); cerr != nil {
+		logger.Warn("verify: clear validation proof failed", "error", cerr)
 	}
 	plugindev.RecordVerify(req.Plugin, result)
 

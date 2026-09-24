@@ -18,16 +18,15 @@
 | `get_plugin_manifest` | 查看某插件 manifest |
 | `deregister_plugin` | 强制插件下线（测试切换 / 故障隔离） |
 | `list_live_sessions` | 返回在线会话及其绑定插件 `plugin` 字段 |
-| `list_plugins` | 扫描 plugins 目录的二进制（磁盘可用插件，非运行态） |
 | `decode_raw_packets` | 离线会话用插件解码（需 `--enable-raw-debug`） |
 | `list_decoded_data` | 协议数据主视图（已在前端使用） |
 
 **前端现状（web/src）**
 
 - Tab：`协议数据`(EventTable) 与 `原始包`(RawPacketTable)。
-- hooks：`useSessions` / `useDecodedData` / `useRawPackets` / `useListPlugins` / `useDecodeRawPackets`。
+- hooks：`useSessions` / `useDecodedData` / `useRawPackets` / `useRegisteredPlugins` / `useDecodeRawPackets`。
 - **无** 开始抓包 / 切换插件的控制面；是只读查看器。
-- `list_registered_plugins` 前端尚未使用；只有 `list_plugins`（扫目录）被 RawPacketTable 的解码下拉用到。
+- `list_registered_plugins` 经 `useRegisteredPlugins` 被 RawPacketTable 的解码下拉使用（平台不扫描插件目录，插件实例须自行注册才可见）。
 
 ## 3. 设计总览（UI 重构）
 

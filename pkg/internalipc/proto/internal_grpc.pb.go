@@ -87,7 +87,7 @@ type CaptureControlClient interface {
 	TestPlugin(ctx context.Context, in *TestPluginRequest, opts ...grpc.CallOption) (*TestPluginResponse, error)
 	// Verify 用指定插件对离线会话的 raw_packets 解码并做契约+质量校验，
 	// 产出 violations（引 SDK checker，带 rule_id）+ quality（gametrace 统计）+ verdict。
-	// 仅统计不落库；validated 证明写入 Developer Plane 的 Tracker（跨平面）。
+	// 仅统计不落库；validated 证明写入控制库的 plugin_validations 表（跨进程可见）。
 	Verify(ctx context.Context, in *VerifyRequest, opts ...grpc.CallOption) (*VerifyResponse, error)
 	// SampleBytes 读取会话原始包的前若干字节（事实：hexdump/长度直方图/首字节分布/熵），
 	// 不解释，并在 plugin_debug_access 留审计。硬上限由服务端强制（20 包 / 64 字节）。
@@ -489,7 +489,7 @@ type CaptureControlServer interface {
 	TestPlugin(context.Context, *TestPluginRequest) (*TestPluginResponse, error)
 	// Verify 用指定插件对离线会话的 raw_packets 解码并做契约+质量校验，
 	// 产出 violations（引 SDK checker，带 rule_id）+ quality（gametrace 统计）+ verdict。
-	// 仅统计不落库；validated 证明写入 Developer Plane 的 Tracker（跨平面）。
+	// 仅统计不落库；validated 证明写入控制库的 plugin_validations 表（跨进程可见）。
 	Verify(context.Context, *VerifyRequest) (*VerifyResponse, error)
 	// SampleBytes 读取会话原始包的前若干字节（事实：hexdump/长度直方图/首字节分布/熵），
 	// 不解释，并在 plugin_debug_access 留审计。硬上限由服务端强制（20 包 / 64 字节）。

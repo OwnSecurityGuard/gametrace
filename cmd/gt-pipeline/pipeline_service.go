@@ -28,12 +28,7 @@ type pipelineService struct {
 	controlStore store.ControlStoreBackend
 	registry     *plugin.RegistryServer
 	workDir      string
-	// pluginsDir 是插件源码目录（<workdir>/plugins），与 Developer Plane 的
-	// -plugins-dir 指向同一位置（docker compose 下同为 /data/plugins）。
-	// Verify 的 validated proof 持久化到 <pluginsDir>/<name>/.gametrace/
-	// validation.json，供跨进程的 Developer Plane status 读取（方案 B）。
-	pluginsDir string
-	logger     *slog.Logger // 进程级 logger，带 component=pipeline_service
+	logger       *slog.Logger // 进程级 logger，带 component=pipeline_service
 
 	// dbDriver/dbDSN 是事件存储后端配置：sqlite（每会话一个 capture.sqlite）或
 	// postgres（共享 PG 库，按 session_id 隔离）。由 -db-driver/-db-dsn（env
@@ -84,7 +79,6 @@ type pipelineService struct {
 func newPipelineService(workDir string, controlStore store.ControlStoreBackend, registry *plugin.RegistryServer, registryAddr, dbDriver, dbDSN string) *pipelineService {
 	return &pipelineService{
 		workDir:      workDir,
-		pluginsDir:   filepath.Join(workDir, "plugins"),
 		controlStore: controlStore,
 		registry:     registry,
 		logger:       logging.With("component", "pipeline_service"),

@@ -139,6 +139,7 @@ func TestBuildSkillInstructions(t *testing.T) {
 	got := buildSkillInstructions(skills)
 	for _, want := range []string{
 		"You are connected to GameTrace MCP.",
+		"Plugin source code is created in YOUR workspace: GameTrace does not store plugin source code",
 		"Available agent workflows:",
 		"- protocol-analysis",
 		"gametrace://skills/protocol-analysis",
@@ -151,10 +152,13 @@ func TestBuildSkillInstructions(t *testing.T) {
 		}
 	}
 
-	// 空目录降级：不报错并明确提示无可用技能。
+	// 空目录降级：不报错并明确提示无可用技能（插件源码归属的声明仍须保留）。
 	empty := buildSkillInstructions(nil)
 	if !strings.Contains(empty, "No skill workflows are available") {
 		t.Errorf("empty instructions = %q", empty)
+	}
+	if !strings.Contains(empty, "GameTrace does not store plugin source code") {
+		t.Errorf("empty instructions must still state plugin-source ownership: %q", empty)
 	}
 }
 

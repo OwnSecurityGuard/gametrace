@@ -151,6 +151,15 @@ CREATE TABLE IF NOT EXISTS plugin_debug_access (
     returned_bytes    INTEGER,
     truncated         INTEGER
 );
+CREATE TABLE IF NOT EXISTS plugin_validations (
+    owner         TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    verify_run_id TEXT NOT NULL DEFAULT '',
+    session_id    TEXT NOT NULL DEFAULT '',
+    verdict       TEXT NOT NULL DEFAULT '',
+    at            TIMESTAMP NOT NULL,
+    PRIMARY KEY (owner, name)
+);
 CREATE TABLE IF NOT EXISTS probes (
     probe_id        TEXT PRIMARY KEY,
     name            TEXT NOT NULL,

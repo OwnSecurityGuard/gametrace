@@ -14,7 +14,7 @@ import (
 )
 
 // pluginEnvVarName 是 agent 注入给插件的环境变量名集合（模板约定见
-// pkg/plugindev/templates/create_plugin/main.go.tmpl）：
+// pkg/plugindev/templates/scaffold_plugin/main.go.tmpl）：
 //   - GT_REGISTRY_ADDR：registry 端点（SDK 原生读取）；
 //   - GT_TUNNEL=1：隧道模式标记（平台唯一运行模式；SDK 无模式分支，Register + Connect 流）；
 //   - GT_AUTH_TOKEN：Bearer token（为空时不注入 = 匿名）。

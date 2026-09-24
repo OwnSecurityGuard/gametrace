@@ -18,9 +18,10 @@
 #     BUILD_DARWIN_AGENT 参数；gopacket/pcap 在 darwin 走 cgo，Linux builder 需
 #     osxcross 工具链，SDK 下载/工具链构建失败或被跳过时镜像退化为 linux+windows，
 #     下载页如实标 darwin 不可用）
-# runtime 保留 Go 工具链：一是 gt-mcp 内嵌 Developer Plane 现场编译插件
-# （pkg/plugindev/build.go 的 build_plugin），二是现场编译远程探针
+# runtime 保留 Go 工具链只有一个用途：现场编译远程探针
 # （cmd/gt-mcp/agent_build.go，配合 gcc/libpcap-dev 与 /src 源码，见 runtime 阶段）。
+# 平台不再编译插件：插件源码与二进制都在用户自己的机器上（scaffold_plugin 只返回
+# 文件内容，落盘/构建/启动全部由用户在本地完成）。
 #
 # pcap 说明：pipeline 仍可在服务端本地开 pcap 源（实时网卡抓包 / pcap 文件源），
 # 因此镜像带 pcap（cgo）编译；agent（gt-agent）推流入口是纯 Go gRPC，服务端
@@ -267,15 +268,10 @@ RUN sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sou
 # libpcap0.8：gopacket/pcap（cgo）的运行时共享库。
 # gcc/libc6-dev/libpcap-dev：「现场编译」远程探针（agent_build.go）走 cgo -tags pcap，
 # 编译期需要 gcc 与 libpcap 头文件——key 保留它们，平台没有预置产物时可现场补齐。
-# build_plugin 编译插件是纯 Go，仅依赖 Go 工具链（下方已复制），无需 gcc。
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends libpcap0.8 gcc libc6-dev libpcap-dev \
 	&& rm -rf /var/lib/apt/lists/* \
 	&& useradd --system --create-home --home-dir /data gametrace \
-	# 预建插件目录：进程只在 scaffold 时懒创建它，首次 list/build 前不存在会让
-	# 插件根目录状态依赖调用顺序。注意已存在的命名卷不会回填镜像内容，
-	# 升级部署时需自行 mkdir 并 chown gametrace。
-	&& mkdir -p /data/plugins \
 	&& chown -R gametrace:gametrace /data
 
 COPY --from=builder /out/gt-pipeline /usr/local/bin/gt-pipeline
@@ -290,10 +286,8 @@ RUN chmod +x /usr/local/bin/gt-singbox-agent
 COPY --from=builder /out/agents/. /opt/gametrace/agents/
 RUN chown -R gametrace:gametrace /opt/gametrace/agents
 
-# == Developer Plane 插件编译 + 远程探针现场编译：gt-mcp 内嵌的 PluginDev 会现场
-#    `go build` 插件（pkg/plugindev/build.go），故 runtime 保留 Go 工具链 + 模块缓存；
-#    构建缓存落 /data（gametrace 可写 HOME）。远程 Agent 的「现场编译」
-#    （cmd/gt-mcp/agent_build.go）复用同一工具链，另需 gcc/libpcap-dev（上方 apt）
+# == 远程探针现场编译：runtime 保留 Go 工具链 + 模块缓存（构建缓存落 /data，
+#    gametrace 可写 HOME）。cmd/gt-mcp/agent_build.go 另需 gcc/libpcap-dev（上方 apt）
 #    与仓库源码（下方 COPY /src，agentSrcDir 的 GT_AGENT_SRC_DIR 指向这里）。
 COPY --from=builder /usr/local/go /usr/local/go
 COPY --from=builder /go/pkg/mod /go/pkg/mod

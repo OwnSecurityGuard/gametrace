@@ -190,10 +190,10 @@ list_state_changes
 
 用于：
 
-* 开发新协议插件（get_plugin_dev_guide → create_plugin → build_plugin）
-* 验证与激活插件（activate_plugin → verify_plugin）
+* 开发新协议插件（get_plugin_dev_guide → scaffold_plugin → 在本机编码并启动插件 → connect_plugin）
+* 验证插件实例（test_plugin → verify_plugin）
 * 查看插件状态与解码归因（status_plugin / explain_plugin）
-* 插件注册表查询（list_plugins / get_plugin_manifest）
+* 插件注册表查询（list_registered_plugins / get_plugin_manifest）
 
 ## Coding 任务
 

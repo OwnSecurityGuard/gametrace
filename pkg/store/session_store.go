@@ -76,8 +76,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 		return err
 	}
 	// plugin_debug_access 审计表（设计 §6）：sample_bytes 等取证工具的访问留痕。
-	// 仅追加，无 UPDATE/DELETE 路径；写入方唯一为 Runtime Plane（pipeline /
-	// 内嵌的 Developer Plane），避免与 MCP 进程加剧 SQLite 锁竞争。
+	// 仅追加，无 UPDATE/DELETE 路径；写入方唯一为 Runtime Plane（gt-pipeline），
+	// 避免与 MCP 进程加剧 SQLite 锁竞争。
 	auditSchema := `
 CREATE TABLE IF NOT EXISTS plugin_debug_access (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,6 +92,22 @@ CREATE TABLE IF NOT EXISTS plugin_debug_access (
     truncated         INTEGER
 );`
 	if _, err := cs.db.Exec(auditSchema); err != nil {
+		return err
+	}
+	// plugin_validations：「该插件实例已通过 verify」的跨平面证明。平台不持有用户
+	// 插件目录，所以这条证据存在控制库里，按 (owner, name) 唯一；gt-pipeline 写、
+	// gt-mcp 读。
+	validationSchema := `
+CREATE TABLE IF NOT EXISTS plugin_validations (
+    owner         TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    verify_run_id TEXT NOT NULL DEFAULT '',
+    session_id    TEXT NOT NULL DEFAULT '',
+    verdict       TEXT NOT NULL DEFAULT '',
+    at            DATETIME NOT NULL,
+    PRIMARY KEY (owner, name)
+);`
+	if _, err := cs.db.Exec(validationSchema); err != nil {
 		return err
 	}
 	if _, err := cs.db.Exec("PRAGMA busy_timeout=5000;"); err != nil {

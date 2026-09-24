@@ -1,9 +1,9 @@
 # Runtime Connection
 
 > **Read this first.** The platform runs plugins in **tunnel mode only** (`GT_TUNNEL=1`, injected
-> by gt-agent and by Developer Plane `activate_plugin`). The plugin opens no listener and the
-> host never dials back — registration, heartbeat and every decode frame share the single
-> connection to `GT_REGISTRY_ADDR`. That one address is all a plugin needs.
+> by gt-agent for managed plugins, or set by you when you launch the plugin yourself). The plugin
+> opens no listener and the host never dials back — registration, heartbeat and every decode frame
+> share the single connection to `GT_REGISTRY_ADDR`. That one address is all a plugin needs.
 
 ## Overview
 

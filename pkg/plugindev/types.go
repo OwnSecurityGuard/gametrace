@@ -1,165 +1,40 @@
-// Package plugindev is the Developer Plane: it owns the filesystem and
-// subprocesses needed to scaffold, build, discover, activate and deactivate
-// decoder plugins. It deliberately contains no gRPC or MCP code — those layers
-// live in pkg/plugindev/server and cmd/gt-mcp respectively — so the same logic
-// can run in-process (embedded in gt-mcp for dev) or as a separate
-// gt-plugin-dev binary for physical isolation in production.
+// Package plugindev 是解码插件的开发辅助库，纯进程内、无 gRPC、无 MCP，且
+// **不写任何文件、不编译、不拉起进程**。它只做两件事：
+//
+//  1. 渲染插件脚手架模板（ScaffoldPlugin）：插件源码由调用方（Agent）在自己的
+//     workspace 落盘，平台不保存、不持有用户插件源码；
+//  2. 归因 verify 结果的解码类失败（Explain），供 plugin.explain 消费。
+//
+// 平台侧不再有「插件目录」：插件的构建与运行都在用户自己的机器上完成，插件启动后
+// 主动注册到平台 registry；平台只负责注册/心跳/验证等运行期管理。
+//
+// 目录发现（ListPlugins）是唯一的磁盘扫描，且**只服务于用户侧的 gt-agent**——
+// 它托管的是用户本机目录下的插件，与平台无关。
 package plugindev
 
-import "time"
-
-// ScaffoldRequest asks the Developer Plane to render the create_plugin skeleton.
+// ScaffoldResult 是脚手架渲染结果：只返回内容，不落盘。
 //
-// 输出目录解析规则（用于严格遵循用户传入的 output_dir）：
-//   - OutputDir 非空：文件直接写入该目录（go.mod/main.go/plugin.yaml 落在该目录下）。
-//     这是 MCP create_plugin 透传用户 output_dir 的路径，优先级最高。
-//   - 否则回退到 Root/Name：Root 由服务端从配置的 plugins 目录注入（开发者平面隔离）。
-//
-// SDKVersion / FramingAvailable 由服务端从本包的常量注入，供模板渲染与结果返回，
-// 保证脚手架与已发布 SDK 同版本、并如实标注 framing 是否可用。
-type ScaffoldRequest struct {
-	Name             string
-	Protocol         string
-	ProtocolVersion  string
-	Hints            []string
-	OutputDir        string // 严格指定的生成目录（MCP output_dir），为空则回退 Root/Name
-	Root             string // 服务端配置的 plugins 目录（回退用）
-	SDKVersion       string // 注入：脚手架固定引用的 SDK 版本
-	FramingAvailable bool   // 注入：当前 SDK 版本是否含 framing 包
+// 调用方必须把 Contents 写入自己的 workspace，路径由 Files 给出（相对路径，
+// 顺序稳定）。平台不返回、也不接受任何输出目录 —— 落盘位置完全由调用方决定。
+type ScaffoldResult struct {
+	// Template 是渲染所用的模板标识，便于调用方/用户知道文件来源。
+	Template string
+	// Files 是需要创建的文件（相对路径，顺序与 Contents 的语义顺序一致）。
+	Files []string
+	// Contents 是 文件相对路径 -> 渲染后的完整内容。
+	Contents map[string]string
+	// SDKVersion 是脚手架实际引用的 gametrace/sdk 版本。
+	SDKVersion string
+	// FramingAvailable 是生成代码是否依赖 framing 包（false 时生成代码已显式
+	// 标注「framing 不可用」，不会引用缺失的导入）。
+	FramingAvailable bool
 }
 
-// ScaffoldResponse reports what Scaffold produced.
-type ScaffoldResponse struct {
-	Name             string
-	OutputDir        string
-	Created          []string
-	SDKVersion       string // 脚手架实际引用的 SDK 版本
-	FramingAvailable bool   // 生成代码是否依赖 framing 包（false 时已显式标注不可用）
-}
-
-// DiscoveredPlugin is a plugin found on disk by ListPlugins.
+// DiscoveredPlugin is a plugin found on disk by ListPlugins. Only the user-side
+// gt-agent uses this: it hosts plugins from a directory on the user's own
+// machine. The platform never scans for plugin sources.
 type DiscoveredPlugin struct {
 	Name   string
 	Binary string
 	Dir    string
-}
-
-// BuildRequest asks the Developer Plane to compile the plugin project at
-// Root/Name. TimeoutSec bounds the build (default 120).
-type BuildRequest struct {
-	Root       string
-	Name       string
-	TimeoutSec int
-}
-
-// BuildError is a single structured compiler diagnostic.
-type BuildError struct {
-	File    string
-	Line    int
-	Col     int
-	Message string
-}
-
-// BuildResponse is the result of a build. A non-zero exit is a normal result
-// (OK=false with parsed Errors), not a transport error.
-type BuildResponse struct {
-	OK     bool
-	Errors []*BuildError
-	Output string
-}
-
-// ActivateRequest launches the local plugin binary at Root/Name and injects
-// RegistryAddr so the plugin can register with the runtime. The Developer Plane
-// owns only the process it launches (per design §1.4); production environments
-// launch plugins via systemd/k8s instead.
-//
-// AuthToken（非空时）直接注入子进程环境 GT_AUTH_TOKEN，避免依赖 .env 热修改；
-// 空串 = 匿名模式，不注入，插件自行从 .env/环境读取。
-type ActivateRequest struct {
-	Root         string
-	Name         string
-	RegistryAddr string
-	AuthToken    string
-}
-
-// ActivateResponse reports the launch outcome. InstanceID is a Developer-Plane
-// tracking handle (dev-<name>-<pid); the runtime-assigned instance_id appears
-// in plugin.status once the plugin registers.
-type ActivateResponse struct {
-	InstanceID string
-	OK         bool
-	Message    string
-}
-
-// DeactivateRequest stops the process the Developer Plane launched for Name.
-type DeactivateRequest struct {
-	Root string
-	Name string
-}
-
-// DeactivateResponse reports the teardown outcome.
-type DeactivateResponse struct {
-	OK      bool
-	Message string
-}
-
-// StatusRequest asks for the dual-state view of a single plugin.
-type StatusRequest struct {
-	Root string
-	Name string
-}
-
-// ArtifactState is the Developer Plane's view of the code: unknown → scaffolded
-// → compiled → validated (see design §2.1). It is derived purely from disk.
-type ArtifactState struct {
-	State       string // unknown | scaffolded | compiled | validated
-	SourceDir   string
-	BinaryPath  string
-	BinaryStale bool
-}
-
-// DevProcess is the Developer Plane's view of the process it launched for a
-// plugin. It is empty (Launched=false) when the plugin was started externally
-// (systemd/k8s) — in that case runtime state comes from the registry instead.
-type DevProcess struct {
-	Launched   bool
-	PID        int
-	InstanceID string
-	Alive      bool
-	LaunchedAt time.Time
-}
-
-// LastAttempt is the most recent build/activate/deactivate outcome. It is how
-// the AI gets attribution for a failed step (design §2.3: failures are attached
-// here rather than modelled as states). P3a's explain_ref will point back to a
-// plugin.explain conclusion.
-type LastAttempt struct {
-	Action     string // build | activate | deactivate
-	OK         bool
-	At         time.Time
-	Duration   time.Duration
-	Errors     []*BuildError
-	Message    string
-	ExplainRef string
-}
-
-// ValidatedProof records the cross-plane evidence that an artifact reached the
-// validated state. It is set by plugin.verify (P4) and cleared on every
-// successful build (design §2.2 invalidation rule).
-type ValidatedProof struct {
-	VerifyRunID string
-	SessionID   string
-	Verdict     string
-	At          time.Time
-}
-
-// PluginStatus is the aggregated dual-state view returned by Status. Runtime
-// state from the registry is filled in by the MCP layer (which talks to the
-// Runtime Plane); the Developer Plane contributes Artifact, DevProcess and
-// LastAttempt.
-type PluginStatus struct {
-	Name        string
-	Artifact    *ArtifactState
-	DevProcess  *DevProcess
-	LastAttempt *LastAttempt
 }
