@@ -237,7 +237,7 @@ func TestEvaluateSpecExample(t *testing.T) {
 
 	req := mustValue(t, `{"uri":"/battle/attack","seqId":123,"direction":"client_to_server","data":{"targetId":1001}}`)
 	// 响应的配对键不在 seqId，而在 meta.req_seq：验证 per-side key 跨字段配对。
-	resp := mustValue(t, `{"uri":"/battle/attack","seqId":123,"meta":{"req_seq":123},"direction":"server_to_client","error":"hp insufficient","data":{"SyncDbData":[{"player":{"id":1}},{"item":{"id":2}}]}}`)
+	resp := mustValue(t, `{"uri":"/battle/attack","seqId":123,"meta":{"req_seq":123},"direction":"server_to_client","error":"hp insufficient","data":{"stateUpdates":[{"player":{"id":1}},{"item":{"id":2}}]}}`)
 	push := mustValue(t, `{"uri":"/push/hp","seqId":0,"direction":"server_to_client"}`)
 
 	reqRes, err := Evaluate(rules, req)
