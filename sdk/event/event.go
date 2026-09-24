@@ -1,3 +1,4 @@
+// Package event 定义 GameTrace 的协议无关事件模型（Value / Trace / 身份 / Draft）。
 package event
 
 import (

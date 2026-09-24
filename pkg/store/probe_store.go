@@ -96,11 +96,6 @@ type ArchiveSegmentMeta struct {
 	LinkType uint32
 }
 
-const probeCols = `probe_id, name, owner, tenant_id, capabilities, token_hash, version, hostname, os, arch,
-connection_state, last_seen_at, capture_state, last_session_id, status_error, capture_iface, capture_ports, interfaces,
-last_packet_ms, last_upload_ms, packets_captured, packets_acked, spool_depth, dropped,
-archive_bytes, archive_segments, archive_oldest_ms, archive_newest_ms, created_at`
-
 const probeScanCols = `probe_id, name, owner, COALESCE(tenant_id,'default'), capabilities, token_hash, version, hostname, os, arch,
 connection_state, last_seen_at, capture_state, last_session_id, status_error, capture_iface, capture_ports, interfaces,
 last_packet_ms, last_upload_ms, packets_captured, packets_acked, spool_depth, dropped,

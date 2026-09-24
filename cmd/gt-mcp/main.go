@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -84,8 +83,8 @@ type pluginEventJSON struct {
 	Name       string `json:"name"`
 	Online     bool   `json:"online"`
 	Timestamp  int64  `json:"timestamp_unix"`
-	Error      string `json:"error,omitempty"`       // register_failed：注册被拒原因
-	Owner      string `json:"owner,omitempty"`       // register_failed：订阅侧过滤用
+	Error      string `json:"error,omitempty"` // register_failed：注册被拒原因
+	Owner      string `json:"owner,omitempty"` // register_failed：订阅侧过滤用
 }
 
 // pluginEventTypeRegisterFailed 是 register_failed 的 type 值
@@ -102,12 +101,11 @@ type captureReader interface {
 }
 
 type mcpCapture struct {
-	mu         sync.Mutex
 	workDir    string
 	mcpServer  *server.MCPServer
 	sessionMgr *sessionManager
-	projects    *projectStore
-	users       *userStore
+	projects   *projectStore
+	users      *userStore
 	// 自助注册（/access/register）：envResolver 做保留名检查；openRegister 由
 	// 装配处按 "token 鉴权开启 && GT_AUTH_REGISTER!=off" 计算后写入。
 	envResolver  *auth.StaticResolver
@@ -157,9 +155,6 @@ type mcpCapture struct {
 	// 事件总线：插件注册/注销/上下线事件经 WatchPlugins 流汇聚后广播给 SSE 订阅者。
 	eventMu   sync.Mutex
 	eventSubs map[chan pluginEventJSON]struct{}
-
-	// buildMu 串行化下载 Agent 的服务端编译（go:embed 配置文件须独占写入源码目录）。
-	buildMu sync.Mutex
 }
 
 type sessionManager struct {
@@ -864,15 +859,6 @@ func sessionMetaToFsMeta(s *store.SessionMeta) sessionMetadata {
 	return fs
 }
 
-// exeExt returns the executable suffix for the current platform (".exe" on
-// Windows, empty elsewhere).
-func exeExt() string {
-	if runtime.GOOS == "windows" {
-		return ".exe"
-	}
-	return ""
-}
-
 func (m *mcpCapture) handleGetPluginContract(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return successResult(map[string]any{"contract_yaml": string(contract.RawYAML())}), nil
 }
@@ -1268,8 +1254,8 @@ func decodedEventMap(ev *event.Event, captureIdx map[string]captureContextJSON, 
 		"correlation_id": ev.Trace.CorrelationID,
 		"causation_id":   string(ev.Trace.CausationID),
 		"data":           dataContent,
-		"meta":       metaContent,
-		"analysis":   analysisContent,
+		"meta":           metaContent,
+		"analysis":       analysisContent,
 	}
 	if cc, ok := captureIdx[string(ev.Identity.ID)]; ok {
 		eventMap["capture"] = cc
@@ -1326,59 +1312,6 @@ func captureDisplayName(source string) string {
 	default:
 		return source
 	}
-}
-
-// buildCaptureContext 基于全量事件计算每个事件的连接/流序号。
-//
-// 连接序号：按连接最新事件时间倒序（与 Connections 页面一致），最新连接为 1。
-// 流序号：连接内按流首事件时间正序（Stream View 语义），每流从 1 递增。
-// 流分组键：correlation_id 非空的事件同组；未关联事件各自成流。
-// 仅 conn_id 非空（代理抓包）的事件会被编入索引。
-func buildCaptureContext(events []*event.Event) map[string]captureContextJSON {
-	out := make(map[string]captureContextJSON, len(events))
-	connSeqByID := make(map[string]int)
-	streamSeqByConn := make(map[string]int)
-	connEvents := make(map[string][]*event.Event)
-
-	for _, ev := range events {
-		connID := ev.Context.ConnID
-		if connID == "" {
-			continue
-		}
-		if _, ok := connSeqByID[connID]; !ok {
-			connSeqByID[connID] = len(connSeqByID) + 1
-			streamSeqByConn[connID] = 0
-		}
-		connEvents[connID] = append(connEvents[connID], ev)
-	}
-
-	for connID, evs := range connEvents {
-		// evs 来自 QueryEventsDesc（时间倒序），反转为正序以符合流首事件时间正序。
-		asc := make([]*event.Event, len(evs))
-		for i, ev := range evs {
-			asc[len(evs)-1-i] = ev
-		}
-		seenStream := make(map[string]bool)
-		for _, ev := range asc {
-			key := ev.Trace.CorrelationID
-			if key == "" {
-				key = string(ev.Identity.ID)
-			}
-			if !seenStream[key] {
-				seenStream[key] = true
-				streamSeqByConn[connID]++
-			}
-			out[string(ev.Identity.ID)] = captureContextJSON{
-				CapturedBy: captureDisplayName(ev.Context.Source),
-				ConnID:     connID,
-				ConnSeq:    connSeqByID[connID],
-				StreamID:   key,
-				StreamSeq:  streamSeqByConn[connID],
-				Source:     ev.Context.Source,
-			}
-		}
-	}
-	return out
 }
 
 // connectionReader 连接聚合查询能力（由 *store.SQLiteStore 实现）。

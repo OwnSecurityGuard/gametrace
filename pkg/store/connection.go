@@ -417,9 +417,6 @@ func (s *SQLiteStore) QueryConnectionStreams(ctx context.Context, sessionID, con
 		return nil, err
 	}
 
-	type group struct {
-		stream *ConnectionStream
-	}
 	byKey := make(map[string]*ConnectionStream)
 	var order []string
 
@@ -608,7 +605,6 @@ func closedByFromMeta(rawJSON, client, server string) (closed bool, closedBy str
 	if !ok || v == "" {
 		return false, ""
 	}
-	closed = true
 	switch v {
 	case "client", "server":
 		return true, v

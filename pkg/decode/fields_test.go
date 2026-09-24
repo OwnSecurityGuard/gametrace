@@ -1,7 +1,6 @@
 package decode
 
 import (
-	"net/netip"
 	"testing"
 )
 
@@ -62,13 +61,4 @@ func TestInferMsgNameFromJSON_HTTP(t *testing.T) {
 			t.Errorf("InferMsgNameFromJSON(%q) = %q, want %q", tt.json, got, tt.want)
 		}
 	}
-}
-
-// netipMustParse 解析地址，失败时 panic（仅测试用）。
-func netipMustParse(s string) netip.AddrPort {
-	addr, err := netip.ParseAddrPort(s)
-	if err != nil {
-		panic(err)
-	}
-	return addr
 }

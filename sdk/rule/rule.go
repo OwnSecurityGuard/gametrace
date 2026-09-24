@@ -210,7 +210,7 @@ func (r Rule) validatePair() []Issue {
 			issues = append(issues, Issue{RuleID: PairKeyRequired, Path: fmt.Sprintf("effect.sides[%d]", i),
 				Message: fmt.Sprintf("pair side %d requires key (GJSON path of the pairing value on this side)", i), Severity: SeverityError})
 		}
-		for _, iss := range s.Predicate.validate() {
+		for _, iss := range s.validate() {
 			iss.Path = fmt.Sprintf("effect.sides[%d].%s", i, iss.Path)
 			issues = append(issues, iss)
 		}

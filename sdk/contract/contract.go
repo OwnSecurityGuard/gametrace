@@ -164,7 +164,7 @@ type RuleFilter struct {
 	Severity Severity // 非空则只返回该 severity
 }
 
-// Rules 按条件返回规则集，结果按 (topic, id) 稳定排序。
+// FilterRules 按条件返回规则集，结果按 (topic, id) 稳定排序。
 //
 // 典型用法：
 //   - plugin.brief 默认档：RuleFilter{Severity: SeverityError}

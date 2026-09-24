@@ -37,17 +37,6 @@ func (v Violation) Spec() (Rule, bool) {
 	return Default().RuleByID(v.RuleID)
 }
 
-// withPath 把定位前缀并入违规的 Path（用于把数组下标 _evidence[i] 之类的
-// 容器位置拼到内部 Issue 自带的子路径前）。Path 为空时直接采用前缀。
-func (v Violation) withPath(prefix string) Violation {
-	if v.Path == "" {
-		v.Path = prefix
-	} else {
-		v.Path = prefix + "." + v.Path
-	}
-	return v
-}
-
 // Report 是分层校验的总报告。PluginChecker 各子检查器产出 *Report 后由上层 Merge。
 type Report struct {
 	Violations []Violation `json:"violations"`

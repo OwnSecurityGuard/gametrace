@@ -192,7 +192,6 @@ func (c *ingestClient) pushOnce(ctx context.Context, packets <-chan *proto.RawPa
 				slog.Debug("ingest: final flush failed, packets stay in spool for next run",
 					"session", c.sessionID, "packets", len(pending), "error", err)
 			}
-			pending = nil
 			c.finishStream(stream, cancel)
 			return nil
 		case p := <-packets:

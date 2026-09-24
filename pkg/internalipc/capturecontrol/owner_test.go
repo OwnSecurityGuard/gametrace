@@ -13,7 +13,6 @@ type ownerCapturingEngine struct {
 	fakeEngine
 	owner      string
 	allOwners  bool
-	agentFlag  bool
 	agentSeen  bool
 	pluginName string
 }

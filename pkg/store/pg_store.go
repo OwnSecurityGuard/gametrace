@@ -971,7 +971,6 @@ func (s *PGStore) QueryConnectionStreams(ctx context.Context, sessionID, connID 
 	if err != nil {
 		return nil, err
 	}
-	type group struct{ stream *ConnectionStream }
 	byKey := make(map[string]*ConnectionStream)
 	var order []string
 	for _, ev := range events {

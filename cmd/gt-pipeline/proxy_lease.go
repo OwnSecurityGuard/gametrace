@@ -459,7 +459,7 @@ func (s *pipelineService) StartLeaseCapture(ctx context.Context, req capturecont
 	res, err := s.StartSession(ctx, capturecontrol.StartSessionRequest{
 		Plugin:       plugin,
 		ProjectID:    lease.projectID,
-		PluginOwners: req.PluginOwners,
+		PluginOwners: pluginOwners,
 		Mobile: &capturecontrol.MobileConfig{
 			ListenAddr: fmt.Sprintf("127.0.0.1:%d", grpcPort),
 			Activity:   activity,

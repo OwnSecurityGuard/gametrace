@@ -74,7 +74,7 @@ type relayEnv struct {
 // startIdleRelay 以「不抓包」状态启动一个常驻 relay（模拟刚创建的租约）。
 func startIdleRelay(t *testing.T, logger *slog.Logger) *relayEnv {
 	t.Helper()
-	echoLis, err := EchoServer("127.0.0.1:0", logger)
+	echoLis, err := EchoServer("127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("start echo server: %v", err)
 	}

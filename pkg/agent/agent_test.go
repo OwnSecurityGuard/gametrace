@@ -46,7 +46,7 @@ func TestRelayEndToEnd(t *testing.T) {
 	}
 
 	// 2. 模拟游戏服务端（作为 relay 的上游）
-	echoLis, err := EchoServer("127.0.0.1:0", logger)
+	echoLis, err := EchoServer("127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("start echo server: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestRelayEndToEnd(t *testing.T) {
 		[]byte(`{"msg":"attack","target":3}`),
 		[]byte(`{"msg":"logout"}`),
 	}
-	if err := RunSimClient(relayAddr, messages, logger); err != nil {
+	if err := RunSimClient(relayAddr, messages); err != nil {
 		t.Fatalf("run sim client: %v", err)
 	}
 
@@ -147,7 +147,7 @@ func TestRelayHTTPConnectProxy(t *testing.T) {
 	}
 
 	// 2. 模拟游戏服务端（作为 CONNECT 动态解析出的上游目标）
-	echoLis, err := EchoServer("127.0.0.1:0", logger)
+	echoLis, err := EchoServer("127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("start echo server: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestRelayHTTPConnectFilter(t *testing.T) {
 	srcAddr := src.(addrSource).Addr().String()
 
 	// 2. 两个上游：echo（应被抓）+ discard（应被筛掉，只中继不上报）
-	echoLis, err := EchoServer("127.0.0.1:0", logger)
+	echoLis, err := EchoServer("127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("start echo server: %v", err)
 	}

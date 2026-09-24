@@ -23,8 +23,6 @@ import (
 	"gametrace/pkg/store"
 )
 
-// heartbeatInterval 是探针心跳周期（服务端用于断流后 30s offline 的对齐参考）。
-const heartbeatInterval = 10 * time.Second
 
 // Server 实现 proto.AgentControlServer，与 AgentIngest 共用同一个 gRPC 端口（:9092）。
 //

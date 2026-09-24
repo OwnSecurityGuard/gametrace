@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 )
 
@@ -45,10 +44,7 @@ func ReadFrame(r io.Reader) ([]byte, error) {
 
 // EchoServer 启动一个极简"游戏服务端"：按帧读取请求，回一帧 JSON 应答。
 // 返回 listener，调用方负责关闭。
-func EchoServer(addr string, logger *slog.Logger) (net.Listener, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func EchoServer(addr string) (net.Listener, error) {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -78,10 +74,7 @@ func EchoServer(addr string, logger *slog.Logger) (net.Listener, error) {
 }
 
 // RunSimClient 模拟游戏客户端：连接中继监听地址，依次发送各条消息并等待应答。
-func RunSimClient(relayAddr string, messages [][]byte, logger *slog.Logger) error {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func RunSimClient(relayAddr string, messages [][]byte) error {
 	conn, err := net.Dial("tcp", relayAddr)
 	if err != nil {
 		return fmt.Errorf("dial relay %s: %w", relayAddr, err)

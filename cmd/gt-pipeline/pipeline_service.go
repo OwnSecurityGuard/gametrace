@@ -143,13 +143,6 @@ func (s *pipelineService) SetBaselineScope(sc state.Scope) {
 	s.logger.Info("baseline scope configured", "scope", sc.String())
 }
 
-// addTask 注册 task 到 map（写锁）。
-func (s *pipelineService) addTask(t *captureTask) {
-	s.mu.Lock()
-	s.tasks[t.sessionID] = t
-	s.mu.Unlock()
-}
-
 // getTask 查询 task（读锁）。
 func (s *pipelineService) getTask(sessionID string) (*captureTask, bool) {
 	s.mu.RLock()
@@ -267,7 +260,7 @@ func (s *pipelineService) StartSession(ctx context.Context, req capturecontrol.S
 		onFinalize:   s.finalizeTask,
 	}
 
-	// 持有写锁注册 task 并 Start，避免 run goroutine 在 addTask 前退出导致 race
+	// 持有写锁注册 task 并 Start，避免 run goroutine 在 task 登记进 map 前退出导致 race
 	s.mu.Lock()
 	s.tasks[sessionID] = task
 	if err := task.Start(); err != nil {

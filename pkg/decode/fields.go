@@ -100,11 +100,3 @@ func AnnotateInferredDirection(jsonBytes []byte) []byte {
 	}
 	return out
 }
-
-// getString 从 map 中安全取字符串值。
-func getString(m map[string]any, key string) string {
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
-}

@@ -17,9 +17,6 @@ import (
 // stateChangeInsertColumns 是 INSERT 的列清单，顺序与 buildStateChangeRows 返回的值一一对应。
 const stateChangeInsertColumns = `id, event_id, session_id, flow_id, timestamp, subject_type, subject_id, op, path, before_value, after_value, version, before_resolved, after_resolved, seq, metadata`
 
-// stateChangeInsertArity 是上面的列数，两个方言各自的占位符串按它书写。
-const stateChangeInsertArity = 16
-
 // buildStateChangeRows 把一批变更校验并编码为待插入的行值（[]any，长度与列清单一致）。
 //
 // 非法条目逐条跳过并计入 skipped：一条脏数据不能带走整批（调用方拿不到任何行会更糟）。

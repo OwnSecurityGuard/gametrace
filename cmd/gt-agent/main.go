@@ -296,16 +296,6 @@ func main() {
 	slog.Info("gt-agent stopped")
 }
 
-// firstNonEmpty 返回第一个非空参数（全空返回空串）。
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 // defaultSpoolDir 返回某会话的 spool 目录（spoolBase 下按会话隔离，
 // 归档扫描与断电续传共用同一目录布局）。
 func defaultSpoolDir(sessionID string) string {

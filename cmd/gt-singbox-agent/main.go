@@ -82,7 +82,7 @@ func main() {
 	// --sim 且未给 --target 时，本地起一个模拟游戏服务端作为上游。
 	simTarget := target
 	if sim && simTarget == "" {
-		lis, err := agent.EchoServer("127.0.0.1:0", logger)
+		lis, err := agent.EchoServer("127.0.0.1:0")
 		if err != nil {
 			logger.Error("start sim game server failed", "error", err)
 			os.Exit(1)
@@ -201,7 +201,7 @@ func runSimClientLoop(ctx context.Context, logger *slog.Logger, relay *agent.Rel
 			return
 		case <-time.After(2 * time.Second):
 		}
-		if err := agent.RunSimClient(relayAddr, messages, logger); err != nil {
+		if err := agent.RunSimClient(relayAddr, messages); err != nil {
 			logger.Warn("sim client round failed", "error", err)
 			continue
 		}

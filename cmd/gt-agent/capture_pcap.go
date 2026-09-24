@@ -27,8 +27,7 @@ type captureConfig struct {
 
 // liveCapture 是一次运行中的抓包会话：暴露 BPF 热更新（不中断抓包）。
 type liveCapture struct {
-	h   *pcap.Handle
-	ctx context.Context
+	h *pcap.Handle
 }
 
 // SetFilter 热更新 BPF（在现有 handle 上重编译，不断流）。
