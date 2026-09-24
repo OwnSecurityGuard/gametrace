@@ -95,11 +95,14 @@ func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyR
 		Limit:    req.Limit,
 	}, func(r rawDecodeResult) {
 		totalRaw++
-		if rawPortMatches(r.Src, r.Dst, int32(meta.Port)) {
+		// candidate = 命中会话 target port 的包，即插件真正该解的流量。非 candidate
+		// 的包只进 input.raw，绝不参与违规与质量统计。
+		candidate := rawPortMatches(r.Src, r.Dst, int32(meta.Port))
+		if candidate {
 			matchedRaw++
 		}
-		corpus = append(corpus, decodeIOsFromResult(r)...)
-		if manifest != nil {
+		corpus = append(corpus, decodeIOsFromResult(r, candidate)...)
+		if manifest != nil && candidate {
 			for _, ev := range r.Events {
 				sem.checkEvent(manifest, ev)
 			}
@@ -109,8 +112,14 @@ func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyR
 		return capturecontrol.VerifyResult{}, loopErr
 	}
 
-	if manifest != nil {
-		// 声明期两层校验（runtime/schema/state）一并并入报告。
+	// 会话适用性（P1-1 阶段 1：target port + matching count）：过滤窗口里一个
+	// 命中会话 target port 的包都没有，说明这个会话根本没带插件要解的流量 ——
+	// 属于「换会话重试」而非「插件质量差」，verdict 报 not_applicable。
+	app := sessionApplicability(int32(meta.Port), totalRaw, matchedRaw)
+
+	// 声明期两层校验（runtime/schema/state）只在会话适用时并入：不适用的会话没有
+	// 任何插件产出的证据，报语义违规只会误导用户去改插件。
+	if manifest != nil && app.Applicable {
 		sem.addReport(sdkcontract.NewPluginChecker().Check(manifest))
 	}
 
@@ -118,12 +127,12 @@ func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyR
 	result.Violations = append(result.Violations, sem.violations()...)
 	quality.RecomputeVerdict(result)
 
-	// 会话适用性（P1-1 阶段 1：target port + matching count）：过滤窗口里一个
-	// 命中会话 target port 的包都没有，说明这个会话根本没带插件要解的流量 ——
-	// 属于「换会话重试」而非「插件质量差」，verdict 报 not_applicable。
-	app := sessionApplicability(int32(meta.Port), totalRaw, matchedRaw)
 	if !app.Applicable {
+		// 不适用：没有插件该解的流量。quality 置 nil（对非本协议流量算出的统计
+		// 会被读成「插件质量差」），两轴 not_run，verdict not_applicable。
 		result.Verdict = plugindev.VerdictNotApplicable
+		result.Quality = nil
+		result.Checks = &plugindev.VerifyChecks{Decode: plugindev.NotRun, Semantic: plugindev.NotRun}
 	}
 
 	// 跨平面回写：validated 证明必须跨进程可见（Runtime Plane verify 写、
@@ -153,6 +162,9 @@ func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyR
 		AtUnix:        time.Now().Unix(),
 		Applicability: app,
 	}
+	if result.Checks != nil {
+		out.Checks = capturecontrol.VerifyChecks{Decode: result.Checks.Decode, Semantic: result.Checks.Semantic}
+	}
 	for _, v := range result.Violations {
 		out.Violations = append(out.Violations, capturecontrol.ViolationView{
 			RuleID:    v.RuleID,
@@ -162,17 +174,20 @@ func (s *pipelineService) Verify(ctx context.Context, req capturecontrol.VerifyR
 			DocRef:    v.DocRef,
 			Count:     v.Count,
 			Sample:    v.Sample,
+			Layer:     v.Layer,
 		})
 	}
 	if q := result.Quality; q != nil {
-		out.Quality = capturecontrol.QualityView{
-			TotalInputs:          q.TotalInputs,
-			UnknownInputs:        q.UnknownInputs,
-			UnknownRatio:         q.UnknownRatio,
-			CorrelatedInputs:     q.CorrelatedInputs,
-			LongPacketErrors:     q.LongPacketErrors,
-			EntropyEstimate:      q.EntropyEstimate,
-			DecodeErrors:         q.DecodeErrors,
+		out.Quality = &capturecontrol.QualityView{
+			InputRaw:           q.InputRaw,
+			InputCandidate:     q.InputCandidate,
+			DecodeSuccess:      q.DecodeSuccess,
+			DecodeUnknown:      q.DecodeUnknown,
+			DecodeUnknownRatio: q.DecodeUnknownRatio,
+			CorrelatedInputs:   q.CorrelatedInputs,
+			LongPacketErrors:   q.LongPacketErrors,
+			EntropyEstimate:    q.EntropyEstimate,
+			DecodeErrors:       q.DecodeErrors,
 		}
 	}
 	logger.Info("verify completed", "verdict", out.Verdict, "violations", len(out.Violations), "corpus", len(corpus))
@@ -200,6 +215,7 @@ func rawPortMatches(src, dst string, port int32) bool {
 // raw packet distribution / protocol 分布等更细的信号留待阶段 2。
 func sessionApplicability(targetPort int32, totalPackets, matchedPackets int64) *capturecontrol.VerifyApplicability {
 	app := &capturecontrol.VerifyApplicability{
+		Result:         "match",
 		Applicable:     true,
 		Reason:         "ok",
 		TargetPort:     targetPort,
@@ -213,6 +229,9 @@ func sessionApplicability(targetPort int32, totalPackets, matchedPackets int64) 
 	case targetPort > 0 && matchedPackets == 0:
 		app.Applicable = false
 		app.Reason = "no_matching_packets"
+	}
+	if !app.Applicable {
+		app.Result = "not_match"
 	}
 	return app
 }
@@ -327,10 +346,12 @@ func (s *pipelineService) SampleBytes(ctx context.Context, req capturecontrol.Sa
 // 每个产出的事件对应一个非终结响应（带 event_type/schema_id/payload），
 // 再追加一个终结响应（done=true，承载原始字节供熵估计）。解码失败则仅一个
 // done=true 且带 DecodeError 的响应。
-func decodeIOsFromResult(r rawDecodeResult) []quality.DecodeIO {
+// candidate 透传到每个 DecodeIO：只有命中会话 target port 的包才计入质量统计。
+func decodeIOsFromResult(r rawDecodeResult, candidate bool) []quality.DecodeIO {
 	if r.Err != nil {
 		return []quality.DecodeIO{{
 			InputID:     r.RawID,
+			Candidate:   candidate,
 			Done:        true,
 			DecodeError: r.Err.Error(),
 			Payload:     r.Payload,
@@ -340,6 +361,7 @@ func decodeIOsFromResult(r rawDecodeResult) []quality.DecodeIO {
 	for _, ev := range r.Events {
 		ios = append(ios, quality.DecodeIO{
 			InputID:    r.RawID,
+			Candidate:  candidate,
 			Done:       false,
 			EventType:  string(ev.Identity.Type),
 			PayloadLen: 1, // 事件存在即代表响应带非空 payload
@@ -347,7 +369,7 @@ func decodeIOsFromResult(r rawDecodeResult) []quality.DecodeIO {
 		})
 	}
 	// 终结响应：承载原始字节供熵估计（不重复计入未知率）。
-	ios = append(ios, quality.DecodeIO{InputID: r.RawID, Done: true, Payload: r.Payload})
+	ios = append(ios, quality.DecodeIO{InputID: r.RawID, Candidate: candidate, Done: true, Payload: r.Payload})
 	return ios
 }
 
@@ -386,7 +408,7 @@ func newSemCollector() *semCollector {
 func (c *semCollector) add(v sdkcontract.Violation) {
 	e, ok := c.viol[v.RuleID]
 	if !ok {
-		e = &plugindev.Violation{RuleID: v.RuleID}
+		e = &plugindev.Violation{RuleID: v.RuleID, Layer: plugindev.LayerSemantic}
 		c.viol[v.RuleID] = e
 		c.order = append(c.order, v.RuleID)
 	}

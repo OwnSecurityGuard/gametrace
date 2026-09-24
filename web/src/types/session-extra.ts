@@ -2,7 +2,9 @@
  * get_session_status 响应。成功路径有两种形态：
  * - gRPC 实时态：state/source_name/packets_in/raw_count/event_count/metric_count/decode_errors/drops/errors/err
  * - 元数据降级态：state/port/plugin/interface/pcap_file/raw_packets/events/metrics/decode_errors/duration_sec/db_path/manifest_snapshot?
- * 无会话时为 { state: "idle" } 或 { state: "closed", session_id }
+ * state 词汇统一为 controlStore 的 running | stopped | error（pipeline 的 closed
+ * 只在 gRPC 实时态内部出现，不会透出到本响应）；查不到会话时按终态
+ * { state: "stopped", session_id } 返回。
  * 字段全部可选以兼容两种形态。
  */
 export interface SessionStatusResult {

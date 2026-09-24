@@ -1,6 +1,6 @@
 // 会话阶段（Session Phase）派生：把后端的状态机翻译成人能理解的状态。
 //
-// 为什么需要这一层：后端只有 running / stopped / closed 三个生命周期态，
+// 为什么需要这一层：后端只有 running / stopped / error 三个生命周期态，
 // 它们回答的是「进程在不在」，而用户想知道的是「我该不该再等等、还是要去动什么」。
 // 典型例子：agent 已连上但一个包都没有——生命周期上是 running，看起来"在工作"，
 // 但用户此刻最需要的是"去启动游戏"。这两件事必须由 UI 说清楚，否则用户只会
@@ -95,16 +95,19 @@ function decodeErrorsOf(meta?: SessionInfo | null, status?: SessionStatusResult 
 }
 
 /**
- * 判断会话是否处于「中断」：元数据仍记着 running，实时态却报 closed。
+ * 判断会话是否处于「中断」：元数据仍记着 running，实时态却已不是 running。
  *
  * 这就是 pipeline 重启后的 session stale——数据已冻结但 UI 若只看元数据会一直
  * 显示「抓包中」，用户以为还在抓，其实什么都不会再进来了。必须单独成态并提示。
+ *
+ * 实时态词汇与后端 controlStore 一致（running | stopped | error）：只要不是
+ * running 就是终态，不去枚举具体的终态词——否则后端多一种终态这里就会漏判。
  */
 export function isInterrupted(meta?: SessionInfo | null, status?: SessionStatusResult | null): boolean {
   if (meta?.status !== "running") return false;
-  // 只有明确拿到实时态且它说关了，才判定中断（拿不到实时态时保守起见不算）。
+  // 只有明确拿到实时态且它不是 running，才判定中断（拿不到实时态时保守起见不算）。
   if (!status?.state) return false;
-  return status.state === "closed";
+  return status.state !== "running";
 }
 
 /**

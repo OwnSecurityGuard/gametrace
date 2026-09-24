@@ -475,8 +475,9 @@ func main() {
 2. MCP: start_capture(pcap_file="fixtures/http_loop.pcap", plugin="my-http")  # 离线回放 + 解码落库
 3. MCP: list_decoded_data(session_id=...)                    # 真实落库结果：业务事件 / 消息名 / 配对
 4. MCP: test_plugin(session_id=..., plugin="my-http")        # 不落库：看 decoded / 错误 / sample_events
-5. MCP: verify_plugin(session_id=..., plugin="my-http")      # 不落库：契约 + 质量 verdict
-6. 看 unknown 比例 / 0 事件 / 重组缺口提示，回到代码修 framing。
+5. MCP: verify_plugin(session_id=..., plugin="my-http")      # 不落库：分层结论 applicability / checks / verdict
+6. 看 quality.input.candidate 是多少（分母是它，不是整窗口）+ unknown 比例 / 0 事件 / 重组缺口提示，回到代码修 framing。
+   若 verdict=not_applicable（candidate=0，quality 为 null），说明这个会话没带该插件的流量——换个会话重跑，别改插件。
 7. 反复 2-6，直到 verify 通过、list_decoded_data 能看到业务事件。
 ```
 

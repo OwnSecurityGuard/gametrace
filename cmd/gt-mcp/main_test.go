@@ -296,9 +296,16 @@ func TestHandleExplainPluginForwardsVerify(t *testing.T) {
 	verifyArg := map[string]any{
 		"verdict": "fail",
 		"quality": map[string]any{
-			"total_inputs":     10,
-			"unknown_inputs":   8,
-			"unknown_ratio":    0.8,
+			"input": map[string]any{
+				"raw":       10,
+				"candidate": 10,
+			},
+			"decode": map[string]any{
+				"success":       2,
+				"unknown":       8,
+				"unknown_ratio": 0.8,
+				"errors":        0,
+			},
 			"entropy_estimate": 7.8,
 		},
 	}

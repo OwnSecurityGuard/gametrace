@@ -82,12 +82,14 @@ func buildCapabilityCatalog() capabilityDoc {
 			},
 		},
 		TypicalFlow: []string{
-			"接入新协议: get_plugin_dev_guide -> create_plugin(仅生成 go.mod/main.go/plugin.yaml，其余交付物自行补齐) -> 编码 + 单测 -> build_plugin -> get_plugin_env(写入 .env) -> activate_plugin -> test_plugin(看解码结果，不落库) -> verify_plugin(契约+质量 verdict，不落库)",
+			"接入新协议: get_plugin_dev_guide -> create_plugin(仅生成 go.mod/main.go/plugin.yaml，其余交付物自行补齐) -> 编码 + 单测 -> build_plugin -> get_plugin_env(写入 .env) -> activate_plugin(只看 status=ready|failed) -> test_plugin(看解码结果，不落库) -> verify_plugin(分层结论 session_profile/applicability/checks/verdict，不落库)",
 			"真实落库验证: live capture 使用该插件 或 decode_raw_packets(需 -enable-raw-debug) -> list_decoded_data -> get_protocol_catalog",
 			"定位解码为空: status_plugin -> get_registry_addr -> sample_bytes_plugin -> explain_plugin",
 		},
 		Notes: []string{
 			"test_plugin / verify_plugin 都是对离线会话的隔离回放，结果不写 events 表；要看真实落库数据必须走 live capture 或 decode_raw_packets",
+			"activate_plugin 的结论只有一个 status=ready|failed；failed 时看 stage(断点) + reason(原因) + next(该做什么)，机器字段 process_launched/registered/online 仅供自查",
+			"verify_plugin 的 verdict=not_applicable 表示会话里没有插件该解的流量（applicability.result=not_match，quality 为 null）——换会话重跑，不要去改插件",
 			"status_plugin 的 binary_stale 只对目录内 *.go / go.mod / plugin.yaml 的 mtime 做辅助判断；改过任何插件源码就重新 build_plugin，别拿 binary_stale=false 当免构建依据",
 		},
 	}

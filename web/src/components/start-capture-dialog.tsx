@@ -130,7 +130,10 @@ export function StartCaptureDialog({
   const agentPacketsIn =
     (agentLiveStatus?.packets_in ?? 0) + (agentLiveStatus?.raw_count ?? 0);
   const agentConnected = agentSessionId != null && agentPacketsIn > 0;
-  const agentSessionClosed = agentSessionId != null && agentLiveStatus?.state === "closed";
+  // 实时态非 running 即已终结（词汇与后端一致：running | stopped | error），
+  // 此时再等推流也不会来了，必须让用户重来。
+  const agentSessionClosed =
+    agentSessionId != null && agentLiveStatus?.state != null && agentLiveStatus.state !== "running";
 
   useEffect(() => {
     if (open) {

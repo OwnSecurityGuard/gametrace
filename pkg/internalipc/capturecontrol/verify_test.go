@@ -15,12 +15,14 @@ func TestServer_Verify(t *testing.T) {
 			SessionID:   "s1",
 			AtUnix:      123,
 			Violations: []ViolationView{
-				{RuleID: "payload-non-empty", Topic: "encoding", Severity: "error", Count: 2, Sample: "schema_id empty"},
+				{RuleID: "payload-non-empty", Topic: "encoding", Severity: "error", Count: 2, Sample: "schema_id empty", Layer: "transport"},
 			},
-			Quality: QualityView{
-				TotalInputs: 10, UnknownInputs: 5, UnknownRatio: 0.5,
+			Checks: VerifyChecks{Decode: "warn", Semantic: "pass"},
+			Quality: &QualityView{
+				InputRaw: 20, InputCandidate: 10, DecodeSuccess: 5, DecodeUnknown: 5, DecodeUnknownRatio: 0.5,
 				CorrelatedInputs: 1, EntropyEstimate: 7.9, DecodeErrors: 0,
 			},
+			Applicability: &VerifyApplicability{Result: "match", Applicable: true, Reason: "ok", TargetPort: 8080, TotalPackets: 20, MatchedPackets: 10},
 		},
 	}
 	srv := NewServer(engine)
@@ -40,17 +42,55 @@ func TestServer_Verify(t *testing.T) {
 		t.Fatalf("violations = %d, want 1", len(resp.GetViolations()))
 	}
 	v := resp.GetViolations()[0]
-	if v.GetRuleId() != "payload-non-empty" || v.GetSeverity() != "error" || v.GetCount() != 2 {
+	if v.GetRuleId() != "payload-non-empty" || v.GetSeverity() != "error" || v.GetCount() != 2 || v.GetLayer() != "transport" {
 		t.Errorf("violation = %+v", v)
 	}
+	if c := resp.GetChecks(); c.GetDecode() != "warn" || c.GetSemantic() != "pass" {
+		t.Errorf("checks = %+v", c)
+	}
+	if a := resp.GetApplicability(); a.GetResult() != "match" || !a.GetApplicable() || a.GetMatchedPackets() != 10 {
+		t.Errorf("applicability = %+v", a)
+	}
 	q := resp.GetQuality()
-	if q.GetTotalInputs() != 10 || q.GetUnknownInputs() != 5 || q.GetUnknownRatio() != 0.5 || q.GetEntropyEstimate() != 7.9 {
+	if q.GetInputRaw() != 20 || q.GetInputCandidate() != 10 || q.GetDecodeUnknown() != 5 ||
+		q.GetDecodeUnknownRatio() != 0.5 || q.GetEntropyEstimate() != 7.9 {
 		t.Errorf("quality = %+v", q)
 	}
 	// 请求参数正确传到引擎。
 	if engine.verifyLastReq.SessionID != "s1" || engine.verifyLastReq.Plugin != "http" ||
 		engine.verifyLastReq.Protocol != "tcp" || engine.verifyLastReq.Limit != 7 {
 		t.Errorf("engine req = %+v", engine.verifyLastReq)
+	}
+}
+
+// TestServer_VerifyNotApplicable 锁定「会话不适用」的线上形态：Quality 必须为
+// nil（不能给出任何质量数字），两轴 not_run，verdict not_applicable —— 用户看到
+// 的是「换会话」而不是「插件质量差」。
+func TestServer_VerifyNotApplicable(t *testing.T) {
+	engine := &fakeEngine{
+		verifyResult: VerifyResult{
+			Verdict:       "not_applicable",
+			SessionID:     "s1",
+			Checks:        VerifyChecks{Decode: "not_run", Semantic: "not_run"},
+			Applicability: &VerifyApplicability{Result: "not_match", Applicable: false, Reason: "no_matching_packets", TargetPort: 8080, TotalPackets: 1000, MatchedPackets: 0},
+		},
+	}
+	srv := NewServer(engine)
+	resp, err := srv.Verify(context.Background(), &pb.VerifyRequest{SessionId: "s1", Plugin: "http"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetVerdict() != "not_applicable" {
+		t.Errorf("verdict = %q, want not_applicable", resp.GetVerdict())
+	}
+	if resp.GetQuality() != nil {
+		t.Errorf("quality = %+v, want nil for a non-applicable session", resp.GetQuality())
+	}
+	if c := resp.GetChecks(); c.GetDecode() != "not_run" || c.GetSemantic() != "not_run" {
+		t.Errorf("checks = %+v, want both not_run", c)
+	}
+	if a := resp.GetApplicability(); a.GetResult() != "not_match" || a.GetApplicable() {
+		t.Errorf("applicability = %+v", a)
 	}
 }
 

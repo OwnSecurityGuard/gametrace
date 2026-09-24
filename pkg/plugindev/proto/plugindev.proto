@@ -198,7 +198,8 @@ message ExplainResponse {
 message VerifyResult {
   repeated Violation violations = 1;
   QualityStats quality = 2;
-  string verdict = 3; // pass | warn | fail
+  string verdict = 3; // pass | warn | fail | not_applicable
+  VerifyChecks checks = 4;
 }
 
 // Violation is a single SDK contract rule the verify corpus tripped. rule_id is
@@ -212,17 +213,30 @@ message Violation {
   string doc_ref = 5;
   int32 count = 6;
   string sample = 7;
+  string layer = 8; // transport | semantic（判定归属哪条校验轴）
 }
 
 // QualityStats holds the corpus-level signals plugin.explain classifies. All
 // fields are optional; a missing QualityStats means no statistical evidence is
 // available and explain falls back to violations only.
+//
+// input_raw = 窗口内全部原始包；input_candidate = 命中会话 target port、插件真正
+// 该解的子集；decode_* 只对 candidate 统计（责任边界 = 插件的责任范围）。
 message QualityStats {
-  int32 total_inputs = 1;
-  int32 unknown_inputs = 2;
-  double unknown_ratio = 3;
-  int32 correlated_inputs = 4;
-  int32 long_packet_errors = 5;
-  double entropy_estimate = 6;
-  int32 decode_errors = 7;
+  int32 input_raw = 1;
+  int32 input_candidate = 2;
+  int32 decode_success = 3;
+  int32 decode_unknown = 4;
+  double decode_unknown_ratio = 5;
+  int32 correlated_inputs = 6;
+  int32 long_packet_errors = 7;
+  double entropy_estimate = 8;
+  int32 decode_errors = 9;
+}
+
+// VerifyChecks is the layered verdict: decode (解码质量轴) + semantic (语义契约轴).
+// When the session is not applicable both axes are "not_run".
+message VerifyChecks {
+  string decode = 1;   // pass | warn | fail | not_run
+  string semantic = 2; // pass | warn | fail | not_run
 }

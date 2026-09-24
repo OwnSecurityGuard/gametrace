@@ -210,16 +210,16 @@ func explainVerify(result *VerifyResult) []*ExplainFinding {
 		return findings
 	}
 
-	// 2) All-unknown — every input produced no event.
-	unknownRatio := q.UnknownRatio
-	if unknownRatio <= 0 && q.TotalInputs > 0 {
-		unknownRatio = float64(q.UnknownInputs) / float64(q.TotalInputs)
+	// 2) All-unknown — every candidate input produced no event.
+	unknownRatio := q.DecodeUnknownRatio
+	if unknownRatio <= 0 && q.InputCandidate > 0 {
+		unknownRatio = float64(q.DecodeUnknown) / float64(q.InputCandidate)
 	}
-	if q.TotalInputs > 0 && q.UnknownInputs >= q.TotalInputs {
+	if q.InputCandidate > 0 && q.DecodeUnknown >= q.InputCandidate {
 		findings = append(findings, &ExplainFinding{
 			Category: "all-unknown",
 			RuleID:   "inspect-bytes-first",
-			Why:      "解码器对全部 " + strconv.Itoa(q.TotalInputs) + " 个输入都未产出任何事件（全 unknown）。典型根因是剥头/重组缺失：把带链路层头的完整帧直接当 L7 解析，业务字节整体错位导致 0 命中",
+			Why:      "解码器对全部 " + strconv.Itoa(q.InputCandidate) + " 个候选输入都未产出任何事件（全 unknown）。典型根因是剥头/重组缺失：把带链路层头的完整帧直接当 L7 解析，业务字节整体错位导致 0 命中",
 			Fix:      "①先用 sample_bytes_plugin 看真实首字节确认 link_type 与帧结构；②用 framing.ExtractL7 按 link_type 剥头；③TCP 类协议接 framing.Reassembler 重组。不要假设 payload 已是 L7（只有 ProxyPayload/TLSPlaintext 才是）",
 		})
 	} else if unknownRatio >= AllUnknownRatioThreshold {
@@ -245,11 +245,11 @@ func explainVerify(result *VerifyResult) []*ExplainFinding {
 	// 4) Suspected missing stream reassembly — many inputs, none correlated,
 	// but the decoder DID produce some events (otherwise there is nothing to
 	// correlate and the all-unknown finding already covers it).
-	if q.TotalInputs > 1 && q.CorrelatedInputs == 0 && (q.TotalInputs-q.UnknownInputs) > 0 {
+	if q.InputCandidate > 1 && q.CorrelatedInputs == 0 && (q.InputCandidate-q.DecodeUnknown-q.DecodeErrors) > 0 {
 		findings = append(findings, &ExplainFinding{
 			Category: "suspected-reassembly",
 			RuleID:   "tcp-reassembly-required",
-			Why:      fmt.Sprintf("同一会话被切成 %d 个 input，但没有任何 correlation_key 串联，疑似缺流重组或粘包未切分", q.TotalInputs),
+			Why:      fmt.Sprintf("同一会话被切成 %d 个候选 input，但没有任何 correlation_key 串联，疑似缺流重组或粘包未切分", q.InputCandidate),
 			Fix:      "按流重组后再按长度前缀/分隔符切分消息（用 framing.NewReassembler）；只有在确实可推断时才填 correlation_key（correlation-only-when-known）",
 		})
 	}

@@ -54,12 +54,14 @@ description: "指引用户或 AI Agent 用 Go 编写解码插件（gt.decoder/v2
 
 ### 0.4 插件运行的两条路
 
-- **本机 Developer Plane 托管**：`build_plugin` → `get_plugin_env` → 写 `.env` → `activate_plugin`。activate 成功 ≠ 接入完成；返回里 `registered + online + manifest_present` 全真（`integrated=true`）才算。`integrated=false` 才进入 `status_plugin` → `explain_plugin` 诊断。
+- **本机 Developer Plane 托管**：`build_plugin` → `get_plugin_env` → 写 `.env` → `activate_plugin`。`activate_plugin` 只给一个结论：`status="ready"`（接入完成，`integrated=true`）或 `status="failed"`（带 `stage` 失败环节 + `reason` 原因 + `next` 可执行步骤）。`failed` 时先按 `next` 处理（多为刷新 token / 重启插件），仍不通再 `status_plugin` → `explain_plugin` 诊断；机器字段（`process_launched` / `registered` / `online` / `manifest_present`）保留用于自查，但不要拿它当结论读。
 - **远程机器运行**：`activate_plugin` 只管理 Developer Plane 自己启动的本地进程。远程插件 = 本地写码构建 → 部署到远端 → `get_plugin_env(host=远端可达地址)` → 远端自行启动 → `list_registered_plugins` / `get_plugin_manifest` 确认注册。不要把本地 activate 当远程启动器。
 
 ### 0.5 验证分两层（关键：哪些工具不落库）
 
-- **第一层 快速验证（离线回放，不落库）**：`test_plugin`——看"到底解出了什么"（`decoded` / `decode_errors` / `type_histogram` / `sample_events` / `error_samples`）；再 `verify_plugin`——看整体质量（contract violations + quality + verdict）。两者都是对离线会话的隔离回放，**不修改 session events**。连 `sample_events` 都没看就直接 verify，容易陷入"verdict=warn 但不知道改哪"。
+- **第一层 快速验证（离线回放，不落库）**：`test_plugin`——看"到底解出了什么"（`decoded` / `decode_errors` / `type_histogram` / `sample_events` / `error_samples`）；再 `verify_plugin`——看分层结论：`session_profile`（这个会话有多少包、命中 target port 多少）→ `applicability`（会话是否适用）→ `checks`（decode / semantic 两条轴）→ `verdict`。两者都是对离线会话的隔离回放，**不修改 session events**。连 `sample_events` 都没看就直接 verify，容易陷入"verdict=warn 但不知道改哪"。
+- **`verdict=not_applicable` ≠ 插件坏了**：它表示该会话窗口里没有插件该解的流量（`applicability.result=not_match`，`quality` 为 `null`）。这时要做的是**换一个带该协议流量的会话重跑**，不要去改插件。
+- **quality 的分母**：`quality.input.raw` 是窗口内全部原始包，`quality.input.candidate` 才是命中 target port、插件真正该解的包；`quality.decode.*`（含 `unknown_ratio`）只对 candidate 统计。看到 `unknown` 很多先看 `candidate` 是多少——candidate 很小说明问题在会话选择，不在解码。
 - **第二层 持久化验证（真实落库）**：要看 `list_decoded_data` 的真实宿主结果，必须先产生持久化事件——要么 live capture（插件 `integrated=true` 后在测试 session 使用该插件并产生流量），要么 `decode_raw_packets`（**raw-debug 能力，服务端 `-enable-raw-debug` 才注册，默认不存在**）→ 然后 `list_decoded_data` 下钻、`get_protocol_catalog` 做解码成功后的协议索引。
 
 `get_protocol_catalog` 是**成功解码后的索引**（msg_name 分布、字段、pair 覆盖），不是未知协议的分析入口；`unnamed_events > 0` 优先查 name 规则或 payload，不是猜协议。
@@ -751,7 +753,7 @@ go build -o foo-decoder.exe .
 go test -count=1 ./...   # 必须 -count=1：go test 缓存会掩盖问题
 ```
 
-- **第一层 快速验证（不落库）**：`test_plugin`（session_id + plugin）看 `decoded` / `decode_errors` / `type_histogram` / `sample_events`——先确认"到底解出了什么"；再 `verify_plugin` 看 contract violations + quality + verdict。这两个工具是离线隔离回放，**不写 events 表**。
+- **第一层 快速验证（不落库）**：`test_plugin`（session_id + plugin）看 `decoded` / `decode_errors` / `type_histogram` / `sample_events`——先确认"到底解出了什么"；再 `verify_plugin` 看分层结论（`session_profile` / `applicability` / `checks` / `verdict`，详见 §0.5）。这两个工具是离线隔离回放，**不写 events 表**。
 - **第二层 持久化验证（真实落库）**：live capture 使用该插件产生流量（或 `decode_raw_packets`，需服务端 `-enable-raw-debug`）后，`list_decoded_data` 是 **machine-readable 验收面**——Agent 先按工具返回值核对 `payload`（业务字段）、`meta.msg_name`、`correlation_id` / `causation_id` 配对（pair 规则的运行期效果，§5.5 B 层）再下结论；同时观察宿主日志 `semantic rules:` 无 error 级问题。
 - 前端协议数据页只作最终人工视觉确认，不作 Agent 的判定依据。
 

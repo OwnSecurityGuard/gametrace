@@ -53,8 +53,12 @@ func TestHandleVerifyPluginForwards(t *testing.T) {
 			Verdict:     "warn",
 			VerifyRunId: "verify_1",
 			SessionId:   "s1",
-			Violations:  []*pb.VerifyViolation{{RuleId: "payload-non-empty", Severity: "error", Count: 2}},
-			Quality:     &pb.VerifyQuality{TotalInputs: 10, UnknownInputs: 5},
+			Violations:  []*pb.VerifyViolation{{RuleId: "payload-non-empty", Severity: "error", Count: 2, Layer: "transport"}},
+			Checks:      &pb.VerifyChecks{Decode: "warn", Semantic: "pass"},
+			Applicability: &pb.VerifyApplicability{
+				Result: "match", Applicable: true, Reason: "ok", TargetPort: 8080, TotalPackets: 20, MatchedPackets: 10,
+			},
+			Quality: &pb.VerifyQuality{InputRaw: 20, InputCandidate: 10, DecodeSuccess: 7, DecodeUnknown: 3, DecodeUnknownRatio: 0.3},
 		},
 	}
 	m := &mcpCapture{pipelineClient: fc}
@@ -72,6 +76,42 @@ func TestHandleVerifyPluginForwards(t *testing.T) {
 	text := res.Content[0].(mcp.TextContent).Text
 	if !strings.Contains(text, "warn") || !strings.Contains(text, "payload-non-empty") {
 		t.Fatalf("response missing verdict/rule_id: %s", text)
+	}
+	// 分层呈现：input/decode 分组 + applicability，用户才能看出分母是谁。
+	for _, want := range []string{`"raw":20`, `"candidate":10`, `"unknown":3`, `"result":"match"`, `"target_port_hits":10`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("response missing %s: %s", want, text)
+		}
+	}
+}
+
+// TestHandleVerifyPluginNotApplicable 锁定「选错会话」的呈现：verdict/status 为
+// not_applicable、quality 为 null（不给质量数字）、ok=false，并给出换会话的
+// 下一步 —— 与「插件质量差」彻底分开。
+func TestHandleVerifyPluginNotApplicable(t *testing.T) {
+	fc := &fakeCaptureClient{
+		verifyResp: &pb.VerifyResponse{
+			Verdict:   "not_applicable",
+			SessionId: "s1",
+			Checks:    &pb.VerifyChecks{Decode: "not_run", Semantic: "not_run"},
+			Applicability: &pb.VerifyApplicability{
+				Result: "not_match", Applicable: false, Reason: "no_matching_packets", TargetPort: 8080, TotalPackets: 1000, MatchedPackets: 0,
+			},
+		},
+	}
+	m := &mcpCapture{pipelineClient: fc}
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]any{"session_id": "s1", "plugin": "http"}
+
+	res, err := m.handleVerifyPlugin(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := res.Content[0].(mcp.TextContent).Text
+	for _, want := range []string{`"ok":false`, `"status":"not_applicable"`, `"quality":null`, `"verdict":"not_applicable"`, `"result":"not_match"`, `"matched_packets":0`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("response missing %s: %s", want, text)
+		}
 	}
 }
 

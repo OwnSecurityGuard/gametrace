@@ -25,7 +25,13 @@ import (
 // it from a real session's decode results, or a test harness builds it by hand.
 // plugin.verify merges these into a plugindev.VerifyResult.
 type DecodeIO struct {
-	InputID     string // echoed input_id (raw_packet_id in practice)
+	InputID string // echoed input_id (raw_packet_id in practice)
+	// Candidate marks a packet that matches the session's target port — i.e. the
+	// traffic this plugin is actually expected to decode. Statistics and
+	// violations are computed over candidates only: a plugin is not accountable
+	// for packets that are not its protocol, and counting them is exactly what
+	// made a wrong session look like a broken plugin.
+	Candidate   bool
 	Done        bool   // final response flag
 	EventType   string // first emitted event_type, "" if none
 	PayloadLen  int    // len of the emitted payload (non-empty check)
@@ -45,13 +51,40 @@ type packetAgg struct {
 	payloads   [][]byte // raw bytes seen, for the entropy estimate
 }
 
-// Verify runs the SDK contract checker over every DecodeIO and merges the
-// results with gt-side statistical quality into a single VerifyResult.
+// Verify runs the SDK contract checker over the candidate DecodeIOs and merges
+// the results with gt-side statistical quality into a single VerifyResult.
+//
+// 责任边界：input.raw = 语料里出现的全部原始包；input.candidate = 命中会话 target
+// port 的子集。违规与解码统计一律只对 candidate 计算 —— 非本插件的流量既不是它
+// 的责任，也不该污染它的成绩单。
 func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
-	res := &plugindev.VerifyResult{Verdict: "pass", Quality: &plugindev.QualityStats{}}
-	if len(corpus) == 0 {
-		// Nothing to verify is not a pass: the AI supplied an empty corpus.
+	res := &plugindev.VerifyResult{
+		Verdict: "pass",
+		Quality: &plugindev.QualityStats{},
+		Checks:  &plugindev.VerifyChecks{},
+	}
+	q := res.Quality
+
+	rawIDs := map[string]struct{}{}
+	candIDs := map[string]struct{}{}
+	var candidates []DecodeIO
+	for _, io := range corpus {
+		rawIDs[io.InputID] = struct{}{}
+		if !io.Candidate {
+			continue
+		}
+		candidates = append(candidates, io)
+		candIDs[io.InputID] = struct{}{}
+	}
+	q.InputRaw = len(rawIDs)
+	q.InputCandidate = len(candIDs)
+
+	if len(candidates) == 0 {
+		// 没有 candidate：没有插件该解的流量，任何质量判定都无从谈起。空语料不是
+		// pass，所以 verdict 取 warn、两轴 not_run（会话不适用的情况由 pipeline 在
+		// applicability 阶段覆盖为 not_applicable）。
 		res.Verdict = "warn"
+		res.Checks = &plugindev.VerifyChecks{Decode: plugindev.NotRun, Semantic: plugindev.NotRun}
 		return res
 	}
 
@@ -60,7 +93,7 @@ func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
 	// （旧版 input_id 回显检查在本语料构造下恒真，无需保留。）
 	viol := map[string]*plugindev.Violation{}
 	var order []string
-	for _, io := range corpus {
+	for _, io := range candidates {
 		if io.Done {
 			continue
 		}
@@ -74,7 +107,7 @@ func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
 			continue
 		}
 		if _, seen := viol[ruleID]; !seen {
-			viol[ruleID] = &plugindev.Violation{RuleID: ruleID, Severity: "error"}
+			viol[ruleID] = &plugindev.Violation{RuleID: ruleID, Severity: "error", Layer: plugindev.LayerTransport}
 			order = append(order, ruleID)
 		}
 		e := viol[ruleID]
@@ -97,10 +130,8 @@ func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
 
 	// 2) gt-side quality statistics, aggregated per packet (InputID) so that a
 	//    packet's terminating done-response is not double-counted as "unknown".
-	q := res.Quality
 	agg := map[string]*packetAgg{}
-	var addPacket func(io DecodeIO)
-	addPacket = func(io DecodeIO) {
+	for _, io := range candidates {
 		a := agg[io.InputID]
 		if a == nil {
 			a = &packetAgg{}
@@ -119,12 +150,8 @@ func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
 			a.payloads = append(a.payloads, io.Payload)
 		}
 	}
-	for _, io := range corpus {
-		addPacket(io)
-	}
 
-	q.TotalInputs = len(agg)
-	var unknown, correlated, decodeErrors int
+	var success, unknown, correlated, decodeErrors int
 	var entropySum float64
 	entropyN := 0
 	for _, a := range agg {
@@ -132,7 +159,9 @@ func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
 			decodeErrors++
 			continue
 		}
-		if !a.hasEvent {
+		if a.hasEvent {
+			success++
+		} else {
 			unknown++
 		}
 		if a.correlated {
@@ -143,24 +172,27 @@ func Verify(corpus []DecodeIO) *plugindev.VerifyResult {
 			entropyN++
 		}
 	}
-	q.UnknownInputs = unknown
+	q.DecodeSuccess = success
+	q.DecodeUnknown = unknown
 	q.CorrelatedInputs = correlated
 	q.DecodeErrors = decodeErrors
-	if q.TotalInputs > 0 {
-		q.UnknownRatio = float64(unknown) / float64(q.TotalInputs)
+	if q.InputCandidate > 0 {
+		q.DecodeUnknownRatio = float64(unknown) / float64(q.InputCandidate)
 	}
 	if entropyN > 0 {
 		q.EntropyEstimate = entropySum / float64(entropyN)
 	}
 
-	// 3) verdict.
+	// 3) 分层结论 + verdict.
+	res.Checks = axes(res, q)
 	res.Verdict = verdict(res, q)
 	return res
 }
 
-// RecomputeVerdict re-evaluates the verdict of a VerifyResult after the caller
-// appended extra violations (e.g. semantic-contract CheckEvent results) to it.
-// Callers must have finished mutating res.Violations / res.Quality beforehand.
+// RecomputeVerdict re-evaluates the verdict + layered checks of a VerifyResult
+// after the caller appended extra violations (e.g. semantic-contract CheckEvent
+// results) to it. Callers must have finished mutating res.Violations /
+// res.Quality beforehand.
 func RecomputeVerdict(res *plugindev.VerifyResult) {
 	if res == nil {
 		return
@@ -168,13 +200,30 @@ func RecomputeVerdict(res *plugindev.VerifyResult) {
 	if res.Quality == nil {
 		res.Quality = &plugindev.QualityStats{}
 	}
+	res.Checks = axes(res, res.Quality)
 	res.Verdict = verdict(res, res.Quality)
 }
 
-// verdict merges SDK violations with statistical signals into pass|warn|fail.
-func verdict(res *plugindev.VerifyResult, q *plugindev.QualityStats) string {
+// axes derives the per-axis verdict (decode / semantic) so a failure points at
+// the axis that actually broke instead of one opaque fail.
+func axes(res *plugindev.VerifyResult, q *plugindev.QualityStats) *plugindev.VerifyChecks {
+	if q == nil || q.InputCandidate == 0 {
+		return &plugindev.VerifyChecks{Decode: plugindev.NotRun, Semantic: plugindev.NotRun}
+	}
+	return &plugindev.VerifyChecks{
+		Decode:   axisVerdict(res.Violations, plugindev.LayerTransport, q),
+		Semantic: axisVerdict(res.Violations, plugindev.LayerSemantic, q),
+	}
+}
+
+// axisVerdict 汇总指定层（transport / semantic）的违规 + 该层的统计信号。
+// layer=LayerTransport 时并入解码统计（全错误 / 全未知 / 疑似加密）。
+func axisVerdict(violations []*plugindev.Violation, layer string, q *plugindev.QualityStats) string {
 	hasErr, hasWarn := false, false
-	for _, v := range res.Violations {
+	for _, v := range violations {
+		if v.Layer != layer {
+			continue
+		}
 		switch v.Severity {
 		case string(sdkcontract.SeverityError):
 			hasErr = true
@@ -182,19 +231,64 @@ func verdict(res *plugindev.VerifyResult, q *plugindev.QualityStats) string {
 			hasWarn = true
 		}
 	}
-	allErrored := q.TotalInputs > 0 && q.DecodeErrors == q.TotalInputs
-	allUnknown := q.UnknownRatio >= plugindev.AllUnknownRatioThreshold
-	// High entropy + majority undecodable looks encrypted/compressed.
-	suspectEnc := q.UnknownRatio >= plugindev.EncryptionUnknownRatioThreshold &&
-		q.EntropyEstimate >= plugindev.HighEntropyThreshold
+	if layer == plugindev.LayerTransport {
+		if allErrored(q) || allUnknown(q) {
+			hasErr = true
+		}
+		if suspectEncrypted(q) {
+			hasWarn = true
+		}
+	}
+	switch {
+	case hasErr:
+		return "fail"
+	case hasWarn:
+		return "warn"
+	default:
+		return "pass"
+	}
+}
 
-	if hasErr || allErrored || allUnknown {
+// verdict merges every violation with the statistical signals into
+// pass|warn|fail. A session with no candidate packets is never a pass.
+func verdict(res *plugindev.VerifyResult, q *plugindev.QualityStats) string {
+	if q.InputCandidate == 0 {
+		// 空语料不是 pass：AI 给了空语料，或会话对该插件不适用。
+		return "warn"
+	}
+	for _, v := range res.Violations {
+		if v.Severity == string(sdkcontract.SeverityError) {
+			return "fail"
+		}
+	}
+	if allErrored(q) || allUnknown(q) {
 		return "fail"
 	}
-	if hasWarn || suspectEnc {
+	for _, v := range res.Violations {
+		if v.Severity == string(sdkcontract.SeverityWarn) {
+			return "warn"
+		}
+	}
+	if suspectEncrypted(q) {
 		return "warn"
 	}
 	return "pass"
+}
+
+// allErrored: every candidate packet came back as a decode error.
+func allErrored(q *plugindev.QualityStats) bool {
+	return q.InputCandidate > 0 && q.DecodeErrors == q.InputCandidate
+}
+
+// allUnknown: at/above AllUnknownRatioThreshold of candidates produced no event.
+func allUnknown(q *plugindev.QualityStats) bool {
+	return q.DecodeUnknownRatio >= plugindev.AllUnknownRatioThreshold
+}
+
+// suspectEncrypted: high entropy + majority undecodable looks encrypted/compressed.
+func suspectEncrypted(q *plugindev.QualityStats) bool {
+	return q.DecodeUnknownRatio >= plugindev.EncryptionUnknownRatioThreshold &&
+		q.EntropyEstimate >= plugindev.HighEntropyThreshold
 }
 
 // shannonBits returns the Shannon entropy of b in bits/byte (0..8).

@@ -165,17 +165,29 @@ message VerifyViolation {
   string doc_ref = 5;
   int32 count = 6;
   string sample = 7;
+  string layer = 8; // transport | semantic（判定归属哪条校验轴）
 }
 
 // VerifyQuality gametrace 侧语料级统计（与 plugin.explain 共享判据）。
+// input_* = 语料规模：raw 是窗口内全部原始包，candidate 是命中会话 target port、
+// 插件真正该解的子集；decode_* 只对 candidate 统计（责任边界 = 插件的责任范围）。
 message VerifyQuality {
-  int64 total_inputs = 1;
-  int64 unknown_inputs = 2;
-  double unknown_ratio = 3;
-  int64 correlated_inputs = 4;
-  int64 long_packet_errors = 5;
-  double entropy_estimate = 6;
-  int64 decode_errors = 7;
+  int64 input_raw = 1;
+  int64 input_candidate = 2;
+  int64 decode_success = 3;
+  int64 decode_unknown = 4;
+  double decode_unknown_ratio = 5;
+  int64 correlated_inputs = 6;
+  int64 long_packet_errors = 7;
+  double entropy_estimate = 8;
+  int64 decode_errors = 9;
+}
+
+// VerifyChecks 分层结论：decode（解码质量轴）+ semantic（语义契约轴）。
+// 会话不适用（applicability.result=not_match）时两轴均为 not_run。
+message VerifyChecks {
+  string decode = 1;   // pass | warn | fail | not_run
+  string semantic = 2; // pass | warn | fail | not_run
 }
 
 // VerifyResponse 验证结论：violations + quality + verdict，外加溯源字段。
@@ -188,6 +200,7 @@ message VerifyApplicability {
   int32 target_port = 3;      // 会话的服务端端口（判定依据；<=0 表示无端口信息）
   int64 total_packets = 4;    // 过滤窗口内原始包总数
   int64 matched_packets = 5;  // 命中 target port 的包数（matching count）
+  string result = 6;          // match | not_match（applicable 的人话化判定态）
 }
 
 // VerifyResponse 插件验证响应。
@@ -199,6 +212,7 @@ message VerifyResponse {
   string session_id = 5;
   int64 at_unix = 6;
   VerifyApplicability applicability = 7;
+  VerifyChecks checks = 8;            // 分层结论（applicability 不适用时全 not_run）
 }
 
 // SampleBytesRequest 取证取样请求。limit/max_bytes 为请求值，服务端封顶

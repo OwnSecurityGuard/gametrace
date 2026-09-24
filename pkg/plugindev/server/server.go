@@ -191,18 +191,24 @@ func mapVerifyResult(v *pb.VerifyResult) *plugindev.VerifyResult {
 			DocRef:    vv.GetDocRef(),
 			Count:     int(vv.GetCount()),
 			Sample:    vv.GetSample(),
+			Layer:     vv.GetLayer(),
 		})
 	}
 	if q := v.GetQuality(); q != nil {
 		out.Quality = &plugindev.QualityStats{
-			TotalInputs:          int(q.GetTotalInputs()),
-			UnknownInputs:        int(q.GetUnknownInputs()),
-			UnknownRatio:         q.GetUnknownRatio(),
-			CorrelatedInputs:     int(q.GetCorrelatedInputs()),
-			LongPacketErrors:     int(q.GetLongPacketErrors()),
-			EntropyEstimate:      q.GetEntropyEstimate(),
-			DecodeErrors:         int(q.GetDecodeErrors()),
+			InputRaw:           int(q.GetInputRaw()),
+			InputCandidate:     int(q.GetInputCandidate()),
+			DecodeSuccess:      int(q.GetDecodeSuccess()),
+			DecodeUnknown:      int(q.GetDecodeUnknown()),
+			DecodeUnknownRatio: q.GetDecodeUnknownRatio(),
+			CorrelatedInputs:   int(q.GetCorrelatedInputs()),
+			LongPacketErrors:   int(q.GetLongPacketErrors()),
+			EntropyEstimate:    q.GetEntropyEstimate(),
+			DecodeErrors:       int(q.GetDecodeErrors()),
 		}
+	}
+	if c := v.GetChecks(); c != nil {
+		out.Checks = &plugindev.VerifyChecks{Decode: c.GetDecode(), Semantic: c.GetSemantic()}
 	}
 	return out
 }

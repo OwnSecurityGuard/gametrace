@@ -20,12 +20,18 @@ var (
 
 // validEventIO 构造一个非终结响应（带 event_type / payload 非空）。
 func validEventIO(id string) DecodeIO {
-	return DecodeIO{InputID: id, Done: false, EventType: "game.login", PayloadLen: 1}
+	return DecodeIO{InputID: id, Candidate: true, Done: false, EventType: "game.login", PayloadLen: 1}
 }
 
 // doneIO 构造一个终结响应，可携带原始字节供熵估计。
 func doneIO(id string, payload []byte) DecodeIO {
-	return DecodeIO{InputID: id, Done: true, Payload: payload}
+	return DecodeIO{InputID: id, Candidate: true, Done: true, Payload: payload}
+}
+
+// foreignIO 构造一个未命中会话 target port 的包（非 candidate）：它只应计入
+// input.raw，绝不参与解码统计与违规判定。
+func foreignIO(id string) DecodeIO {
+	return DecodeIO{InputID: id, Done: true, Payload: lowEntropy}
 }
 
 func TestVerifyPass(t *testing.T) {
@@ -46,12 +52,12 @@ func TestVerifyPass(t *testing.T) {
 		t.Fatal("quality nil")
 	}
 	// 统计按输入包（InputID）聚合：3 个包各产生「事件响应 + 终结响应」，
-	// 计 3 个 input，而不是 6 条 DecodeIO。
-	if q.TotalInputs != 3 {
-		t.Errorf("total_inputs = %d, want 3", q.TotalInputs)
+	// 计 3 个 candidate input，而不是 6 条 DecodeIO。
+	if q.InputCandidate != 3 {
+		t.Errorf("input_candidate = %d, want 3", q.InputCandidate)
 	}
-	if q.UnknownInputs != 0 {
-		t.Errorf("unknown_inputs = %d, want 0", q.UnknownInputs)
+	if q.DecodeUnknown != 0 {
+		t.Errorf("decode_unknown = %d, want 0", q.DecodeUnknown)
 	}
 	if q.DecodeErrors != 0 {
 		t.Errorf("decode_errors = %d, want 0", q.DecodeErrors)
@@ -72,16 +78,16 @@ func TestVerifyFailAllUnknown(t *testing.T) {
 		t.Fatalf("verdict = %q, want fail", res.Verdict)
 	}
 	q := res.Quality
-	if q.UnknownInputs != 10 || q.UnknownRatio != 1.0 {
-		t.Fatalf("unknown = %d / %v, want 10 / 1.0", q.UnknownInputs, q.UnknownRatio)
+	if q.DecodeUnknown != 10 || q.DecodeUnknownRatio != 1.0 {
+		t.Fatalf("decode_unknown = %d / %v, want 10 / 1.0", q.DecodeUnknown, q.DecodeUnknownRatio)
 	}
 }
 
 func TestVerifyFailDecodeErrors(t *testing.T) {
 	corpus := []DecodeIO{
-		{InputID: "p1", Done: true, DecodeError: "boom", Payload: lowEntropy},
-		{InputID: "p2", Done: true, DecodeError: "bang", Payload: lowEntropy},
-		{InputID: "p3", Done: true, DecodeError: "crash", Payload: lowEntropy},
+		{InputID: "p1", Candidate: true, Done: true, DecodeError: "boom", Payload: lowEntropy},
+		{InputID: "p2", Candidate: true, Done: true, DecodeError: "bang", Payload: lowEntropy},
+		{InputID: "p3", Candidate: true, Done: true, DecodeError: "crash", Payload: lowEntropy},
 	}
 	res := Verify(corpus)
 	if res.Verdict != "fail" {
@@ -95,7 +101,7 @@ func TestVerifyFailDecodeErrors(t *testing.T) {
 func TestVerifyViolationPayloadNonEmpty(t *testing.T) {
 	// 一个非终结响应带 event_type 但 payload 为空 -> payload-non-empty 违规。
 	corpus := []DecodeIO{
-		{InputID: "p1", Done: false, EventType: "game.login"},
+		{InputID: "p1", Candidate: true, Done: false, EventType: "game.login"},
 		doneIO("p1", lowEntropy),
 	}
 	res := Verify(corpus)
@@ -134,8 +140,8 @@ func TestVerifyWarnEncryption(t *testing.T) {
 		t.Fatalf("verdict = %q, want warn", res.Verdict)
 	}
 	q := res.Quality
-	if q.UnknownRatio < 0.5 || q.UnknownRatio >= 0.95 {
-		t.Errorf("unknown_ratio = %v, want in [0.5,0.95)", q.UnknownRatio)
+	if q.DecodeUnknownRatio < 0.5 || q.DecodeUnknownRatio >= 0.95 {
+		t.Errorf("decode_unknown_ratio = %v, want in [0.5,0.95)", q.DecodeUnknownRatio)
 	}
 	if q.EntropyEstimate < 7.5 {
 		t.Errorf("entropy_estimate = %v, want >= 7.5", q.EntropyEstimate)
@@ -154,8 +160,32 @@ func TestVerifyReassemblyQuality(t *testing.T) {
 	if q.CorrelatedInputs != 0 {
 		t.Errorf("correlated_inputs = %d, want 0", q.CorrelatedInputs)
 	}
-	if q.TotalInputs != 5 {
-		t.Errorf("total_inputs = %d, want 5 (per input packet, not per DecodeIO)", q.TotalInputs)
+	if q.InputCandidate != 5 {
+		t.Errorf("input_candidate = %d, want 5 (per input packet, not per DecodeIO)", q.InputCandidate)
+	}
+}
+
+// TestVerifyOnlyCandidatesCounted 覆盖责任边界：未命中会话 target port 的包只
+// 计入 input.raw，不参与统计、不产生违规 —— 否则「用户选错抓包」会被读成
+// 「插件质量差」。
+func TestVerifyOnlyCandidatesCounted(t *testing.T) {
+	corpus := []DecodeIO{
+		validEventIO("p1"), doneIO("p1", lowEntropy),
+		foreignIO("f1"), foreignIO("f2"), foreignIO("f3"),
+	}
+	res := Verify(corpus)
+	if res.Verdict != "pass" {
+		t.Fatalf("verdict = %q, want pass (foreign packets must not drag the plugin down)", res.Verdict)
+	}
+	q := res.Quality
+	if q.InputRaw != 4 {
+		t.Errorf("input_raw = %d, want 4", q.InputRaw)
+	}
+	if q.InputCandidate != 1 {
+		t.Errorf("input_candidate = %d, want 1", q.InputCandidate)
+	}
+	if q.DecodeUnknown != 0 || q.DecodeUnknownRatio != 0 {
+		t.Errorf("decode_unknown = %d / %v, want 0 / 0", q.DecodeUnknown, q.DecodeUnknownRatio)
 	}
 }
 
@@ -166,6 +196,9 @@ func TestVerifyEmptyCorpus(t *testing.T) {
 	}
 	if res.Quality == nil {
 		t.Fatal("quality nil")
+	}
+	if res.Checks == nil || res.Checks.Decode != plugindev.NotRun || res.Checks.Semantic != plugindev.NotRun {
+		t.Fatalf("checks = %+v, want both axes not_run", res.Checks)
 	}
 }
 

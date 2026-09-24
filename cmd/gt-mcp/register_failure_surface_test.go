@@ -68,3 +68,66 @@ func TestLatestRegisterFailure(t *testing.T) {
 		t.Errorf("unmatched name should return nil, got %+v", got)
 	}
 }
+
+// TestActivateEnvelopeContract 锁定 activate 的对外契约：无论内部走到哪一环，
+// 用户只拿到一个结论（status=ready|failed），失败附断点 stage + 人话 reason +
+// 可执行的 next —— 不能把 process_launched / registered 这类机器中间态当结论。
+func TestActivateEnvelopeContract(t *testing.T) {
+	ready := activateEnvelope("plug", activateStageReady, "registered+online+manifest ok", "", nil)
+	if ready["status"] != "ready" || ready["ok"] != true {
+		t.Errorf("ready envelope = %+v, want status=ready ok=true", ready)
+	}
+	if _, has := ready["failure"]; has {
+		t.Errorf("ready envelope must not carry failure: %+v", ready)
+	}
+	if next, ok := ready["next"].([]string); !ok || next == nil {
+		t.Errorf("ready envelope next must be a non-nil list: %+v", ready["next"])
+	}
+
+	failed := activateEnvelope("plug", activateStageAuth, "registry rejected token", "registry_rejected_token", []string{"refresh token"})
+	if failed["status"] != "failed" || failed["ok"] != false || failed["stage"] != activateStageAuth || failed["reason"] != "registry rejected token" {
+		t.Errorf("failed envelope = %+v", failed)
+	}
+	failure, ok := failed["failure"].(map[string]any)
+	if !ok || failure["code"] != "registry_rejected_token" {
+		t.Errorf("failed envelope failure = %+v, want code registry_rejected_token", failed["failure"])
+	}
+}
+
+// TestRegisterFailureStageClassifiesAuth 锁定「注册被拒」的断点归类：鉴权类报
+// auth（去刷新 token），其余报 connection（去查网络/地址），两者给人的下一步
+// 完全不同。
+func TestRegisterFailureStageClassifiesAuth(t *testing.T) {
+	for _, msg := range []string{
+		"rpc error: code = PermissionDenied desc = invalid token",
+		"Unauthenticated: missing credentials",
+	} {
+		stage, code, next := registerFailureStage(msg)
+		if stage != activateStageAuth || code != "registry_rejected_token" || len(next) == 0 {
+			t.Errorf("%q -> stage=%s code=%s next=%v, want auth/registry_rejected_token", msg, stage, code, next)
+		}
+	}
+	for _, msg := range []string{"connection refused", "i/o timeout"} {
+		stage, code, next := registerFailureStage(msg)
+		if stage != activateStageConnection || len(next) == 0 {
+			t.Errorf("%q -> stage=%s code=%s next=%v, want connection", msg, stage, code, next)
+		}
+	}
+}
+
+// TestLaunchFailureStageClassifies 锁定拉起失败的断点归类：找不到二进制是制品
+// 问题（先去 build_plugin），秒退/已在运行是拉起问题。
+func TestLaunchFailureStageClassifies(t *testing.T) {
+	stage, code, _ := launchFailureStage("plugin binary not found: /x/plug (did you build it?)")
+	if stage != activateStageArtifact || code != "binary_missing" {
+		t.Errorf("binary missing -> stage=%s code=%s, want artifact/binary_missing", stage, code)
+	}
+	stage, code, _ = launchFailureStage("plugin \"plug\" is already active (pid 10); deactivate first")
+	if stage != activateStageLaunch || code != "already_active" {
+		t.Errorf("already active -> stage=%s code=%s, want launch/already_active", stage, code)
+	}
+	stage, code, next := launchFailureStage("plugin \"plug\" failed to stay up: exit status 1")
+	if stage != activateStageLaunch || code != "process_did_not_stay_up" || len(next) == 0 {
+		t.Errorf("died on startup -> stage=%s code=%s next=%v, want launch/process_did_not_stay_up", stage, code, next)
+	}
+}

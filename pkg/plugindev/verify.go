@@ -10,16 +10,47 @@ package plugindev
 // "looks like reassembly is missing". Those four patterns are exactly what
 // explainVerify reads off this struct.
 type VerifyResult struct {
-	// Violations are SDK checker results (single-message protocol
-	// self-consistency), each referencing a contract.yaml rule_id.
+	// Violations are SDK checker results (transport self-consistency + semantic
+	// contract), each referencing a contract.yaml rule_id and tagged with the
+	// Layer it came from.
 	Violations []*Violation
-	// Quality is the gt-side statistical view over the whole corpus (good-vs-bad
+	// Quality is the gt-side statistical view over the candidate corpus (good-vs-bad
 	// judgement, which needs real traffic and therefore cannot run offline in
-	// the plugin module — design §5).
+	// the plugin module — design §5). nil when the session was not applicable:
+	// reporting statistics over traffic the plugin was never meant to decode is
+	// what made a wrong session look like a broken plugin.
 	Quality *QualityStats
-	// Verdict is one of "pass" | "warn" | "fail".
+	// Verdict is one of "pass" | "warn" | "fail" | "not_applicable".
 	Verdict string
+	// Checks is the layered verdict (decode / semantic axes) so a failure can be
+	// pointed at the axis that actually broke.
+	Checks *VerifyChecks
 }
+
+// VerifyChecks 分层结论：把 verdict 拆到两条校验轴上，避免「插件坏了」和
+// 「会话选错了」被同一个 fail 糊在一起。applicability 不作为独立字段 —— 它由
+// session applicability 判定（capturecontrol.VerifyApplicability）单独承载；
+// 会话不适用时这里两轴都是 not_run。
+type VerifyChecks struct {
+	// Decode is the decode-quality axis: "pass" | "warn" | "fail" | "not_run".
+	Decode string
+	// Semantic is the SDK semantic-contract axis: "pass" | "warn" | "fail" | "not_run".
+	Semantic string
+}
+
+// 校验轴（Violation.Layer）—— 决定一条违规计入哪条 checks 轴。
+const (
+	// LayerTransport is the host-side transport self-consistency layer
+	// (single-message protocol: non-final response must carry event_type and a
+	// non-empty payload).
+	LayerTransport = "transport"
+	// LayerSemantic is the SDK semantic-contract layer (runtime/schema/state).
+	LayerSemantic = "semantic"
+)
+
+// NotRun 是「该轴未执行」的哨兵值：会话不适用时 decode / semantic 两轴均为它 ——
+// 没有该插件的流量，任何质量判定都无从谈起。
+const NotRun = "not_run"
 
 // Violation is a single SDK contract rule that the verify corpus tripped.
 type Violation struct {
@@ -30,23 +61,37 @@ type Violation struct {
 	DocRef    string
 	Count     int
 	Sample    string
+	// Layer is LayerTransport or LayerSemantic; it decides which checks axis the
+	// violation feeds.
+	Layer string
 }
 
 // QualityStats holds the corpus-level signals explainVerify classifies. Every
 // field is optional on the wire; a nil QualityStats simply means no statistical
 // evidence is available (explain then falls back to violations only).
+//
+// The input/decode split is the responsibility boundary: input.raw is the whole
+// window, input.candidate is the subset matching the session's target port, and
+// every decode statistic is computed over candidates only.
 type QualityStats struct {
-	// TotalInputs is the number of DecodeRequests the corpus exercised.
-	TotalInputs int
-	// UnknownInputs is how many of those produced no event (the decoder emitted
-	// unknown / dropped them). The ratio of the two drives the all-unknown
-	// finding.
-	UnknownInputs int
-	// UnknownRatio is UnknownInputs/TotalInputs, cached for convenience. When
-	// set (>=0) it is trusted over recomputing from the integer counts.
-	UnknownRatio float64
-	// CorrelatedInputs counts inputs that carried a correlation_key (or were
-	// tied to a prior input via causation). Zero with many inputs suggests
+	// InputRaw is the number of raw packets the verified window contained.
+	InputRaw int
+	// InputCandidate is the subset of InputRaw matching the session's target port —
+	// the packets this plugin is actually expected to decode.
+	InputCandidate int
+	// DecodeSuccess / DecodeUnknown count candidate packets that produced at least
+	// one event vs. none at all. Their sum + DecodeErrors is InputCandidate.
+	DecodeSuccess int
+	DecodeUnknown int
+	// DecodeUnknownRatio is DecodeUnknown/InputCandidate, cached for convenience.
+	// When set (>=0) it is trusted over recomputing from the integer counts.
+	//
+	// 名字里带 decode 是刻意的：future 还会有 ignored_frame / control_frame /
+	// encrypted_payload 等其它「未产出事件」的原因，泛化的 unknown_ratio 到时
+	// 一定会歧义。
+	DecodeUnknownRatio float64
+	// CorrelatedInputs counts candidate inputs that carried a correlation_key (or
+	// were tied to a prior input via causation). Zero with many inputs suggests
 	// missing stream reassembly.
 	CorrelatedInputs int
 	// LongPacketErrors counts decode_errors that concentrated on long packets —
@@ -55,7 +100,7 @@ type QualityStats struct {
 	// EntropyEstimate is the mean Shannon entropy of payloads in bits/byte
 	// (0..8). High values with high unknown ratio suggest encryption/compression.
 	EntropyEstimate float64
-	// DecodeErrors is the total number of decode errors across the corpus.
+	// DecodeErrors is the total number of decode errors across the candidate corpus.
 	DecodeErrors int
 }
 

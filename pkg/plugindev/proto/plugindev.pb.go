@@ -1324,7 +1324,8 @@ type VerifyResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Violations    []*Violation           `protobuf:"bytes,1,rep,name=violations,proto3" json:"violations,omitempty"`
 	Quality       *QualityStats          `protobuf:"bytes,2,opt,name=quality,proto3" json:"quality,omitempty"`
-	Verdict       string                 `protobuf:"bytes,3,opt,name=verdict,proto3" json:"verdict,omitempty"` // pass | warn | fail
+	Verdict       string                 `protobuf:"bytes,3,opt,name=verdict,proto3" json:"verdict,omitempty"` // pass | warn | fail | not_applicable
+	Checks        *VerifyChecks          `protobuf:"bytes,4,opt,name=checks,proto3" json:"checks,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1380,6 +1381,13 @@ func (x *VerifyResult) GetVerdict() string {
 	return ""
 }
 
+func (x *VerifyResult) GetChecks() *VerifyChecks {
+	if x != nil {
+		return x.Checks
+	}
+	return nil
+}
+
 // Violation is a single SDK contract rule the verify corpus tripped. rule_id is
 // the shared vocabulary defined in contract.yaml (rules: section) and reused by
 // brief / verify / explain.
@@ -1392,6 +1400,7 @@ type Violation struct {
 	DocRef        string                 `protobuf:"bytes,5,opt,name=doc_ref,json=docRef,proto3" json:"doc_ref,omitempty"`
 	Count         int32                  `protobuf:"varint,6,opt,name=count,proto3" json:"count,omitempty"`
 	Sample        string                 `protobuf:"bytes,7,opt,name=sample,proto3" json:"sample,omitempty"`
+	Layer         string                 `protobuf:"bytes,8,opt,name=layer,proto3" json:"layer,omitempty"` // transport | semantic（判定归属哪条校验轴）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1475,20 +1484,32 @@ func (x *Violation) GetSample() string {
 	return ""
 }
 
+func (x *Violation) GetLayer() string {
+	if x != nil {
+		return x.Layer
+	}
+	return ""
+}
+
 // QualityStats holds the corpus-level signals plugin.explain classifies. All
 // fields are optional; a missing QualityStats means no statistical evidence is
 // available and explain falls back to violations only.
+//
+// input_raw = 窗口内全部原始包；input_candidate = 命中会话 target port、插件真正
+// 该解的子集；decode_* 只对 candidate 统计（责任边界 = 插件的责任范围）。
 type QualityStats struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	TotalInputs      int32                  `protobuf:"varint,1,opt,name=total_inputs,json=totalInputs,proto3" json:"total_inputs,omitempty"`
-	UnknownInputs    int32                  `protobuf:"varint,2,opt,name=unknown_inputs,json=unknownInputs,proto3" json:"unknown_inputs,omitempty"`
-	UnknownRatio     float64                `protobuf:"fixed64,3,opt,name=unknown_ratio,json=unknownRatio,proto3" json:"unknown_ratio,omitempty"`
-	CorrelatedInputs int32                  `protobuf:"varint,4,opt,name=correlated_inputs,json=correlatedInputs,proto3" json:"correlated_inputs,omitempty"`
-	LongPacketErrors int32                  `protobuf:"varint,5,opt,name=long_packet_errors,json=longPacketErrors,proto3" json:"long_packet_errors,omitempty"`
-	EntropyEstimate  float64                `protobuf:"fixed64,6,opt,name=entropy_estimate,json=entropyEstimate,proto3" json:"entropy_estimate,omitempty"`
-	DecodeErrors     int32                  `protobuf:"varint,7,opt,name=decode_errors,json=decodeErrors,proto3" json:"decode_errors,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	InputRaw           int32                  `protobuf:"varint,1,opt,name=input_raw,json=inputRaw,proto3" json:"input_raw,omitempty"`
+	InputCandidate     int32                  `protobuf:"varint,2,opt,name=input_candidate,json=inputCandidate,proto3" json:"input_candidate,omitempty"`
+	DecodeSuccess      int32                  `protobuf:"varint,3,opt,name=decode_success,json=decodeSuccess,proto3" json:"decode_success,omitempty"`
+	DecodeUnknown      int32                  `protobuf:"varint,4,opt,name=decode_unknown,json=decodeUnknown,proto3" json:"decode_unknown,omitempty"`
+	DecodeUnknownRatio float64                `protobuf:"fixed64,5,opt,name=decode_unknown_ratio,json=decodeUnknownRatio,proto3" json:"decode_unknown_ratio,omitempty"`
+	CorrelatedInputs   int32                  `protobuf:"varint,6,opt,name=correlated_inputs,json=correlatedInputs,proto3" json:"correlated_inputs,omitempty"`
+	LongPacketErrors   int32                  `protobuf:"varint,7,opt,name=long_packet_errors,json=longPacketErrors,proto3" json:"long_packet_errors,omitempty"`
+	EntropyEstimate    float64                `protobuf:"fixed64,8,opt,name=entropy_estimate,json=entropyEstimate,proto3" json:"entropy_estimate,omitempty"`
+	DecodeErrors       int32                  `protobuf:"varint,9,opt,name=decode_errors,json=decodeErrors,proto3" json:"decode_errors,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *QualityStats) Reset() {
@@ -1521,23 +1542,37 @@ func (*QualityStats) Descriptor() ([]byte, []int) {
 	return file_pkg_plugindev_proto_plugindev_proto_rawDescGZIP(), []int{22}
 }
 
-func (x *QualityStats) GetTotalInputs() int32 {
+func (x *QualityStats) GetInputRaw() int32 {
 	if x != nil {
-		return x.TotalInputs
+		return x.InputRaw
 	}
 	return 0
 }
 
-func (x *QualityStats) GetUnknownInputs() int32 {
+func (x *QualityStats) GetInputCandidate() int32 {
 	if x != nil {
-		return x.UnknownInputs
+		return x.InputCandidate
 	}
 	return 0
 }
 
-func (x *QualityStats) GetUnknownRatio() float64 {
+func (x *QualityStats) GetDecodeSuccess() int32 {
 	if x != nil {
-		return x.UnknownRatio
+		return x.DecodeSuccess
+	}
+	return 0
+}
+
+func (x *QualityStats) GetDecodeUnknown() int32 {
+	if x != nil {
+		return x.DecodeUnknown
+	}
+	return 0
+}
+
+func (x *QualityStats) GetDecodeUnknownRatio() float64 {
+	if x != nil {
+		return x.DecodeUnknownRatio
 	}
 	return 0
 }
@@ -1568,6 +1603,60 @@ func (x *QualityStats) GetDecodeErrors() int32 {
 		return x.DecodeErrors
 	}
 	return 0
+}
+
+// VerifyChecks is the layered verdict: decode (解码质量轴) + semantic (语义契约轴).
+// When the session is not applicable both axes are "not_run".
+type VerifyChecks struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Decode        string                 `protobuf:"bytes,1,opt,name=decode,proto3" json:"decode,omitempty"`     // pass | warn | fail | not_run
+	Semantic      string                 `protobuf:"bytes,2,opt,name=semantic,proto3" json:"semantic,omitempty"` // pass | warn | fail | not_run
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VerifyChecks) Reset() {
+	*x = VerifyChecks{}
+	mi := &file_pkg_plugindev_proto_plugindev_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VerifyChecks) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VerifyChecks) ProtoMessage() {}
+
+func (x *VerifyChecks) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_plugindev_proto_plugindev_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VerifyChecks.ProtoReflect.Descriptor instead.
+func (*VerifyChecks) Descriptor() ([]byte, []int) {
+	return file_pkg_plugindev_proto_plugindev_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *VerifyChecks) GetDecode() string {
+	if x != nil {
+		return x.Decode
+	}
+	return ""
+}
+
+func (x *VerifyChecks) GetSemantic() string {
+	if x != nil {
+		return x.Semantic
+	}
+	return ""
 }
 
 var File_pkg_plugindev_proto_plugindev_proto protoreflect.FileDescriptor
@@ -1677,13 +1766,14 @@ const file_pkg_plugindev_proto_plugindev_proto_rawDesc = "" +
 	"\asummary\x18\x05 \x01(\tR\asummary\x12?\n" +
 	"\bfindings\x18\x06 \x03(\v2#.gametrace.plugindev.ExplainFindingR\bfindings\x12\x1f\n" +
 	"\vnext_action\x18\a \x01(\tR\n" +
-	"nextAction\"\xa5\x01\n" +
+	"nextAction\"\xe0\x01\n" +
 	"\fVerifyResult\x12>\n" +
 	"\n" +
 	"violations\x18\x01 \x03(\v2\x1e.gametrace.plugindev.ViolationR\n" +
 	"violations\x12;\n" +
 	"\aquality\x18\x02 \x01(\v2!.gametrace.plugindev.QualityStatsR\aquality\x12\x18\n" +
-	"\averdict\x18\x03 \x01(\tR\averdict\"\xbb\x01\n" +
+	"\averdict\x18\x03 \x01(\tR\averdict\x129\n" +
+	"\x06checks\x18\x04 \x01(\v2!.gametrace.plugindev.VerifyChecksR\x06checks\"\xd1\x01\n" +
 	"\tViolation\x12\x17\n" +
 	"\arule_id\x18\x01 \x01(\tR\x06ruleId\x12\x14\n" +
 	"\x05topic\x18\x02 \x01(\tR\x05topic\x12\x1a\n" +
@@ -1691,15 +1781,21 @@ const file_pkg_plugindev_proto_plugindev_proto_rawDesc = "" +
 	"\tstatement\x18\x04 \x01(\tR\tstatement\x12\x17\n" +
 	"\adoc_ref\x18\x05 \x01(\tR\x06docRef\x12\x14\n" +
 	"\x05count\x18\x06 \x01(\x05R\x05count\x12\x16\n" +
-	"\x06sample\x18\a \x01(\tR\x06sample\"\xa8\x02\n" +
-	"\fQualityStats\x12!\n" +
-	"\ftotal_inputs\x18\x01 \x01(\x05R\vtotalInputs\x12%\n" +
-	"\x0eunknown_inputs\x18\x02 \x01(\x05R\runknownInputs\x12#\n" +
-	"\runknown_ratio\x18\x03 \x01(\x01R\funknownRatio\x12+\n" +
-	"\x11correlated_inputs\x18\x04 \x01(\x05R\x10correlatedInputs\x12,\n" +
-	"\x12long_packet_errors\x18\x05 \x01(\x05R\x10longPacketErrors\x12)\n" +
-	"\x10entropy_estimate\x18\x06 \x01(\x01R\x0fentropyEstimate\x12#\n" +
-	"\rdecode_errors\x18\a \x01(\x05R\fdecodeErrors2\xf7\x04\n" +
+	"\x06sample\x18\a \x01(\tR\x06sample\x12\x14\n" +
+	"\x05layer\x18\b \x01(\tR\x05layer\"\xff\x02\n" +
+	"\fQualityStats\x12\x1b\n" +
+	"\tinput_raw\x18\x01 \x01(\x05R\binputRaw\x12'\n" +
+	"\x0finput_candidate\x18\x02 \x01(\x05R\x0einputCandidate\x12%\n" +
+	"\x0edecode_success\x18\x03 \x01(\x05R\rdecodeSuccess\x12%\n" +
+	"\x0edecode_unknown\x18\x04 \x01(\x05R\rdecodeUnknown\x120\n" +
+	"\x14decode_unknown_ratio\x18\x05 \x01(\x01R\x12decodeUnknownRatio\x12+\n" +
+	"\x11correlated_inputs\x18\x06 \x01(\x05R\x10correlatedInputs\x12,\n" +
+	"\x12long_packet_errors\x18\a \x01(\x05R\x10longPacketErrors\x12)\n" +
+	"\x10entropy_estimate\x18\b \x01(\x01R\x0fentropyEstimate\x12#\n" +
+	"\rdecode_errors\x18\t \x01(\x05R\fdecodeErrors\"B\n" +
+	"\fVerifyChecks\x12\x16\n" +
+	"\x06decode\x18\x01 \x01(\tR\x06decode\x12\x1a\n" +
+	"\bsemantic\x18\x02 \x01(\tR\bsemantic2\xf7\x04\n" +
 	"\tPluginDev\x12W\n" +
 	"\bScaffold\x12$.gametrace.plugindev.ScaffoldRequest\x1a%.gametrace.plugindev.ScaffoldResponse\x12`\n" +
 	"\vListPlugins\x12'.gametrace.plugindev.ListPluginsRequest\x1a(.gametrace.plugindev.ListPluginsResponse\x12N\n" +
@@ -1722,7 +1818,7 @@ func file_pkg_plugindev_proto_plugindev_proto_rawDescGZIP() []byte {
 	return file_pkg_plugindev_proto_plugindev_proto_rawDescData
 }
 
-var file_pkg_plugindev_proto_plugindev_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_pkg_plugindev_proto_plugindev_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_pkg_plugindev_proto_plugindev_proto_goTypes = []any{
 	(*ScaffoldRequest)(nil),     // 0: gametrace.plugindev.ScaffoldRequest
 	(*ScaffoldResponse)(nil),    // 1: gametrace.plugindev.ScaffoldResponse
@@ -1747,6 +1843,7 @@ var file_pkg_plugindev_proto_plugindev_proto_goTypes = []any{
 	(*VerifyResult)(nil),        // 20: gametrace.plugindev.VerifyResult
 	(*Violation)(nil),           // 21: gametrace.plugindev.Violation
 	(*QualityStats)(nil),        // 22: gametrace.plugindev.QualityStats
+	(*VerifyChecks)(nil),        // 23: gametrace.plugindev.VerifyChecks
 }
 var file_pkg_plugindev_proto_plugindev_proto_depIdxs = []int32{
 	3,  // 0: gametrace.plugindev.ListPluginsResponse.plugins:type_name -> gametrace.plugindev.DiscoveredPlugin
@@ -1760,25 +1857,26 @@ var file_pkg_plugindev_proto_plugindev_proto_depIdxs = []int32{
 	18, // 8: gametrace.plugindev.ExplainResponse.findings:type_name -> gametrace.plugindev.ExplainFinding
 	21, // 9: gametrace.plugindev.VerifyResult.violations:type_name -> gametrace.plugindev.Violation
 	22, // 10: gametrace.plugindev.VerifyResult.quality:type_name -> gametrace.plugindev.QualityStats
-	0,  // 11: gametrace.plugindev.PluginDev.Scaffold:input_type -> gametrace.plugindev.ScaffoldRequest
-	2,  // 12: gametrace.plugindev.PluginDev.ListPlugins:input_type -> gametrace.plugindev.ListPluginsRequest
-	5,  // 13: gametrace.plugindev.PluginDev.Build:input_type -> gametrace.plugindev.BuildRequest
-	8,  // 14: gametrace.plugindev.PluginDev.Activate:input_type -> gametrace.plugindev.ActivateRequest
-	10, // 15: gametrace.plugindev.PluginDev.Deactivate:input_type -> gametrace.plugindev.DeactivateRequest
-	12, // 16: gametrace.plugindev.PluginDev.Status:input_type -> gametrace.plugindev.StatusRequest
-	17, // 17: gametrace.plugindev.PluginDev.Explain:input_type -> gametrace.plugindev.ExplainRequest
-	1,  // 18: gametrace.plugindev.PluginDev.Scaffold:output_type -> gametrace.plugindev.ScaffoldResponse
-	4,  // 19: gametrace.plugindev.PluginDev.ListPlugins:output_type -> gametrace.plugindev.ListPluginsResponse
-	7,  // 20: gametrace.plugindev.PluginDev.Build:output_type -> gametrace.plugindev.BuildResponse
-	9,  // 21: gametrace.plugindev.PluginDev.Activate:output_type -> gametrace.plugindev.ActivateResponse
-	11, // 22: gametrace.plugindev.PluginDev.Deactivate:output_type -> gametrace.plugindev.DeactivateResponse
-	16, // 23: gametrace.plugindev.PluginDev.Status:output_type -> gametrace.plugindev.StatusResponse
-	19, // 24: gametrace.plugindev.PluginDev.Explain:output_type -> gametrace.plugindev.ExplainResponse
-	18, // [18:25] is the sub-list for method output_type
-	11, // [11:18] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	23, // 11: gametrace.plugindev.VerifyResult.checks:type_name -> gametrace.plugindev.VerifyChecks
+	0,  // 12: gametrace.plugindev.PluginDev.Scaffold:input_type -> gametrace.plugindev.ScaffoldRequest
+	2,  // 13: gametrace.plugindev.PluginDev.ListPlugins:input_type -> gametrace.plugindev.ListPluginsRequest
+	5,  // 14: gametrace.plugindev.PluginDev.Build:input_type -> gametrace.plugindev.BuildRequest
+	8,  // 15: gametrace.plugindev.PluginDev.Activate:input_type -> gametrace.plugindev.ActivateRequest
+	10, // 16: gametrace.plugindev.PluginDev.Deactivate:input_type -> gametrace.plugindev.DeactivateRequest
+	12, // 17: gametrace.plugindev.PluginDev.Status:input_type -> gametrace.plugindev.StatusRequest
+	17, // 18: gametrace.plugindev.PluginDev.Explain:input_type -> gametrace.plugindev.ExplainRequest
+	1,  // 19: gametrace.plugindev.PluginDev.Scaffold:output_type -> gametrace.plugindev.ScaffoldResponse
+	4,  // 20: gametrace.plugindev.PluginDev.ListPlugins:output_type -> gametrace.plugindev.ListPluginsResponse
+	7,  // 21: gametrace.plugindev.PluginDev.Build:output_type -> gametrace.plugindev.BuildResponse
+	9,  // 22: gametrace.plugindev.PluginDev.Activate:output_type -> gametrace.plugindev.ActivateResponse
+	11, // 23: gametrace.plugindev.PluginDev.Deactivate:output_type -> gametrace.plugindev.DeactivateResponse
+	16, // 24: gametrace.plugindev.PluginDev.Status:output_type -> gametrace.plugindev.StatusResponse
+	19, // 25: gametrace.plugindev.PluginDev.Explain:output_type -> gametrace.plugindev.ExplainResponse
+	19, // [19:26] is the sub-list for method output_type
+	12, // [12:19] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_pkg_plugindev_proto_plugindev_proto_init() }
@@ -1792,7 +1890,7 @@ func file_pkg_plugindev_proto_plugindev_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_plugindev_proto_plugindev_proto_rawDesc), len(file_pkg_plugindev_proto_plugindev_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   23,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

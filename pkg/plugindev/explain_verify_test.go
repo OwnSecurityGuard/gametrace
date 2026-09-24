@@ -36,7 +36,7 @@ func TestExplainVerifyAllUnknown(t *testing.T) {
 		Action: "verify",
 		Verify: &VerifyResult{
 			Verdict: "fail",
-			Quality: &QualityStats{TotalInputs: 10, UnknownInputs: 10},
+			Quality: &QualityStats{InputCandidate: 10, DecodeUnknown: 10},
 		},
 	})
 	if err != nil {
@@ -99,10 +99,10 @@ func TestExplainVerifySuspectedEncryption(t *testing.T) {
 		Verify: &VerifyResult{
 			Verdict: "fail",
 			Quality: &QualityStats{
-				TotalInputs:     10,
-				UnknownInputs:   8,
-				UnknownRatio:    0.8,
-				EntropyEstimate: 7.8,
+				InputCandidate:     10,
+				DecodeUnknown:      8,
+				DecodeUnknownRatio: 0.8,
+				EntropyEstimate:    7.8,
 			},
 		},
 	})
@@ -128,8 +128,8 @@ func TestExplainVerifySuspectedReassembly(t *testing.T) {
 		Verify: &VerifyResult{
 			Verdict: "warn",
 			Quality: &QualityStats{
-				TotalInputs:      5,
-				UnknownInputs:    0,
+				InputCandidate:   5,
+				DecodeUnknown:    0,
 				CorrelatedInputs: 0,
 			},
 		},
@@ -151,7 +151,7 @@ func TestExplainVerifyPass(t *testing.T) {
 	res, err := Explain(context.Background(), &ExplainRequest{
 		Name:   "ok",
 		Action: "verify",
-		Verify: &VerifyResult{Verdict: "pass", Quality: &QualityStats{TotalInputs: 3, UnknownInputs: 0}},
+		Verify: &VerifyResult{Verdict: "pass", Quality: &QualityStats{InputCandidate: 3, DecodeUnknown: 0}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -182,7 +182,7 @@ func TestExplainVerifyRecorded(t *testing.T) {
 	name := "recorded"
 	RecordVerify(name, &VerifyResult{
 		Verdict: "fail",
-		Quality: &QualityStats{TotalInputs: 4, UnknownInputs: 4},
+		Quality: &QualityStats{InputCandidate: 4, DecodeUnknown: 4},
 	})
 	res, err := Explain(context.Background(), &ExplainRequest{Name: name, Action: "verify"})
 	if err != nil {
@@ -219,7 +219,7 @@ func TestExplainVerifyFailNoPattern(t *testing.T) {
 // longer fall back to it (design §2.2).
 func TestRecordVerifyClearedOnBuild(t *testing.T) {
 	name := "cleared"
-	RecordVerify(name, &VerifyResult{Verdict: "fail", Quality: &QualityStats{TotalInputs: 2, UnknownInputs: 2}})
+	RecordVerify(name, &VerifyResult{Verdict: "fail", Quality: &QualityStats{InputCandidate: 2, DecodeUnknown: 2}})
 	if DefaultTracker().LastVerify(name) == nil {
 		t.Fatal("expected verify result recorded")
 	}

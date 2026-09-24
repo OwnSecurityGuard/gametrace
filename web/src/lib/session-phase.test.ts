@@ -64,23 +64,27 @@ describe("deriveSessionPhase", () => {
 
   it("已停止且有数据是可分析，无数据是 empty", () => {
     const stopped = meta({ status: "stopped", raw_packets: 100, events: 20 });
-    expect(deriveSessionPhase({ meta: stopped, status: status({ state: "closed" }) })).toBe(
+    expect(deriveSessionPhase({ meta: stopped, status: status({ state: "stopped" }) })).toBe(
       "analyzable",
     );
     expect(
-      deriveSessionPhase({ meta: meta({ status: "stopped" }), status: status({ state: "closed" }) }),
+      deriveSessionPhase({ meta: meta({ status: "stopped" }), status: status({ state: "stopped" }) }),
     ).toBe("empty");
   });
 
   it("停了但只有包没有事件也算可分析（至少能看原始包）", () => {
     const stopped = meta({ status: "stopped", raw_packets: 50, events: 0 });
-    expect(deriveSessionPhase({ meta: stopped, status: status({ state: "closed" }) })).toBe(
+    expect(deriveSessionPhase({ meta: stopped, status: status({ state: "stopped" }) })).toBe(
       "analyzable",
     );
   });
 
-  it("元数据 running 但实时态 closed 判定为中断（pipeline 重启后的 stale）", () => {
-    expect(deriveSessionPhase({ meta: meta(), status: status({ state: "closed" }) })).toBe(
+  it("元数据 running 但实时态已终态判定为中断（pipeline 重启后的 stale）", () => {
+    expect(deriveSessionPhase({ meta: meta(), status: status({ state: "stopped" }) })).toBe(
+      "interrupted",
+    );
+    // error 同样是非 running 终态，不能被漏判成「还在抓」。
+    expect(deriveSessionPhase({ meta: meta(), status: status({ state: "error" }) })).toBe(
       "interrupted",
     );
   });
@@ -141,7 +145,7 @@ describe("describeSessionPhase", () => {
   it("empty 是失败态并给出下次该怎么做", () => {
     const view = describeSessionPhase({
       meta: meta({ status: "stopped", source: "nic" }),
-      status: status({ state: "closed" }),
+      status: status({ state: "stopped" }),
     });
     expect(view.phase).toBe("empty");
     expect(view.tone).toBe("error");

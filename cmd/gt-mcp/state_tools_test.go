@@ -13,6 +13,27 @@ import (
 	mcp "github.com/mark3labs/mcp-go/mcp"
 )
 
+// TestSessionStatusResultVocabulary 锁定 get_session_status 的状态词汇唯一：
+// 只出现 controlStore 的 running | stopped | error，pipeline 的 closed 不透出；
+// 状态缺失（旧 filesystem 兜底数据）按终态 stopped 处理，不引入第四种状态。
+func TestSessionStatusResultVocabulary(t *testing.T) {
+	cases := []struct {
+		status string
+		want   string
+	}{
+		{"running", "running"},
+		{"stopped", "stopped"},
+		{"error", "error"},
+		{"", "stopped"},
+	}
+	for _, c := range cases {
+		out := sessionStatusResult(&store.SessionMeta{SessionID: "s1", Status: c.status})
+		if got := out["state"]; got != c.want {
+			t.Errorf("status %q -> state %v, want %q", c.status, got, c.want)
+		}
+	}
+}
+
 // TestStateTools 是 query_state_changes / get_state_change_detail 的端到端用例：
 // 写一次「升级建筑」操作的事件与状态变更，然后从 MCP handler 层验证
 // 窗口过滤、三视图分组、相对时间与完整历史是否都对得上。

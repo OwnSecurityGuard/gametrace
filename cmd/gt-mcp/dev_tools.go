@@ -50,6 +50,106 @@ func (m *mcpCapture) handleBuildPlugin(ctx context.Context, req mcp.CallToolRequ
 	return successResult(out), nil
 }
 
+// activate 阶段链。顺序即「第一个没过的是哪一环」：artifact → auth → launch →
+// connection → manifest → ready。stage 只在失败时出现，用来指出断点；对用户的
+// 结论永远只有一个 status。
+const (
+	activateStageArtifact   = "artifact"   // 制品：Dev Plane 拿得到可执行的插件二进制
+	activateStageAuth       = "auth"       // 准入：注册令牌可用
+	activateStageLaunch     = "launch"     // 拉起：插件进程起来并存活
+	activateStageConnection = "connection" // 连接：注册请求被 registry 接受且有心跳
+	activateStageManifest   = "manifest"   // 声明：manifest 可取
+	activateStageReady      = "ready"      // 注册 + 在线 + manifest 全绿
+)
+
+// activateEnvelope 收敛 activate 的对外结论：一个 status（ready / failed）+ 断点
+// stage + 人话 reason + 可执行的 next 步骤。
+//
+// 用户问的是「我的插件到底有没有成功」，答案是 ready 或 failed 二选一；process /
+// registry / heartbeat / integration / artifact 这些内部概念只该出现在 stage 里，
+// 供人排查时定位，而不是作为结论本身。机器字段（process_launched / registered /
+// …）由调用方另行补充，Agent 仍可按它们做细粒度决策。
+func activateEnvelope(name, stage, reason, code string, next []string) map[string]any {
+	ready := stage == activateStageReady
+	if next == nil {
+		next = []string{}
+	}
+	out := map[string]any{
+		"name":   name,
+		"ok":     ready,
+		"status": "failed",
+		"stage":  stage,
+		"reason": reason,
+		"next":   next,
+	}
+	if ready {
+		out["status"] = "ready"
+	} else if code != "" {
+		out["failure"] = map[string]any{"code": code, "message": reason}
+	}
+	return out
+}
+
+// activateNextTool 把断点 stage 映射成推荐的下一步工具（机器可执行建议）。
+func activateNextTool(stage string) string {
+	switch stage {
+	case activateStageArtifact:
+		return "build_plugin"
+	case activateStageAuth:
+		return "get_plugin_env"
+	case activateStageManifest:
+		return "get_plugin_manifest"
+	default:
+		return "status_plugin"
+	}
+}
+
+// launchFailureStage 按 Developer Plane 的启动错误文案判断断点落在「制品」还是
+// 「拉起」：找不到二进制是制品问题（先去 build），其余（启动失败 / 秒退 / 已在
+// 运行）都是拉起问题。
+func launchFailureStage(msg string) (stage, code string, next []string) {
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "binary not found"):
+		return activateStageArtifact, "binary_missing", []string{
+			"先 build_plugin 生成插件二进制",
+			"确认二进制落在插件目录（plugins/<name>/<name>）",
+			"再 activate_plugin",
+		}
+	case strings.Contains(lower, "already active"):
+		return activateStageLaunch, "already_active", []string{
+			"调 status_plugin 看它在运行时里的接入状态（不必重复拉起）",
+			"确实要重启用 deactivate_plugin 再 activate_plugin",
+		}
+	default:
+		return activateStageLaunch, "process_did_not_stay_up", []string{
+			"看插件目录下的 <name>.dev.log（启动即退的报错原文在里面）",
+			"确认 GT_REGISTRY_ADDR 指向的 registry 可达",
+			"修好后重新 activate_plugin",
+		}
+	}
+}
+
+// registerFailureStage 归类 registry 记下的注册失败：鉴权被拒是令牌问题（auth），
+// 其余（连不上 registry / 隧道模式不回拨 / 旧 SDK 被拒流）都是连接问题。
+func registerFailureStage(errMsg string) (stage, code string, next []string) {
+	lower := strings.ToLower(errMsg)
+	authish := strings.Contains(lower, "permissiondenied") || strings.Contains(lower, "unauthenticated") ||
+		strings.Contains(lower, "unauthorized") || strings.Contains(lower, "token") || strings.Contains(lower, "auth")
+	if authish {
+		return activateStageAuth, "registry_rejected_token", []string{
+			"刷新调用方的注册令牌（get_plugin_env 可确认 token 来源）",
+			"确认该 owner 的令牌已配置在平台的 GT_AUTH_TOKENS 里",
+			"重新 activate_plugin",
+		}
+	}
+	return activateStageConnection, "registry_unreachable_or_rejected", []string{
+		"确认插件进程能访问 registry 地址（网络 / 防火墙）",
+		"看插件 dev.log 里注册请求是否发出（隧道模式宿主不回拨，地址写错最典型）",
+		"修好后重新 activate_plugin",
+	}
+}
+
 // handleActivatePlugin launches the local plugin binary (Developer Plane) and
 // injects GT_REGISTRY_ADDR so it registers with the runtime. registry_addr
 // resolves in this order: explicit arg → GT_REGISTRY_ADDR env → the pipeline's
@@ -59,6 +159,8 @@ func (m *mcpCapture) handleBuildPlugin(ctx context.Context, req mcp.CallToolRequ
 // 接入是否完成不以「进程启动 / activate 返回 ok（仅拿到 pid）」为准：启动后必须
 // 联合校验 list_registered_plugins（registered）、status_plugin.online（online）、
 // get_plugin_manifest（manifest_present）三项，全部满足才视为集成完成。
+// 对外只给一个结论：status=ready|failed，失败时用 stage 指出断点、next 给出可执行
+// 的修复步骤。
 func (m *mcpCapture) handleActivatePlugin(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name := req.GetString("name", "")
 	if name == "" {
@@ -74,112 +176,143 @@ func (m *mcpCapture) handleActivatePlugin(ctx context.Context, req mcp.CallToolR
 			registryAddr = resp.GetRegistryAddr()
 		}
 	}
-	if registryAddr == "" {
-		return errorResult(fmt.Errorf("registry_addr is required (pass it, set GT_REGISTRY_ADDR, or ensure the pipeline is reachable so gt-mcp can read it from the runtime)")), nil
+	token, tokenSrc := m.callerToken(ctx)
+
+	// 拉起的进程没接入完成时，统一补上这组「还没到哪一步」的机器字段。
+	incomplete := func() map[string]any {
+		return map[string]any{
+			"process_launched": false,
+			"registered":       false,
+			"online":           false,
+			"manifest_present": false,
+			"integrated":       false,
+		}
 	}
+
 	if m.pdClient == nil {
-		return errorResult(fmt.Errorf("plugin dev not available (Developer Plane not configured)")), nil
+		out := activateEnvelope(name, activateStageArtifact,
+			"插件开发平面（Developer Plane）不可用，无法编译 / 拉起插件制品",
+			"dev_plane_unavailable", []string{
+				"确认插件开发平面已随 gt-mcp 启动（未配置时无法 manage 插件制品）",
+				"配置好后重新 activate_plugin",
+			})
+		out["registry_addr"] = registryAddr
+		for k, v := range incomplete() {
+			out[k] = v
+		}
+		out["next_action"] = map[string]any{"tool": "build_plugin", "why": "插件开发平面不可用", "requires": "dev_plane_available"}
+		return successResult(out), nil
+	}
+	if registryAddr == "" {
+		out := activateEnvelope(name, activateStageConnection,
+			"不知道该让插件连哪个 registry：既没传 registry_addr、没设 GT_REGISTRY_ADDR，也读不到 pipeline 的监听地址",
+			"registry_addr_unknown", []string{
+				"确认 gt-pipeline 在运行（registry 地址由它提供）",
+				"或显式传入 registry_addr / 设置 GT_REGISTRY_ADDR 环境变量",
+				"再 activate_plugin",
+			})
+		for k, v := range incomplete() {
+			out[k] = v
+		}
+		out["next_action"] = map[string]any{"tool": "status_plugin", "why": "registry 地址未知", "requires": "registry_reachable"}
+		return successResult(out), nil
 	}
 
 	// token 预检：平台以 token 模式运行（GT_AUTH_TOKENS 已配置）时，插件启动后
 	// 注册会被鉴权拦截。这里在拉起进程之前就快速失败，避免「.env 写错 → 旧进程
 	// 带空 token → 一直 PermissionDenied」的接入主路径坑。
-	token, tokenSrc := m.callerToken(ctx)
 	if len(m.tokensByOwner) > 0 && token == "" {
-		return successResult(map[string]any{
-			"name":             name,
-			"ok":               false,
-			"stage":            "token",
-			"process_launched": false,
-			"registered":       false,
-			"online":           false,
-			"integrated":       false,
-			"failure": map[string]any{
-				"code":    "missing_auth_token",
-				"message": "platform is running in token mode but the caller has no registrable token; refusing to launch a plugin that would be rejected on registration",
-			},
-			"next_action": map[string]any{
-				"tool":     "get_plugin_env",
-				"why":      "resolve the caller's auth token and verify GT_AUTH_TOKENS is configured for this owner",
-				"requires": "token_resolved",
-			},
-		}), nil
+		out := activateEnvelope(name, activateStageAuth,
+			"平台以令牌模式运行，但调用方没有可注册的令牌；拒绝拉起一个注定被注册拒绝的插件",
+			"missing_auth_token", []string{
+				"先解析出调用方的注册令牌（get_plugin_env 可确认来源）",
+				"确认该 owner 的令牌已配置在平台的 GT_AUTH_TOKENS 里",
+				"再 activate_plugin",
+			})
+		out["registry_addr"] = registryAddr
+		for k, v := range incomplete() {
+			out[k] = v
+		}
+		out["next_action"] = map[string]any{"tool": "get_plugin_env", "why": "缺少可注册的令牌", "requires": "token_resolved"}
+		return successResult(out), nil
 	}
 
 	resp, err := m.pdClient.Activate(ctx, name, registryAddr, token)
 	if err != nil {
-		return errorResult(err), nil
+		// 拉起失败：Developer Plane 对所有启动期错误都返回 error（二进制缺失 /
+		// 已在运行 / 启动即退），这里按文案归类断点，不再回一个光秃秃的 error。
+		stage, code, next := launchFailureStage(err.Error())
+		out := activateEnvelope(name, stage, err.Error(), code, next)
+		out["registry_addr"] = registryAddr
+		out["auth_token_source"] = tokenSrc
+		for k, v := range incomplete() {
+			out[k] = v
+		}
+		out["next_action"] = map[string]any{"tool": activateNextTool(stage), "why": err.Error(), "requires": code}
+		return successResult(out), nil
 	}
 
-	out := map[string]any{
-		"name":              name,
-		"registry_addr":     registryAddr,
-		"auth_token":        token,
-		"auth_token_source": tokenSrc,
-		"process_launched":  resp.GetOk(),
-		"instance_id":       resp.GetInstanceId(),
-		"message":           resp.GetMessage(),
-	}
-
-	// 联合校验：仅看到进程 pid 或 activate 成功不算接入完成。输出收敛成
-	// 四阶段（token → launch → registration → integrated）以便 AI 直接按
-	// stage + next_action 决策，无需再猜源码。
-	if m.pipelineClient != nil && resp.GetOk() {
-		registered, online, manifestPresent, detail := m.verifyPluginIntegration(ctx, name)
-		integrated := registered && online && manifestPresent
-		out["registered"] = registered
-		out["online"] = online
-		out["manifest_present"] = manifestPresent
-		out["integrated"] = integrated
-		out["verification_detail"] = detail
-		switch {
-		case !registered:
-			out["stage"] = "registration"
-		case !online:
-			out["stage"] = "registration"
-			out["failure"] = map[string]any{"code": "not_online", "message": detail}
-			out["next_action"] = map[string]any{
-				"tool":     "status_plugin",
-				"why":      "plugin is registered but not online; check plugin logs / dev.log",
-				"requires": "heartbeat",
-			}
-		case !manifestPresent:
-			out["stage"] = "registration"
-			out["failure"] = map[string]any{"code": "missing_manifest", "message": detail}
-			out["next_action"] = map[string]any{
-				"tool":     "get_plugin_manifest",
-				"why":      "manifest unavailable; verify plugin.yaml ships with the binary",
-				"requires": "manifest_present",
-			}
-		default:
-			out["stage"] = "integrated"
-		}
-		if !integrated {
-			out["ok"] = false
-			out["message"] = "plugin process launched but not fully integrated: " + detail
-			if out["failure"] == nil {
-				out["failure"] = map[string]any{"code": "integration_incomplete", "message": detail}
-			}
-			if out["next_action"] == nil {
-				out["next_action"] = map[string]any{
-					"tool":     "status_plugin",
-					"why":      detail,
-					"requires": "integration_retry",
-				}
-			}
-		} else {
-			out["ok"] = true
-		}
+	// 进程已拉起 → 联合校验（注册 / 在线 / manifest），任一项没过都不算接入完成。
+	registered, online, manifestPresent, detail := false, false, false, ""
+	if m.pipelineClient != nil {
+		registered, online, manifestPresent, detail = m.verifyPluginIntegration(ctx, name)
 	} else {
-		// 无 pipeline 连接时只能确认进程已启动，无法验证注册。
-		out["ok"] = resp.GetOk()
-		out["integrated"] = false
-		out["stage"] = "launch"
-		if m.pipelineClient == nil {
-			out["verification_detail"] = "pipeline unreachable: registered/online/manifest not verified"
-		} else {
-			out["verification_detail"] = "plugin process did not launch (activate reported failure)"
+		detail = "gt-mcp 连不上 Runtime Plane：无法确认 registered / online / manifest"
+	}
+	integrated := registered && online && manifestPresent
+
+	stage, reason, code, next := activateStageReady, detail, "", []string(nil)
+	switch {
+	case m.pipelineClient == nil:
+		stage, code = activateStageConnection, "pipeline_unreachable"
+		reason = "插件进程已拉起，但 gt-mcp 连不上 Runtime Plane，无法确认它是否注册成功"
+		next = []string{
+			"确认 gt-pipeline 在运行，且 gt-mcp 能连上它",
+			"连通后重新 activate_plugin，或直接调 status_plugin 复核",
 		}
+	case !registered:
+		if f := m.latestRegisterFailure(ctx, name); f != nil {
+			msg, _ := f["error"].(string)
+			stage, code, next = registerFailureStage(msg)
+			reason = "registry 拒绝了注册：" + msg
+		} else {
+			stage, code = activateStageConnection, "not_registered"
+			reason = "插件进程活着，但 registry 里没有它（注册请求没到，或还没重试成功）"
+			next = []string{
+				"看插件目录下 <name>.dev.log 里注册请求是否发出、registry 地址是否正确",
+				"确认插件进程能访问 registry 地址（网络 / 防火墙）",
+				"再 activate_plugin",
+			}
+		}
+	case !online:
+		stage, code = activateStageConnection, "not_online"
+		next = []string{
+			"看插件 dev.log 是否在正常发心跳，并用 status_plugin 看 last_heartbeat",
+			"确认插件主循环没有被阻塞或提前退出",
+			"再 activate_plugin",
+		}
+	case !manifestPresent:
+		stage, code = activateStageManifest, "missing_manifest"
+		next = []string{
+			"确认 plugin.yaml 与二进制一起随包提供（在插件目录下）",
+			"重新 build_plugin 后再 activate_plugin",
+		}
+	}
+
+	out := activateEnvelope(name, stage, reason, code, next)
+	out["registry_addr"] = registryAddr
+	out["auth_token"] = token
+	out["auth_token_source"] = tokenSrc
+	out["process_launched"] = resp.GetOk()
+	out["process_message"] = resp.GetMessage()
+	out["instance_id"] = resp.GetInstanceId()
+	out["registered"] = registered
+	out["online"] = online
+	out["manifest_present"] = manifestPresent
+	out["integrated"] = integrated
+	out["verification_detail"] = detail
+	if stage != activateStageReady {
+		out["next_action"] = map[string]any{"tool": activateNextTool(stage), "why": reason, "requires": code}
 	}
 	return successResult(out), nil
 }
@@ -657,12 +790,15 @@ func (m *mcpCapture) handleExplainPlugin(ctx context.Context, req mcp.CallToolRe
 	return successResult(out), nil
 }
 
-// verifyResultFromArg maps the `verify` tool argument (an opaque JSON object
-// produced by plugin.verify: {violations, quality, verdict}) onto the gRPC
-// VerifyResult. It is strict only about shape, never about attribution — all
-// interpretation stays in the Developer Plane. An unparseable payload yields a
-// nil result, which makes the Developer Plane attribute its last recorded
-// verify instead.
+// verifyResultFromArg maps the `verify` tool argument (the verify_plugin JSON:
+// {violations, quality, checks, verdict}) onto the gRPC VerifyResult. It is
+// strict only about shape, never about attribution — all interpretation stays in
+// the Developer Plane. An unparseable payload yields a nil result, which makes
+// the Developer Plane attribute its last recorded verify instead.
+//
+// quality 的 input/decode 分组形状与 verify_plugin 的输出一致；verdict=
+// not_applicable 时 quality 为 null，这里就映射成 nil Quality —— 对非本协议
+// 流量算出的统计不该拿来归因插件。
 func verifyResultFromArg(raw any) *plugindevpb.VerifyResult {
 	b, err := json.Marshal(raw)
 	if err != nil {
@@ -677,16 +813,27 @@ func verifyResultFromArg(raw any) *plugindevpb.VerifyResult {
 			DocRef    string `json:"doc_ref"`
 			Count     int    `json:"count"`
 			Sample    string `json:"sample"`
+			Layer     string `json:"layer"`
 		} `json:"violations"`
-		Quality struct {
-			TotalInputs          int     `json:"total_inputs"`
-			UnknownInputs        int     `json:"unknown_inputs"`
-			UnknownRatio         float64 `json:"unknown_ratio"`
-			CorrelatedInputs     int     `json:"correlated_inputs"`
-			LongPacketErrors     int     `json:"long_packet_errors"`
-			EntropyEstimate      float64 `json:"entropy_estimate"`
-			DecodeErrors         int     `json:"decode_errors"`
+		Quality *struct {
+			Input struct {
+				Raw       int `json:"raw"`
+				Candidate int `json:"candidate"`
+			} `json:"input"`
+			Decode struct {
+				Success      int     `json:"success"`
+				Unknown      int     `json:"unknown"`
+				UnknownRatio float64 `json:"unknown_ratio"`
+				Errors       int     `json:"errors"`
+			} `json:"decode"`
+			CorrelatedInputs int     `json:"correlated_inputs"`
+			LongPacketErrors int     `json:"long_packet_errors"`
+			EntropyEstimate  float64 `json:"entropy_estimate"`
 		} `json:"quality"`
+		Checks *struct {
+			Decode   string `json:"decode"`
+			Semantic string `json:"semantic"`
+		} `json:"checks"`
 		Verdict string `json:"verdict"`
 	}
 	if err := json.Unmarshal(b, &v); err != nil {
@@ -702,16 +849,24 @@ func verifyResultFromArg(raw any) *plugindevpb.VerifyResult {
 			DocRef:    vv.DocRef,
 			Count:     int32(vv.Count),
 			Sample:    vv.Sample,
+			Layer:     vv.Layer,
 		})
 	}
-	out.Quality = &plugindevpb.QualityStats{
-		TotalInputs:          int32(v.Quality.TotalInputs),
-		UnknownInputs:        int32(v.Quality.UnknownInputs),
-		UnknownRatio:         v.Quality.UnknownRatio,
-		CorrelatedInputs:     int32(v.Quality.CorrelatedInputs),
-		LongPacketErrors:     int32(v.Quality.LongPacketErrors),
-		EntropyEstimate:      v.Quality.EntropyEstimate,
-		DecodeErrors:         int32(v.Quality.DecodeErrors),
+	if q := v.Quality; q != nil {
+		out.Quality = &plugindevpb.QualityStats{
+			InputRaw:           int32(q.Input.Raw),
+			InputCandidate:     int32(q.Input.Candidate),
+			DecodeSuccess:      int32(q.Decode.Success),
+			DecodeUnknown:      int32(q.Decode.Unknown),
+			DecodeUnknownRatio: q.Decode.UnknownRatio,
+			CorrelatedInputs:   int32(q.CorrelatedInputs),
+			LongPacketErrors:   int32(q.LongPacketErrors),
+			EntropyEstimate:    q.EntropyEstimate,
+			DecodeErrors:       int32(q.Decode.Errors),
+		}
+	}
+	if c := v.Checks; c != nil {
+		out.Checks = &plugindevpb.VerifyChecks{Decode: c.Decode, Semantic: c.Semantic}
 	}
 	return out
 }

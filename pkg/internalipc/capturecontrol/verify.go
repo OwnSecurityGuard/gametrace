@@ -17,6 +17,7 @@ type VerifyRequest struct {
 }
 
 // ViolationView 单条契约违规（源自 SDK contract checker，带 rule_id）。
+// Layer 标明它归属哪条校验轴（transport | semantic），决定 checks 的取值。
 type ViolationView struct {
 	RuleID    string
 	Topic     string
@@ -25,24 +26,38 @@ type ViolationView struct {
 	DocRef    string
 	Count     int
 	Sample    string
+	Layer     string
 }
 
 // QualityView 是 gametrace 侧语料级统计（与 plugin.explain 共享判据）。
+// input_* 是语料规模（raw=窗口内全部原始包；candidate=命中 target port 的子集），
+// decode_* 只对 candidate 统计 —— 责任边界即插件的责任范围。
 type QualityView struct {
-	TotalInputs          int
-	UnknownInputs        int
-	UnknownRatio         float64
-	CorrelatedInputs     int
-	LongPacketErrors     int
-	EntropyEstimate      float64
-	DecodeErrors         int
+	InputRaw           int
+	InputCandidate     int
+	DecodeSuccess      int
+	DecodeUnknown      int
+	DecodeUnknownRatio float64
+	CorrelatedInputs   int
+	LongPacketErrors   int
+	EntropyEstimate    float64
+	DecodeErrors       int
 }
 
-// VerifyResult 是 plugin.verify 的结论：violations + quality + verdict + 溯源。
+// VerifyChecks 分层结论：decode（解码质量轴）+ semantic（语义契约轴）。
+type VerifyChecks struct {
+	Decode   string
+	Semantic string
+}
+
+// VerifyResult 是 plugin.verify 的结论：violations + quality + checks + verdict + 溯源。
+// Quality 为 nil 表示没有可统计的语料（会话对该插件不适用）—— 此时不能给出任何
+// 质量数字，否则「用户选错抓包」会被读成「插件质量差」。
 type VerifyResult struct {
 	Verdict       string
 	Violations    []ViolationView
-	Quality       QualityView
+	Quality       *QualityView
+	Checks        VerifyChecks
 	VerifyRunID   string
 	SessionID     string
 	AtUnix        int64
@@ -50,9 +65,10 @@ type VerifyResult struct {
 }
 
 // VerifyApplicability 会话对该插件的适用性判定（阶段 1：target port + matching
-// count）。Applicable=false 时 Verdict=not_applicable —— 属于「换会话重试」而
+// count）。Result=not_match 时 Verdict=not_applicable —— 属于「换会话重试」而
 // 非「插件质量差」，AI 应换会话而非修插件。
 type VerifyApplicability struct {
+	Result         string // match | not_match
 	Applicable     bool
 	Reason         string // ok | no_raw_packets | no_matching_packets
 	TargetPort     int32
@@ -107,11 +123,15 @@ func (s *Server) Verify(ctx context.Context, req *pb.VerifyRequest) (*pb.VerifyR
 		return nil, err
 	}
 	vr := &pb.VerifyResponse{
-		Verdict:        res.Verdict,
-		VerifyRunId:    res.VerifyRunID,
-		SessionId:      res.SessionID,
-		AtUnix:         res.AtUnix,
-		Applicability:  applicabilityToPB(res.Applicability),
+		Verdict:       res.Verdict,
+		VerifyRunId:   res.VerifyRunID,
+		SessionId:     res.SessionID,
+		AtUnix:        res.AtUnix,
+		Applicability: applicabilityToPB(res.Applicability),
+		Checks: &pb.VerifyChecks{
+			Decode:   res.Checks.Decode,
+			Semantic: res.Checks.Semantic,
+		},
 	}
 	for _, v := range res.Violations {
 		vr.Violations = append(vr.Violations, &pb.VerifyViolation{
@@ -122,16 +142,21 @@ func (s *Server) Verify(ctx context.Context, req *pb.VerifyRequest) (*pb.VerifyR
 			DocRef:    v.DocRef,
 			Count:     int32(v.Count),
 			Sample:    v.Sample,
+			Layer:     v.Layer,
 		})
 	}
-	vr.Quality = &pb.VerifyQuality{
-		TotalInputs:          int64(res.Quality.TotalInputs),
-		UnknownInputs:        int64(res.Quality.UnknownInputs),
-		UnknownRatio:         res.Quality.UnknownRatio,
-		CorrelatedInputs:     int64(res.Quality.CorrelatedInputs),
-		LongPacketErrors:     int64(res.Quality.LongPacketErrors),
-		EntropyEstimate:      res.Quality.EntropyEstimate,
-		DecodeErrors:         int64(res.Quality.DecodeErrors),
+	if q := res.Quality; q != nil {
+		vr.Quality = &pb.VerifyQuality{
+			InputRaw:           int64(q.InputRaw),
+			InputCandidate:     int64(q.InputCandidate),
+			DecodeSuccess:      int64(q.DecodeSuccess),
+			DecodeUnknown:      int64(q.DecodeUnknown),
+			DecodeUnknownRatio: q.DecodeUnknownRatio,
+			CorrelatedInputs:   int64(q.CorrelatedInputs),
+			LongPacketErrors:   int64(q.LongPacketErrors),
+			EntropyEstimate:    q.EntropyEstimate,
+			DecodeErrors:       int64(q.DecodeErrors),
+		}
 	}
 	return vr, nil
 }

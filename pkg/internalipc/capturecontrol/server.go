@@ -513,6 +513,7 @@ func applicabilityToPB(a *VerifyApplicability) *pb.VerifyApplicability {
 		TargetPort:     a.TargetPort,
 		TotalPackets:   a.TotalPackets,
 		MatchedPackets: a.MatchedPackets,
+		Result:         a.Result,
 	}
 }
 

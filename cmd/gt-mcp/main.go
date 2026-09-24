@@ -31,7 +31,6 @@ import (
 	"gametrace/docs"
 	"gametrace/pkg/auth"
 	"gametrace/pkg/authz"
-	"gametrace/pkg/capture"
 	"gametrace/pkg/config"
 	"gametrace/pkg/event"
 	"gametrace/pkg/internalipc"
@@ -791,11 +790,13 @@ func (m *mcpCapture) handleGetSessionStatus(ctx context.Context, req mcp.CallToo
 			}), nil
 		}
 		// 非 running：pipeline 对历史会话只报 closed + 0 计数，会把「早已结束」
-		// 误读成「没抓到数据」。合并 controlStore 持久化终值补充真实计数，state
-		// 保持 closed（非 live 的 gRPC 语义，前端依赖 == "running" 判定存活）。
+		// 误读成「没抓到数据」。回落到 controlStore 的持久化终值（唯一 SSOT）补充
+		// 真实计数与状态 —— state 词汇统一为 controlStore 的
+		// running | stopped | error，不再混入 pipeline 的 closed，否则同一会话在
+		// 列表 / status / verify 三处会呈现三种状态。
 		if err == nil {
 			if meta := m.sessionStatusMeta(ctx, sessionID); meta != nil {
-				return successResult(sessionStatusResult(meta, capture.StateClosed.String())), nil
+				return successResult(sessionStatusResult(meta)), nil
 			}
 		} else {
 			// gRPC 查询失败（pipeline 不可达），降级读取持久化元数据
@@ -805,9 +806,11 @@ func (m *mcpCapture) handleGetSessionStatus(ctx context.Context, req mcp.CallToo
 
 	// 持久化元数据：controlStore.sessions 权威，filesystem 兼容旧数据。
 	if meta := m.sessionStatusMeta(ctx, sessionID); meta != nil {
-		return successResult(sessionStatusResult(meta, meta.Status)), nil
+		return successResult(sessionStatusResult(meta)), nil
 	}
-	return successResult(map[string]any{"state": "closed", "session_id": sessionID}), nil
+	// 两处都查不到：报终态 stopped（未知会话不引入第四种状态，UI 侧一律按
+	// 「已停止」处理，不会误判成还在抓）。
+	return successResult(map[string]any{"state": "stopped", "session_id": sessionID}), nil
 }
 
 // sessionStatusMeta 读取会话持久化元数据。controlStore.sessions 为唯一权威，
@@ -828,9 +831,14 @@ func (m *mcpCapture) sessionStatusMeta(ctx context.Context, sessionID string) *s
 }
 
 // sessionStatusResult 渲染 get_session_status 持久化回退视图。
-// state 由调用方决定：gRPC 报告 closed（非 live）时传 capture.StateClosed，
-// pipeline 不可达降级时传元数据原始状态。
-func sessionStatusResult(meta *store.SessionMeta, state string) map[string]any {
+// state 一律取 controlStore 的持久化状态（running | stopped | error）—— 它是
+// 会话元数据的唯一 SSOT，pipeline 的 closed 是 runtime 概念，不进这里。
+func sessionStatusResult(meta *store.SessionMeta) map[string]any {
+	state := meta.Status
+	if state == "" {
+		// 状态缺失（旧数据 filesystem 兜底）按终态处理，不引入第四种状态。
+		state = "stopped"
+	}
 	result := map[string]any{
 		"session_id":    meta.SessionID,
 		"state":         state,
@@ -2213,7 +2221,12 @@ func successResult(v any) *mcp.CallToolResult {
 			vMap = map[string]any{"result": v}
 		}
 	}
-	vMap["ok"] = true
+	// 只有调用方没自己给 ok 时才补 true：像 activate_plugin / verify_plugin 这类
+	// 会明确报 ok=false（进程起来了但接入没完成 / 会话不适用）的工具，结论必须
+	// 原样传出去，不能被这里覆盖成「成功」。
+	if _, set := vMap["ok"]; !set {
+		vMap["ok"] = true
+	}
 	b, _ := json.Marshal(vMap)
 	return mcp.NewToolResultText(string(b))
 }
@@ -2640,7 +2653,7 @@ func main() {
 	), capture.handleBuildPlugin)
 
 	s.AddTool(mcp.NewTool("activate_plugin",
-		mcp.WithDescription("Launch the local plugin binary and inject GT_REGISTRY_ADDR so it registers with the runtime. The Developer Plane owns only the process it launches; deactivate_plugin tears it down. registry_addr resolves in order: explicit arg → GT_REGISTRY_ADDR env → the pipeline's actual registry address (read via get_registry_addr), so you usually don't need to pass it. After launch, activation is NOT considered complete on a mere pid/activate-ok: it jointly verifies list_registered_plugins (registered), status_plugin.online (online), and get_plugin_manifest (manifest_present) — all three must hold before integrated=true."),
+		mcp.WithDescription("Launch the local plugin binary and inject GT_REGISTRY_ADDR so it registers with the runtime. The Developer Plane owns only the process it launches; deactivate_plugin tears it down. registry_addr resolves in order: explicit arg → GT_REGISTRY_ADDR env → the pipeline's actual registry address (read via get_registry_addr), so you usually don't need to pass it. Returns ONE product-facing conclusion: status=ready means the plugin is fully integrated (registered + online + manifest_present), status=failed carries stage (artifact | auth | launch | connection | manifest), a human reason and a next[] list of concrete steps. Machine fields (process_launched / registered / online / manifest_present) are still returned for self-checking, but status is the answer."),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Plugin name (kebab-case) to launch")),
 		mcp.WithString("registry_addr", mcp.Description("Runtime registry address, e.g. :9091. Defaults to env GT_REGISTRY_ADDR, then to the pipeline's address (via get_registry_addr)")),
 	), capture.handleActivatePlugin)
@@ -2659,7 +2672,7 @@ func main() {
 		mcp.WithDescription("Attribute the most recent build or activate failure of a plugin (design §2.3 / P3a). Reads the Developer Plane's last attempt and returns structured findings (category + optional SDK contract rule_id + why + fix), plus a next_action. The returned ref is what status_plugin's last_attempt.explain_ref points back to. On a failed build/activate the Developer Plane already auto-runs this, so status surfaces the ref immediately."),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Plugin name (kebab-case), e.g. my-game-decoder")),
 		mcp.WithString("action", mcp.Description("Optional: which attempt to explain (build | activate | deactivate). Omit to explain the latest attempt")),
-		mcp.WithObject("verify", mcp.Description("Optional verify result from plugin.verify, shape {violations, quality, verdict}. When provided, decode-class attribution is derived from it; when omitted, the Developer Plane attributes the most recent recorded verify result.")),
+		mcp.WithObject("verify", mcp.Description("Optional verify result from plugin.verify, shape {violations, quality, checks, verdict}. quality uses the same nested input.raw/input.candidate + decode.* shape returned by verify_plugin (null when the session was not applicable). When provided, decode-class attribution is derived from it; when omitted, the Developer Plane attributes the most recent recorded verify result.")),
 	), capture.handleExplainPlugin)
 
 	s.AddTool(mcp.NewTool("get_plugin_contract",
@@ -2930,7 +2943,7 @@ func main() {
 	// 时把 artifact.state 升到 validated（磁盘 proof，跨进程可见）。纯转发到
 	// Runtime Plane（gt-pipeline）；MCP 零归因逻辑。
 	s.AddTool(mcp.NewTool("verify_plugin",
-		mcp.WithDescription("Verify a plugin by decoding an offline session's raw packets and checking contract violations (SDK checker, each tagged with a contract.yaml rule_id) plus gt-side quality stats (unknown ratio, entropy, correlation). Returns a verdict: pass | warn | fail | not_applicable, plus an applicability block (target port + matching count). not_applicable means the session carries no traffic the plugin should decode — pick another session; only verdict=pass promotes the artifact.state to validated (with a disk proof). Pure forwarder to the Runtime Plane; MCP owns no attribution logic."),
+		mcp.WithDescription("Verify a plugin by decoding an offline session's raw packets and checking contract violations (each tagged with a contract.yaml rule_id and a layer) plus gt-side quality stats. Returns LAYERED results so 'wrong session' and 'broken plugin' stay distinguishable: session_profile (packets / target_port / target_port_hits) → applicability (result match | not_match) → checks (decode / semantic axes) → verdict (pass | warn | fail | not_applicable). quality is null when the session is not applicable; when present it splits input.raw (whole window) from input.candidate (packets matching the session's target port) and only decode.* stats cover candidates. not_applicable means the session carries no traffic the plugin should decode — pick another session instead of fixing the plugin; only verdict=pass promotes the artifact.state to validated (with a disk proof). Pure forwarder to the Runtime Plane; MCP owns no attribution logic."),
 		mcp.WithString("session_id", mcp.Required(), mcp.Description("Stopped session whose raw packets to verify against")),
 		mcp.WithString("plugin", mcp.Required(), mcp.Description("Plugin name to verify, e.g. http or tcp")),
 		mcp.WithString("protocol", mcp.Description("Optional: only verify packets with this protocol, e.g. tcp")),
