@@ -1,0 +1,44 @@
+# golangci-lint v2 配置（根模块 / sdk 子模块 / examples 各插件模块共用同一份）。
+# CI 的 lint job 与 `make lint` 均消费此文件；各模块运行时通过
+# --config 指向本文件（子模块目录不会自动向上查找）。
+#
+# 选型对应 GameTrace 的核心风险面（长期运行的 pipeline / plugin runtime /
+# gRPC / websocket / sqlite 服务）：
+#   - errcheck      未处理 error（吞错是并发服务最难查的一类故障源）
+#   - unused        死代码
+#   - ineffassign   无效赋值
+#   - staticcheck   低效/可疑代码（SA*）
+#   - govet         含 copylocks（锁/WaitGroup 按值拷贝 = race 风险）
+#   - nilerr        err ~= nil 却返回 nil 的吞错模式
+version: "2"
+
+run:
+  # 与 Makefile 的 test/build 保持一致（见 Makefile TAGS），否则 unused 会把
+  # pcap 门控文件里的引用看成零引用而误报死代码。
+  build-tags:
+    - pcap
+
+linters:
+  default: standard
+  enable:
+    - nilerr
+
+  settings:
+    errcheck:
+      # 写日志/标准输出的 error 无处理价值。
+      exclude-functions:
+        - (*log/slog.Logger).Info
+        - (*log/slog.Logger).Debug
+        - (*log/slog.Logger).Warn
+        - (*log/slog.Logger).Error
+    staticcheck:
+      checks:
+        - all
+
+  exclusions:
+    rules:
+      # 测试代码：断言失败路径里的 error 忽略（defer f()、t.TempDir 清理等）
+      # 是惯例，不做强制。
+      - path: '_test\.go'
+        linters:
+          - errcheck

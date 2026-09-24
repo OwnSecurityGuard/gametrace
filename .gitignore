@@ -113,3 +113,7 @@ qc
 
 # 临时调试目录（MCP / 解码排查脚本与样本 dump，非项目源码）
 .tmp_mcp/
+
+# 基准生成物：current.txt 每次重跑覆盖；baseline.txt 是提交进仓库的对比基线
+bench/current.txt
+bench/compare.csv

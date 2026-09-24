@@ -1,4 +1,4 @@
-.PHONY: proto test build build-mcp build-pipeline build-agent build-agents build-examples run-mcp run-pipeline deploy release-matrix web-build docs
+.PHONY: proto test build build-mcp build-pipeline build-agent build-agents build-examples run-mcp run-pipeline deploy release-matrix web-build docs vet lint test-race verify-plugin coverage-gate bench bench-compare bench-save
 
 TAGS := pcap
 
@@ -206,3 +206,81 @@ release-matrix: web-build
 		done; \
 	done; \
 	ls -la bin/release/
+
+# ============================================================================
+# 质量门（CI 与本地共用同一入口，避免两边口径漂移）
+#
+# 仓库不是单 go module：根 + ./sdk + 每个示例插件各自 go.mod（外部插件同款
+# 消费方式）。以下 target 全部逐模块执行——只跑根模块会漏掉 SDK/插件单独坏掉
+# 的情况，这正是 CI 矩阵按模块拆开的原因。
+# ============================================================================
+
+# 所有"像外部用户一样消费 SDK"的插件模块（含 SDK 自带模板 http-stream-decoder）。
+PLUGIN_MODULES := examples/http-decoder examples/lp-decoder examples/ws-decoder sdk/examples/http-stream-decoder
+
+# vet：带 pcap 标签跑（覆盖 capture_pcap.go 等门控文件；构建矩阵的不带标签
+# 编译由 CI build job 单独兜底）。
+vet:
+	go vet -tags $(TAGS) ./...
+	cd sdk && go vet -tags $(TAGS) ./...
+
+# lint：golangci-lint v2，配置在仓库根 .golangci.yml（各子目录向上自动发现）。
+# 需要本机安装：go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+# 存量策略：根模块有历史 errcheck/nilerr/staticcheck 欠账，CI 对 PR 只阻断
+# **新增**问题（--new-from-merge-base）；sdk 与 examples 已清零、全量阻断。
+lint:
+	golangci-lint run ./...
+	cd sdk && golangci-lint run ./...
+	@for m in $(PLUGIN_MODULES); do \
+		echo "==> lint $$m"; \
+		(cd $$m && golangci-lint run ./...) || exit 1; \
+	done
+
+# test-race：本项目是长期运行的并发服务（capture goroutine → 解码插件 →
+# event store → MCP 查询；registry heartbeat / tunnel / session 生命周期），
+# 数据竞争只有 -race 能抓到，普通 test 通过不代表安全。
+test-race:
+	go test -race -tags $(TAGS) ./...
+	cd sdk && go test -race ./...
+	@for m in $(PLUGIN_MODULES); do \
+		echo "==> race $$m"; \
+		(cd $$m && go test -race ./...) || exit 1; \
+	done
+
+# ============================================================================
+# verify-plugin：Plugin Contract CI（GameTrace 特有，普通项目没有这条）。
+#
+# 核心价值链路 plugin → manifest → contract → semantic rules → event 必须
+# 零漂移：contract.yaml（SSOT，go:embed 进 sdk/contract）一改，所有消费者
+# 必须当场被下面的测试打回：
+#   1. sdk 的 contract/rule/event 自校验测试（规则语义与 checker 本身）；
+#   2. 每个示例插件模块 go build + go test——其 main_test.go 固定包含
+#      TestManifestContractCheck（声明期契约）与 emit→CheckEvent（输出期契约），
+#      即"该插件的 plugin.yaml 与事件输出仍然满足当前 contract"。
+# 运行期全链路（registry 注册 → pipeline 解码 → 落库）由根模块 TestSimulate
+# （go test ./cmd/gt-pipeline/）覆盖，见 CI 的 test job。
+# ============================================================================
+verify-plugin:
+	cd sdk && go test ./contract/ ./rule/ ./event/
+	@for m in $(PLUGIN_MODULES); do \
+		echo "==> verify plugin: $$m"; \
+		(cd $$m && go build ./... && go test ./...) || exit 1; \
+	done
+
+# coverage-gate：核心包覆盖率地板（防回退，不是唯分数论）。
+# 门槛表与当前实测解释都在 scripts/coverage_gate.sh 头部。
+coverage-gate:
+	sh ./scripts/coverage_gate.sh
+
+# bench / bench-compare / bench-save：抓包解码性能基线。
+# bench-compare 用 benchstat 对比 bench/baseline.txt，回归超阈值 exit 1。
+# 注意：baseline 必须与对比方在同一类机器上采集（CI 用 ubuntu）；换环境先
+# make bench-save 重录，否则数字没有可比性。
+bench:
+	sh ./scripts/bench.sh
+
+bench-compare:
+	sh ./scripts/bench_compare.sh
+
+bench-save:
+	sh ./scripts/bench.sh --save
