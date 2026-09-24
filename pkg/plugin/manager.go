@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -805,109 +804,4 @@ func (s *RegistryServer) Connect(stream pb.PluginRegistry_ConnectServer) error {
 		return fmt.Errorf("registry is closed")
 	}
 	return s.tunnelHub.Connect(stream)
-}
-
-// Manager 管理插件注册表（被动接受注册，不再 spawn 子进程）。
-type Manager struct {
-	registry       *RegistryServer
-	workDir        string
-	mu             sync.RWMutex
-	autoRestart    bool
-	restartCount   map[string]int
-	registryCancel context.CancelFunc
-}
-
-// NewManager 创建插件管理器。
-// workDir 是插件注册表 socket 的存放目录（默认 work/gt-registry.sock）。
-func NewManager(workDir string) *Manager {
-	registry := NewRegistryServer(10)
-	return &Manager{
-		registry:     registry,
-		workDir:      workDir,
-		restartCount: map[string]int{},
-	}
-}
-
-// Start 启动注册表监听（调用方应在服务启动时调用）。
-// 返回 registry socket 地址，供插件进程通过环境变量知晓。
-func (m *Manager) Start(ctx context.Context) (string, error) {
-	sockPath := fmt.Sprintf("%s/gt-registry.sock", m.workDir)
-	_ = os.Remove(sockPath)
-	srv, lis, err := m.registry.StartListen(sockPath)
-	if err != nil {
-		return "", err
-	}
-	m.registryCancel = m.registry.WatchOffline(30 * time.Second)
-	go func() {
-		if err := srv.Serve(lis); err != nil {
-			slog.Error("registry server serve", "error", err)
-		}
-	}()
-	slog.Info("registry server started", "socket", sockPath)
-	return sockPath, nil
-}
-
-// Find 按 protocol_hint 查找第一个在线插件。
-func (m *Manager) Find(protocolHint string) (pb.DecoderClient, bool) {
-	return m.registry.Find(protocolHint)
-}
-
-// FindByName 按插件名精确查找已注册的解码插件。
-func (m *Manager) FindByName(name string) (pb.DecoderClient, bool) {
-	return m.registry.FindByName(name)
-}
-
-// FindFor 是 owner 作用域版的 Find。
-func (m *Manager) FindFor(owner, protocolHint string) (pb.DecoderClient, bool) {
-	return m.registry.FindFor(owner, protocolHint)
-}
-
-// FindByNameFor 是 owner 作用域版的 FindByName。
-func (m *Manager) FindByNameFor(owner, name string) (pb.DecoderClient, bool) {
-	return m.registry.FindByNameFor(owner, name)
-}
-
-// GetPluginManifestFor 是 owner 作用域版的 GetPluginManifest。
-func (m *Manager) GetPluginManifestFor(owner, name string) ([]byte, error) {
-	return m.registry.GetPluginManifestFor(owner, name)
-}
-
-// Subscribe 订阅插件注册表状态变化事件（register/deregister/online/offline）。
-// 返回只读事件通道与退订函数。
-func (m *Manager) Subscribe() (<-chan PluginEvent, func()) {
-	return m.registry.Subscribe()
-}
-
-// List 返回已注册插件摘要。
-func (m *Manager) List() []PluginSummary {
-	return m.registry.ListSummaries()
-}
-
-// Close 关闭注册表服务。
-func (m *Manager) Close() error {
-	if m.registryCancel != nil {
-		m.registryCancel()
-	}
-	_ = m.registry.Close()
-	slog.Info("manager closed")
-	return nil
-}
-
-// SetAutoRestart 保留占位（Phase 3+ 再实现）。
-func (m *Manager) SetAutoRestart(enable bool) {
-	m.mu.Lock()
-	m.autoRestart = enable
-	m.mu.Unlock()
-}
-
-// RestartCount 保留占位（Phase 3+ 再实现）。
-func (m *Manager) RestartCount(path string) int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.restartCount[path]
-}
-
-// Restart 保留占位（Phase 3+ 再实现）。
-func (m *Manager) Restart(path string) error {
-	return fmt.Errorf("manual restart not yet implemented in registration mode")
 }

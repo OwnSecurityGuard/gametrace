@@ -25,7 +25,7 @@ var authzEvidence = map[string]bool{
 	"authorizeSession":           true, // 会话读取鉴权（authz.go）
 	"projectForAction":           true, // 项目 Action 加载 + 鉴权（authz.go）
 	"moveSessionToProject":       true, // 会话移动六步收口（project.go）
-	"handleMoveSessionToProject": true, // 工具别名转发（set_session_project → move）
+	"handleMoveSessionToProject": true, // move_session_to_project 工具入口（转六步收口）
 	"getDBPath":                  true, // 内部含 authorizeSession（main.go）
 	"openReader":                 true, // 内部经 getDBPath 鉴权
 	"visibleSessionFilter":       true, // 列表可见性 = owner ∪ 可见项目

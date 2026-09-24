@@ -89,8 +89,6 @@ type ControlStoreBackend interface {
 	ListSessionsForProject(ctx context.Context, projectID string, f SessionOwnerFilter) ([]SessionMeta, error)
 	// ReconcileRunningSessions 把上一进程残留的 running 会话标记为 stopped。
 	ReconcileRunningSessions(ctx context.Context, stoppedAt time.Time) (int64, error)
-	// SetSessionProject 把会话绑定到某项目（Deprecated：无鉴权裸更新，仅限内部）。
-	SetSessionProject(ctx context.Context, sessionID, projectID string) error
 	// MoveSessionToProject 是 move_session_to_project 的原子落点（带租户 CAS）。
 	MoveSessionToProject(ctx context.Context, sessionID, projectID, expectTenant string) error
 	// RecordDebugAccess 追加一条 plugin_debug_access 审计行。

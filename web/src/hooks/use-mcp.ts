@@ -509,16 +509,6 @@ export function useMoveSessionToProject() {
   });
 }
 
-/** @deprecated 兼容旧后端：改用 useMoveSessionToProject。 */
-export function useSetSessionProject() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (v: { session_id: string; project_id?: string }) =>
-      mcpClient.callTool<{ ok?: boolean }>("set_session_project", v),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions"] }),
-  });
-}
-
 /** add_project_member：向项目添加成员。pending=true 表示用户名尚未注册（待注册，对方注册同名后生效）。 */
 export function useAddProjectMember(projectId?: string) {
   const qc = useQueryClient();

@@ -178,22 +178,6 @@ UPDATE sessions SET status='stopped', stopped_at=$1 WHERE status='running'`, sto
 	return res.RowsAffected()
 }
 
-// SetSessionProject 将会话绑定到某项目（或传空串清空绑定）。
-//
-// Deprecated: 无鉴权裸更新，仅限已鉴权路径内部使用；新代码走 MoveSessionToProject。
-func (cs *PGControlStore) SetSessionProject(ctx context.Context, sessionID, projectID string) error {
-	res, err := cs.db.ExecContext(ctx,
-		`UPDATE sessions SET project_id=$1 WHERE session_id=$2`, projectID, sessionID)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return fmt.Errorf("session %s not found", sessionID)
-	}
-	return nil
-}
-
 // MoveSessionToProject 是 move_session_to_project 的原子落点（带租户 CAS，与 SQLite 版一致）。
 func (cs *PGControlStore) MoveSessionToProject(ctx context.Context, sessionID, projectID, expectTenant string) error {
 	res, err := cs.db.ExecContext(ctx,

@@ -2913,13 +2913,6 @@ func main() {
 		mcp.WithString("project_id", mcp.Description("Target project ID; empty to clear binding")),
 	), capture.handleMoveSessionToProject)
 
-	// Deprecated: 旧名别名，转发 move_session_to_project 的六步鉴权收口。
-	s.AddTool(mcp.NewTool("set_session_project",
-		mcp.WithDescription("Deprecated alias of move_session_to_project."),
-		mcp.WithString("session_id", mcp.Required(), mcp.Description("Session ID")),
-		mcp.WithString("project_id", mcp.Description("Project ID to bind; empty to clear")),
-	), capture.handleSetSessionProject)
-
 	// Script management tools removed: the Python script sandbox (save_script /
 	// list_scripts / run_script / delete_script) has been deleted. Arbitrary
 	// Python execution no longer lives in the capture control plane.

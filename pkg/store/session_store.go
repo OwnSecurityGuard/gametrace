@@ -388,25 +388,6 @@ UPDATE sessions SET status='stopped', stopped_at=? WHERE status='running'`, stop
 	return res.RowsAffected()
 }
 
-// SetSessionProject 将会话绑定到某项目（或传空串清空绑定）。
-// 会话不存在时返回错误。
-//
-// Deprecated: 这是无鉴权的裸更新，仅限已鉴权路径内部使用
-// （当前唯一调用方为 moveSessionToProject 的六步校验收口，见 2026-09-05 方案 §5.3）。
-// 新代码一律通过 MCP 层的 moveSessionToProject 走 ActionSessionMoveProject 授权。
-func (cs *ControlStore) SetSessionProject(ctx context.Context, sessionID, projectID string) error {
-	res, err := cs.db.ExecContext(ctx,
-		`UPDATE sessions SET project_id=? WHERE session_id=?`, projectID, sessionID)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return fmt.Errorf("session %s not found", sessionID)
-	}
-	return nil
-}
-
 // MoveSessionToProject 是 move_session_to_project 的原子落点：带租户 CAS
 // （会话租户与期望值不符时不更新，防止并发迁移期间的跨租户漂移）。
 // 权限校验在调用方（六步收口），本方法只保证原子性。

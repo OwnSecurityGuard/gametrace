@@ -108,7 +108,7 @@ message DecodeRawPacketsResponse {
 
 // TestPluginRequest 插件测试请求（隐私安全：不回传原始包）。
 message TestPluginRequest {
-  string session_id = 1;     // 原始包来源会话（仅离线/stopped）
+  string session_id = 1;     // 来源会话（离线或运行中均可，运行中走只读 WAL 采样）
   string plugin = 2;         // 被测插件名（按名路由，可不同于会话原插件）
   string protocol = 3;       // 可选过滤：协议
   string src = 4;            // 可选过滤：源 ip:port

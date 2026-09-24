@@ -390,8 +390,8 @@ func TestProjectCreatorCanManage(t *testing.T) {
 	}
 }
 
-// TestSetSessionProjectRoundTrip 验证 set_session_project 更新会话绑定的往返。
-func TestSetSessionProjectRoundTrip(t *testing.T) {
+// TestMoveSessionToProjectRoundTrip 验证 move_session_to_project 更新会话绑定的往返。
+func TestMoveSessionToProjectRoundTrip(t *testing.T) {
 	m, cs := newProjectMCP(t)
 	ctx := context.Background()
 	sessionID := "s-proj-1"
@@ -404,10 +404,10 @@ func TestSetSessionProjectRoundTrip(t *testing.T) {
 
 	sreq := mcp.CallToolRequest{}
 	sreq.Params.Arguments = map[string]any{"session_id": sessionID, "project_id": id}
-	if res, err := m.handleSetSessionProject(ctxOwner("alice"), sreq); err != nil {
+	if res, err := m.handleMoveSessionToProject(ctxOwner("alice"), sreq); err != nil {
 		t.Fatal(err)
 	} else if text := resultText(t, res); strings.Contains(text, `"ok":false`) {
-		t.Fatalf("set_session_project failed: %s", text)
+		t.Fatalf("move_session_to_project failed: %s", text)
 	}
 
 	meta, err := cs.GetSession(ctx, sessionID)

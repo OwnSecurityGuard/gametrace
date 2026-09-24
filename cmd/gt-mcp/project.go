@@ -532,7 +532,3 @@ func (m *mcpCapture) handleMoveSessionToProject(ctx context.Context, req mcp.Cal
 	return successResult(map[string]any{"session_id": sessionID, "project_id": projectID}), nil
 }
 
-// handleSetSessionProject 是 set_session_project 的 deprecated 别名，转调新收口。
-func (m *mcpCapture) handleSetSessionProject(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	return m.handleMoveSessionToProject(ctx, req)
-}

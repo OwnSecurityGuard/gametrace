@@ -77,13 +77,11 @@ func explainVerifyRequest(req *ExplainRequest) (*ExplainResult, error) {
 	if result == nil {
 		res.Summary = "no verify result recorded for " + req.Name
 		res.NextAction = "run verify_plugin to produce a verdict, then explain with that verdict"
-		defaultTracker.RecordExplain(req.Name, res)
 		return res, nil
 	}
 	if result.Verdict == "pass" {
 		res.Summary = "verify passed; nothing to explain"
 		res.NextAction = "plugin instance is validated; continue capturing traffic with it"
-		defaultTracker.RecordExplain(req.Name, res)
 		return res, nil
 	}
 
@@ -100,7 +98,6 @@ func explainVerifyRequest(req *ExplainRequest) (*ExplainResult, error) {
 	res.Findings = findings
 	res.Summary = fmt.Sprintf("verify=%s with %d decode finding(s)", result.Verdict, len(findings))
 	res.NextAction = verifyNextAction(findings)
-	defaultTracker.RecordExplain(req.Name, res)
 	return res, nil
 }
 
