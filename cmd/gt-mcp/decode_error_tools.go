@@ -19,6 +19,7 @@ import (
 // decodeErrorGroupView 是一类解码失败的对外形态。
 type decodeErrorGroupView struct {
 	// Kind: plugin（插件主动报"这条我解不了"）| transport（流断开/超时/包无法还原）
+	// | binding（会话绑定的插件解析不到可用实例，解码器从未接上）
 	Kind string `json:"kind"`
 	// Template 是归一化模板，同类错误共用，例如 "unexpected EOF at offset <n>"。
 	Template string `json:"template"`
@@ -116,7 +117,7 @@ func fmtTime(t time.Time) string {
 
 func registerDecodeErrorTools(s *server.MCPServer, capture *mcpCapture) {
 	s.AddTool(mcp.NewTool("query_decode_errors",
-		mcp.WithDescription("Explain WHY decoding failed, not just how many times. Returns decode failures grouped by normalized error template (so thousands of failures collapse into a handful of distinct causes), each with a count, a first-seen raw error sample and a representative raw packet id for drill-down. Use it right after seeing a non-zero decode_errors in get_session_status or list_all_sessions. Failures are persisted when a capture session stops, so stopped sessions are queryable."),
+		mcp.WithDescription("Explain WHY decoding failed, not just how many times. Returns decode failures grouped by normalized error template (so thousands of failures collapse into a handful of distinct causes), each with a count, a first-seen raw error sample and a representative raw packet id for drill-down. Kind vocabulary: 'plugin' = the decoder ran and rejected that packet, 'transport' = the decode stream itself broke, 'binding' = the plugin the session is bound to was never resolvable (not started / offline / owned by another project) so every packet stayed raw — for plugin and transport the count is per packet, for binding it is per state change, so a count of 1 with packets but 0 events still means the whole session went undecoded. Use it right after seeing a non-zero decode_errors in get_session_status or list_all_sessions, and also after seeing raw_packets > 0 with events == 0 (decode_errors can legitimately stay small there). Failures are persisted when a capture session stops, so stopped sessions are queryable."),
 		mcp.WithString("session_id", mcp.Description("Optional session ID to query; defaults to current session")),
 		mcp.WithNumber("limit", mcp.Description("Max error groups to return (0 = all). Groups are ordered by failure count desc")),
 	), capture.handleQueryDecodeErrors)

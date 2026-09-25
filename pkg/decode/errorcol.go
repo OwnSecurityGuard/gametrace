@@ -41,6 +41,10 @@ const (
 	ErrKindPlugin = "plugin"
 	// ErrKindTransport 表示链路层失败（流断开、请求发送失败、等待超时）。
 	ErrKindTransport = "transport"
+	// ErrKindBinding 表示解码器根本没接上：会话绑定的插件解析不到可用实例
+	//（未启动 / 已离线 / owner 与项目不符）。它按**状态跳变**记一次而非每包，
+	// 因为"0 事件 + 0 解码错误"曾是全链路最静默的失败形态。
+	ErrKindBinding = "binding"
 )
 
 // 归一化规则按"从具体到宽泛"排列，顺序不能换：
@@ -58,7 +62,8 @@ var (
 type DecodeErrorGroup struct {
 	// Fingerprint 是模板的短哈希，作为稳定标识（同一类错误跨会话可比）。
 	Fingerprint string
-	// Kind 区分插件主动报错与链路层失败，见 ErrKindPlugin / ErrKindTransport。
+	// Kind 区分插件主动报错、链路层失败与解码器未接入，见 ErrKindPlugin /
+	// ErrKindTransport / ErrKindBinding。
 	Kind string
 	// Template 是归一化后的错误模板，例如 "unknown message type <n>"。
 	Template string

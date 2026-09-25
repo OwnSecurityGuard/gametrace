@@ -29,7 +29,7 @@ type DecodeErrorRow struct {
 	SessionID string
 	// Fingerprint 是归一化模板的短哈希，会话内唯一。
 	Fingerprint string
-	// Kind 见 decode.ErrKindPlugin / decode.ErrKindTransport（存字符串，保持解耦）。
+	// Kind 见 decode.ErrKindPlugin / ErrKindTransport / ErrKindBinding（存字符串，保持解耦）。
 	Kind string
 	// Template 是归一化后的错误模板，例如 "unexpected EOF at offset <n>"。
 	Template string

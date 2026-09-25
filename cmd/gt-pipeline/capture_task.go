@@ -127,6 +127,9 @@ const (
 	decodeWaitTimeout = 30 * time.Second
 	// reconnectBackoff 是断流重连的最小间隔，避免重连失败进入紧循环。
 	reconnectBackoff = 5 * time.Second
+	// bindingReportGrace 是「解码器接不上」持续多久才算真问题。
+	// 先开抓包、几秒后才启动插件是正常用法，宽限期避免冤枉每个正常会话。
+	bindingReportGrace = 5 * time.Second
 	// 无解码器 / 解码队列满时待解码包进溢出队列（见 pending_decode.go），
 	// 容量按字节计、FIFO 回灌，不再有 2048 条的硬上限。
 )
@@ -561,6 +564,39 @@ func (t *captureTask) run() {
 	evtCh, evtUnsub := t.registry.Subscribe()
 	defer evtUnsub()
 
+	// 解码器接不上（绑定的插件解析不到实例 / 中途下线）曾经只有一行 Debug：
+	// 用户看到的是"有包、0 事件、0 解码错误"，平台等于什么也没说。这里按状态
+	// 跳变记一次 binding 错误 + 一条 WARN（resolveDecoder 每包都会被调，
+	// 不去重就是每包刷一条）。
+	var (
+		bindingIssue string    // 已上报的异常态，空串表示还没报
+		bindingState string    // 当前观测到的异常态
+		bindingSince time.Time // 当前异常态的起始时间
+	)
+	// 无解码器时抓到的是"只落原始帧"的包，原因必须点名到具体插件，
+	// 否则 owner 不匹配与插件没启动在界面上长得一样。
+	// 宽限期内不报：「先开抓包、几秒后才启动插件」是正常用法，立刻记失败
+	// 等于把每个正常会话都冤枉一次；插件接上后积压的包会回灌解码。
+	// 文本延迟到真要上报时才格式化 —— 这里每包都会被调。
+	reportBinding := func(state, format string, args ...any) {
+		if bindingState != state {
+			bindingState = state
+			bindingSince = time.Now()
+		}
+		if bindingIssue == state || time.Since(bindingSince) < bindingReportGrace {
+			return
+		}
+		bindingIssue = state
+		msg := fmt.Sprintf(format, args...)
+		t.errs.Add(decode.ErrKindBinding, "", "", "", msg)
+		t.logger.Warn(msg, "plugin", t.getPlugin())
+	}
+	// clearBinding 在解码器接上后结束这一轮异常态（下次再断算新的一笔）。
+	clearBinding := func() {
+		bindingIssue = ""
+		bindingState = ""
+	}
+
 	resolveDecoder := func(force bool) {
 		now := time.Now()
 		if !force && disp.Load() != nil && now.Sub(lastResolve) < 3*time.Second {
@@ -589,18 +625,25 @@ func (t *captureTask) run() {
 		}
 		switch decoderAction(found, decoderClient, disp.Load() != nil) {
 		case "idle":
-			t.logger.Debug("no decoder plugin available yet, will retry", "plugin", t.getPlugin())
+			// 未指定插件名是"只抓包不解码"的合法模式，不该记成失败。
+			if plugin := t.getPlugin(); plugin != "" {
+				reportBinding("idle",
+					"绑定的解析插件 %s 没有可用实例（未启动 / 已离线 / 与当前项目不匹配），抓到的包只存原始帧", plugin)
+			}
 			return
 		case "drop":
-			t.logger.Warn("decoder plugin went offline, dropping decoder; capture will store raw packets only", "plugin", t.getPlugin())
+			reportBinding("drop",
+				"解析插件 %s 在抓包中途下线，解码已停止，后续包只存原始帧", t.getPlugin())
 			if d := disp.Swap(nil); d != nil {
 				_ = d.Close()
 			}
 			decoderClient = nil
 			return
 		case "keep":
+			clearBinding()
 			return
 		case "build":
+			clearBinding()
 			// 插件变化（新注册 / 重启 / 替换）：关闭旧 dispatcher，建立新流。
 			if d := disp.Swap(nil); d != nil {
 				_ = d.Close()
@@ -608,7 +651,8 @@ func (t *captureTask) run() {
 			d, err := decode.NewDispatcher(found, t.sessionID, t.logger,
 				decode.WithServerPort(t.port), decode.WithErrorCollector(t.errs))
 			if err != nil {
-				t.logger.Warn("open dispatcher stream failed, decode disabled", "error", err, "plugin", t.getPlugin())
+				reportBinding("stream",
+					"解析插件 %s 已注册但解码流打不开，解码已停止：%s", t.getPlugin(), err)
 				decoderClient = nil
 				return
 			}
