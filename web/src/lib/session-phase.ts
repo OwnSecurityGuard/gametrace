@@ -11,6 +11,7 @@
 //  2. 纯函数、无 React 依赖，可被列表/详情/设备卡片共用，也便于单测；
 //  3. 数据缺失（降级态）时保守地报更靠前的阶段，不谎报"已完成"。
 
+import { captureSourceName, isProbeSource } from "@/lib/session-source";
 import type { SessionInfo } from "@/types/session";
 import type { SessionStatusResult } from "@/types/session-extra";
 
@@ -72,13 +73,6 @@ export interface PhaseInput {
   status?: SessionStatusResult | null;
 }
 
-/** 来源展示名。 */
-function sourceName(source?: string): string {
-  if (source === "agent") return "抓包探针";
-  if (source === "proxy") return "移动代理";
-  return "服务器网卡";
-}
-
 /** 取实时态的包数（gRPC 态与元数据降级态字段不同）。 */
 function packetsOf(meta?: SessionInfo | null, status?: SessionStatusResult | null): number {
   const live = (status?.packets_in ?? 0) + (status?.raw_count ?? 0);
@@ -118,7 +112,7 @@ export function isInterrupted(meta?: SessionInfo | null, status?: SessionStatusR
  *  → awaiting_traffic → capturing → decoding) → preparing
  */
 export function deriveSessionPhase({ meta, status }: PhaseInput): SessionPhase {
-  const isAgent = (meta?.source ?? status?.source_name) === "agent";
+  const isAgent = isProbeSource(meta?.source ?? status?.source_name);
   const running = (status?.state ?? meta?.status) === "running";
   const packets = packetsOf(meta, status);
   const events = eventsOf(meta, status);
@@ -165,8 +159,8 @@ const PORT_HINT = "确认游戏/客户端实际连的就是这个端口（netsta
 export function describeSessionPhase(input: PhaseInput): SessionPhaseView {
   const { meta, status } = input;
   const phase = deriveSessionPhase(input);
-  const src = sourceName(meta?.source ?? status?.source_name);
-  const isAgent = (meta?.source ?? status?.source_name) === "agent";
+  const src = captureSourceName(meta?.source ?? status?.source_name);
+  const isAgent = isProbeSource(meta?.source ?? status?.source_name);
   const packets = packetsOf(meta, status);
   const events = eventsOf(meta, status);
   const errors = decodeErrorsOf(meta, status);
@@ -295,27 +289,44 @@ export function describeSessionPhase(input: PhaseInput): SessionPhaseView {
         },
       };
 
-    case "capturing":
+    case "capturing": {
       mark("capture", "done");
       setStep("capture", "active");
+      const pluginName = meta?.plugin;
+      // 有包、0 事件、且解码侧已经报错：这几乎一定是插件没接上（未启动 / 离线 /
+      // owner 与项目不符），而不是"还在解析"。过去这里没有任何 guidance，
+      // 于是会话可以永远停在"等待 X 解析"，平台零提示。
+      const stalled = !!pluginName && errors > 0;
       return {
         phase,
-        title: "正在抓包",
-        shortTitle: "抓包中",
-        detail: meta?.plugin
-          ? `已收到 ${packets.toLocaleString()} 个包，等待 ${meta.plugin} 解析`
-          : `已收到 ${packets.toLocaleString()} 个包（未指定解析插件，仅抓包不解码）`,
-        tone: "live",
+        title: stalled ? "抓到包，没解析出事件" : "正在抓包",
+        shortTitle: stalled ? "有包无事件" : "抓包中",
+        detail: stalled
+          ? `已收到 ${packets.toLocaleString()} 个包，但 ${pluginName} 一个事件都没解析出来（只存了原始包）`
+          : pluginName
+            ? `已收到 ${packets.toLocaleString()} 个包，等待 ${pluginName} 解析`
+            : `已收到 ${packets.toLocaleString()} 个包（未指定解析插件，仅抓包不解码）`,
+        // 顺利推进时是 live（刚抓第一个包、事件还没落地属正常），卡住才转 warn。
+        tone: stalled ? "warn" : "live",
         steps,
         facts,
-        // 有包无事件且没配插件：这是配置问题，不是故障，但用户得知道。
-        guidance: meta?.plugin
-          ? undefined
-          : {
+        guidance: !pluginName
+          ? {
               title: "当前没有配置解析插件，只会抓包不会解码。",
               steps: ["停止抓包后重新选择解析插件，或用「切换插件」热切换"],
-            },
+            }
+          : stalled
+            ? {
+                title: `${pluginName} 没有接上这次会话。`,
+                steps: [
+                  `确认 ${pluginName} 进程在运行，并注册到了本次会话所属的项目 / 账号（owner 不符时平台查不到实例）`,
+                  "下方「解码失败」按原因分类列出了未接入的具体情形",
+                  "插件起来后无需重抓：这里会自动变成「正在解析」，积压的包会回灌解码",
+                ],
+              }
+            : undefined,
       };
+    }
 
     case "decoding":
       mark("decode", "done");
@@ -340,28 +351,51 @@ export function describeSessionPhase(input: PhaseInput): SessionPhaseView {
             : undefined,
       };
 
-    case "analyzable":
+    case "analyzable": {
       mark("ready", "done");
       setStep("ready", "done");
+      const pluginName = meta?.plugin;
+      // 只有包、没有事件：原始包/连接页仍可看，所以阶段还是「可分析」，
+      // 但绝不能只写"N 个包 / 0 个事件"就完事 —— 用户必须知道解码这一环没成。
       return {
         phase,
         title: "可分析",
         shortTitle: "可分析",
-        detail: `抓包已结束：${packets.toLocaleString()} 个包 / ${events.toLocaleString()} 个事件`,
-        tone: "done",
+        detail:
+          events === 0
+            ? `抓包已结束：${packets.toLocaleString()} 个包，但没有解析出任何事件（只有原始包可看）`
+            : `抓包已结束：${packets.toLocaleString()} 个包 / ${events.toLocaleString()} 个事件`,
+        tone: events === 0 ? "warn" : "done",
         steps,
         facts,
         guidance:
-          errors > 0
+          events === 0
             ? {
-                title: "本次有解码失败数据。",
-                steps: [
-                  `${errors.toLocaleString()} 条解码失败，下方按原因分类列出（含首条错误原文）`,
-                  "确认解析插件与协议版本匹配，必要时换插件重新抓",
-                ],
+                title: "本次抓包一个事件都没解析出来。",
+                steps: pluginName
+                  ? [
+                      `${packets.toLocaleString()} 个原始包都在：到「原始包」页选插件点「用插件解码」即可补出事件`,
+                      `确认解析插件 ${pluginName} 当时是否真的接上了（未启动 / 中途下线 / owner 与项目不符都会导致只抓包不解码）`,
+                      errors > 0
+                        ? `下方「解码失败」按原因分类列出了 ${errors.toLocaleString()} 条记录`
+                        : "没有记录到解码失败，说明解码器当时接上了却没产出事件 —— 通常是流量不属于该插件声明的协议",
+                    ]
+                  : [
+                      `${packets.toLocaleString()} 个原始包都在：到「原始包」页选插件点「用插件解码」即可补出事件`,
+                      "该会话当时未指定解析插件，只抓包不解码",
+                    ],
               }
-            : undefined,
+            : errors > 0
+              ? {
+                  title: "本次有解码失败数据。",
+                  steps: [
+                    `${errors.toLocaleString()} 条解码失败，下方按原因分类列出（含首条错误原文）`,
+                    "确认解析插件与协议版本匹配，必要时换插件重新抓",
+                  ],
+                }
+              : undefined,
       };
+    }
 
     case "empty":
       // 失败态：明确告诉用户"没抓到"，并列出该做什么，而不是只显示一个 0。

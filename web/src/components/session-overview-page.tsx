@@ -2,28 +2,41 @@
 //
 // 把 Session 从「一次抓包记录」提升为「一次调试工作单元」的默认落地页：
 // 回答用户点进一个会话时最关心的四件事——会话什么状态、抓了多久/多少、
-// 最近产生了什么（连接 / 协议事件）、下一步去哪分析（Connections / 协议数据）。
+// 最近产生了什么（连接 / 协议事件）、下一步去哪分析。
 // 不做新的数据模型，仅聚合既有查询（get_session_status / list_all_sessions /
 // list_connections / list_decoded_data）。
 // 第三件事（状态）由 lib/session-phase 翻译成人话阶段：running/stopped 只说明
 // 进程在不在，用户要的是「现在到哪一步、我该不该动手」。
-import { Cable, Table2, ArrowRight } from "lucide-react";
-import { useSessionStatus, useSessions, useConnections, useDecodedData } from "@/hooks/use-mcp";
-import { RAW_DEBUG_ENABLED } from "@/lib/env";
+//
+// 这里刻意没有「连接 / 协议数据 / 原始包」那排快捷按钮：视图切换由会话二级条
+// 独占，同一屏出现第二组入口就是两个真相。归属项目也不在这里重复——面包屑的
+// 中段就是项目名，而它比这里能拿到的 project_id 更早一步说明白。
+import { useState } from "react";
+import { ArrowRight, FolderInput } from "lucide-react";
+import {
+  useSessionStatus,
+  useSessions,
+  useConnections,
+  useDecodedData,
+  useProjects,
+  useMoveSessionToProject,
+} from "@/hooks/use-mcp";
+import { navigate } from "@/lib/router";
+import { sessionHref } from "@/lib/routes";
 import { describeSessionPhase } from "@/lib/session-phase";
+import { captureSourceName } from "@/lib/session-source";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "@/components/ui/toast";
 import { PhaseBadge, SessionPhaseTracker } from "@/components/session-phase-tracker";
 import { DecodeErrorPanel } from "@/components/decode-error-panel";
-
-/** 概览页可跳转的分析视图（与 App 的 ViewTab 对齐的子集）。 */
-export type OverviewTargetTab = "decoded" | "raw";
+import type { ConnectionSummary } from "@/types/connection";
 
 interface SessionOverviewPageProps {
-  sessionId: string | null;
-  onNavigate: (tab: OverviewTargetTab) => void;
+  sessionId: string;
+  /** 点连接行：把这条连接设为事件视图的过滤条件后跳转（与连接页同一动作）。 */
+  onSelectConn: (conn: ConnectionSummary) => void;
 }
 
 function fmtTime(iso?: string): string {
@@ -61,24 +74,72 @@ function StatCard({ label, value, hint }: { label: string; value: string; hint?:
   );
 }
 
-export function SessionOverviewPage({ sessionId, onNavigate }: SessionOverviewPageProps) {
+/**
+ * 未归属会话的归位入口。
+ *
+ * move_session_to_project 后端早就有，前端一直没有消费方，于是「开始抓包时忘了选项目」
+ * 就成了既成事实：会话只能留在未归属桶里。概览页是唯一会主动提醒这件事的地方。
+ */
+function AssignProjectRow({ sessionId }: { sessionId: string }) {
+  const { data } = useProjects();
+  const move = useMoveSessionToProject();
+  const projects = data?.projects ?? [];
+  const [target, setTarget] = useState("");
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-border bg-card/40 px-3 py-2">
+      <span className="text-xs text-muted-foreground">这次抓包还没有归属项目</span>
+      {projects.length === 0 ? (
+        <span className="text-xs text-muted-foreground/70">
+          你还没有项目 —— 在工作台新建一个后再回来归位。
+        </span>
+      ) : (
+        <>
+          <select
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            aria-label="选择要归入的项目"
+            className="h-7 max-w-[200px] rounded-md border border-input bg-background px-1.5 text-xs"
+          >
+            <option value="">选择项目…</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <Button
+            size="sm"
+            className="h-7"
+            disabled={!target || move.isPending}
+            onClick={() =>
+              move.mutate(
+                { session_id: sessionId, project_id: target },
+                {
+                  onSuccess: () => {
+                    const p = projects.find((x) => x.id === target);
+                    toast.success("已归入项目", p ? `会话现在属于「${p.name}」` : sessionId);
+                    setTarget("");
+                  },
+                  onError: (err) => toast.error("归位失败", err.message),
+                },
+              )
+            }
+          >
+            <FolderInput className="h-3.5 w-3.5" />归入项目
+          </Button>
+        </>
+      )}
+    </div>
+  );
+}
+
+export function SessionOverviewPage({ sessionId, onSelectConn }: SessionOverviewPageProps) {
   const { data: sessionsData, isLoading: sessionsLoading } = useSessions();
   const meta = sessionsData?.sessions?.find((s) => s.session_id === sessionId);
   const { data: status } = useSessionStatus(sessionId);
   const { data: connectionsData } = useConnections(sessionId, { limit: 5 });
-  const { data: eventsData } = useDecodedData(sessionId ?? null, { limit: 5 });
-
-  if (!sessionId) {
-    return (
-      <div className="flex h-full items-center justify-center p-6">
-        <EmptyState
-          icon={<Cable className="h-5 w-5" />}
-          title="选择一个会话"
-          hint="从左侧会话列表选择要分析的抓包会话，这里会展示它的概览与最近数据。"
-        />
-      </div>
-    );
-  }
+  const { data: eventsData } = useDecodedData(sessionId, { limit: 5 });
 
   if (sessionsLoading && !meta) {
     return (
@@ -91,7 +152,6 @@ export function SessionOverviewPage({ sessionId, onNavigate }: SessionOverviewPa
   }
 
   // —— 派生状态（gRPC 实时态优先，降级用会话元数据）——
-  const isAgentSource = meta?.source === "agent";
   const running = (status?.state ?? meta?.status) === "running";
   const packetsIn = (status?.packets_in ?? 0) + (status?.raw_count ?? 0);
   const rawCount = packetsIn > 0 ? packetsIn : (status?.raw_packets ?? meta?.raw_packets ?? 0);
@@ -113,11 +173,7 @@ export function SessionOverviewPage({ sessionId, onNavigate }: SessionOverviewPa
         )
       : (status?.duration_sec ?? meta?.duration_sec ?? 0);
   const connectionCount = connectionsData?.count ?? 0;
-  const sourceLabel = isAgentSource
-    ? "抓包探针"
-    : meta?.source === "proxy"
-      ? "移动代理"
-      : "服务器网卡";
+  const sourceLabel = captureSourceName(meta?.source);
 
   const recentConnections = connectionsData?.connections ?? [];
   const recentEvents = eventsData?.events ?? [];
@@ -125,39 +181,21 @@ export function SessionOverviewPage({ sessionId, onNavigate }: SessionOverviewPa
   return (
     <div className="h-full overflow-auto gt-scroll">
       <div className="mx-auto max-w-4xl space-y-5 p-6">
-        {/* 头部：会话身份 + 状态 */}
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="font-mono text-sm font-semibold text-foreground">
-                {sessionId}
-              </h1>
-              <PhaseBadge input={phaseInput} />
-              {meta?.plugin && <Badge variant="outline">{meta.plugin}</Badge>}
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {sourceLabel}
-              {meta?.port ? ` · 端口 ${meta.port}` : ""}
-              {meta?.owner ? ` · ${meta.owner}` : ""}
-              {meta?.project_id ? ` · 项目 ${meta.project_id}` : ""}
-            </p>
+        {/* 头部：会话身份 + 状态。视图入口在二级条，这里不放。 */}
+        <header>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="font-mono text-sm font-semibold text-foreground">{sessionId}</h1>
+            {meta?.plugin && <Badge variant="outline">{meta.plugin}</Badge>}
           </div>
-          <div className="flex flex-wrap gap-1.5">
-            <Button variant="outline" size="sm" className="h-8" onClick={() => onNavigate("decoded")}>
-              <Cable className="h-3.5 w-3.5" />
-              连接 / 协议
-            </Button>
-            <Button variant="outline" size="sm" className="h-8" onClick={() => onNavigate("decoded")}>
-              <Table2 className="h-3.5 w-3.5" />
-              协议数据
-            </Button>
-            {RAW_DEBUG_ENABLED && (
-              <Button variant="outline" size="sm" className="h-8" onClick={() => onNavigate("raw")}>
-                原始包
-              </Button>
-            )}
-          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {sourceLabel}
+            {meta?.port ? ` · 端口 ${meta.port}` : ""}
+            {meta?.owner ? ` · ${meta.owner}` : ""}
+          </p>
         </header>
+
+        {/* 归属动作只在没归属时出现：已归属的会话由面包屑说明，不需要第二条路径 */}
+        {meta && !meta.project_id && <AssignProjectRow sessionId={sessionId} />}
 
         {/* 阶段追踪：进度条 + 事实核对表 + 排查指引。
             取代原先单一的「等待 Agent 接入」横幅——现在零流量、未连接、
@@ -187,14 +225,14 @@ export function SessionOverviewPage({ sessionId, onNavigate }: SessionOverviewPa
           <StatCard label="抓包源" value={sourceLabel} />
         </div>
 
-        {/* 最近连接 */}
+        {/* 最近连接：行点击 = 用这条连接过滤事件视图（与连接页一致的动作） */}
         <section>
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-medium text-foreground">最近连接</h2>
             {recentConnections.length > 0 && (
               <button
                 type="button"
-                onClick={() => onNavigate("decoded")}
+                onClick={() => navigate(sessionHref(sessionId, "connections"))}
                 className="inline-flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
               >
                 全部 {fmtNum(connectionCount)} 条
@@ -211,7 +249,8 @@ export function SessionOverviewPage({ sessionId, onNavigate }: SessionOverviewPa
                   <li key={c.conn_id}>
                     <button
                       type="button"
-                      onClick={() => onNavigate("decoded")}
+                      onClick={() => onSelectConn(c)}
+                      title="按这条连接查看协议事件"
                       className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-muted/40"
                     >
                       <div className="min-w-0 flex-1">
@@ -240,7 +279,7 @@ export function SessionOverviewPage({ sessionId, onNavigate }: SessionOverviewPa
             {recentEvents.length > 0 && (
               <button
                 type="button"
-                onClick={() => onNavigate("decoded")}
+                onClick={() => navigate(sessionHref(sessionId, "events"))}
                 className="inline-flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
               >
                 查看全部
@@ -259,7 +298,7 @@ export function SessionOverviewPage({ sessionId, onNavigate }: SessionOverviewPa
                   <li key={ev.id}>
                     <button
                       type="button"
-                      onClick={() => onNavigate("decoded")}
+                      onClick={() => navigate(sessionHref(sessionId, "events"))}
                       className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-muted/40"
                     >
                       <Badge variant="outline" className="shrink-0 font-mono text-[10px]">

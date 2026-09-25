@@ -11,9 +11,10 @@ function group(over: Partial<DecodeErrorGroup> = {}): DecodeErrorGroup {
 }
 
 describe("describeErrorKind", () => {
-  it("区分插件报错与链路失败", () => {
+  it("区分插件报错、链路失败与插件未接入", () => {
     expect(describeErrorKind("plugin")).toBe("插件无法解析");
     expect(describeErrorKind("transport")).toBe("解码链路中断");
+    expect(describeErrorKind("binding")).toBe("解析插件未接入");
   });
 
   it("未知来源不炸也不撒谎", () => {
@@ -22,9 +23,11 @@ describe("describeErrorKind", () => {
 });
 
 describe("errorKindTone", () => {
-  it("插件错误是待排查（warn），链路中断是故障（error）", () => {
+  it("插件错误是待排查（warn），链路中断与插件未接入是故障（error）", () => {
     expect(errorKindTone("plugin")).toBe("warn");
     expect(errorKindTone("transport")).toBe("error");
+    // binding 意味着整场会话一个事件都不会有，比单包链路错误更该显眼。
+    expect(errorKindTone("binding")).toBe("error");
     expect(errorKindTone("?")).toBe("muted");
   });
 });
@@ -41,6 +44,12 @@ describe("summarizeDecodeErrors", () => {
   it("只有一类时直接点名", () => {
     expect(summarizeDecodeErrors([group({ count: 100 })], 100)).toBe(
       "全部是同一类错误：插件无法解析",
+    );
+  });
+
+  it("只有 1 次的插件未接入也要被点名 —— 它解释的是整场 0 事件", () => {
+    expect(summarizeDecodeErrors([group({ kind: "binding", count: 1 })], 1)).toBe(
+      "全部是同一类错误：解析插件未接入",
     );
   });
 

@@ -1,5 +1,5 @@
 /**
- * 前端过滤工具（协议数据页的事件 / 关系 / 状态变更 / 原始数据四视图共用）。
+ * 前端过滤工具（协议数据页的事件 / 状态变更 / 原始数据等视图共用）。
  *
  * 语义约定：
  *  - 大小写不敏感的子串匹配；
@@ -27,9 +27,10 @@ export function fuzzyTokens(query: string): string[] {
 /** 消息方向过滤值："" = 全部方向（不过滤），其余为后端 direction 枚举。 */
 export type DirectionFilter = "" | "client_to_server" | "server_to_client";
 
-/** 语义标签过滤值："" = 全部（不过滤），其余为 SDK annotate 闭集。
- *  过滤在服务端 list_decoded_data 完成（按 meta.semantic 数组成员匹配），前端仅透传。 */
-export type SemanticFilter = "" | "request" | "response" | "notification" | "error";
+/** 语义标签过滤集合（SDK annotate 结果）。空数组 = 全部（不过滤）。
+ *  词表由每个项目的解码插件声明，取值与数量都不固定，所以是集合而非闭集；
+ *  多选按 OR 合并，过滤在服务端 list_decoded_data 的 semantics 参数完成，前端仅透传。 */
+export type SemanticFilter = string[];
 
 /** 事件是否命中方向过滤（空值恒真，与模糊搜索叠加为 AND）。 */
 export function eventMatchesDirection(ev: DecodedEvent, direction: DirectionFilter): boolean {

@@ -60,6 +60,7 @@ import type {
   ProjectRule,
   GetProjectResult,
 } from "@/types/project";
+import type { ProtocolCatalogResult } from "@/types/protocol-catalog";
 
 /** 查询 session 列表 */
 export function useSessions() {
@@ -73,7 +74,17 @@ export function useSessions() {
 /** 查询指定 session 的解码数据 */
 export function useDecodedData(
   sessionId: string | null,
-  options: { limit?: number; offset?: number; filter?: string; connId?: string | null; semantic?: string },
+  options: {
+    limit?: number;
+    offset?: number;
+    filter?: string;
+    connId?: string | null;
+    /**
+     * 语义标签集合（SDK annotate 结果），服务端按 OR 匹配 meta.semantic。
+     * 词表由各插件决定，因此不固定长度也不固定取值 —— 前端语义多选下拉用这个。
+     */
+    semantics?: string[];
+  },
 ) {
   return useQuery({
     queryKey: ["decodedData", sessionId, options],
@@ -84,13 +95,31 @@ export function useDecodedData(
         offset: options.offset,
         filter: options.filter,
         conn_id: options.connId ?? undefined,
-        semantic: options.semantic,
+        semantics: options.semantics?.length ? options.semantics : undefined,
       }),
     enabled: !!sessionId,
     placeholderData: keepPreviousData, // 翻页/筛选时不闪骨架屏，沿用上一页数据
     // 抓包是实时写入，需要轮询才能把新解码的事件持续拉出来；
     // 没有轮询时查询只在 enabled 变 true 时触发一次，之后表格永远停留在那一刻的快照。
     refetchInterval: sessionId ? 2000 : false,
+  });
+}
+
+/**
+ * 协议级聚合目录：后端一次扫全量事件再聚合，代价远高于分页查询。
+ * 用途是「这次抓包有哪些协议 / 各自出现过哪些语义标签」，供语义下拉取词表。
+ * 因此轮询要慢（30s）：会话运行中新协议类型出现的频率是分钟级，2s 一轮纯属浪费。
+ */
+export function useProtocolCatalog(sessionId: string | null) {
+  return useQuery({
+    queryKey: ["protocolCatalog", sessionId],
+    queryFn: () =>
+      mcpClient.callTool<ProtocolCatalogResult>("get_protocol_catalog", {
+        session_id: sessionId ?? undefined,
+        limit: 500,
+      }),
+    enabled: !!sessionId,
+    refetchInterval: sessionId ? 30_000 : false,
   });
 }
 
@@ -712,7 +741,7 @@ export function useProxyLeases() {
 }
 
 /** create_proxy_lease：创建独立代理抓包租约（独立端口 + 独立 agent + 独立会话）。
- * 默认自动开抓包；noAutoStart=true 只建出口。 */
+ * 默认自动开抓包；noAutoStart=true 只建租约。 */
 export function useCreateProxyLease() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -734,7 +763,7 @@ export function useCreateProxyLease() {
 
 /** release_proxy_lease：释放租约（停会话 + 杀 agent + 回收端口，幂等）。
  * 注意：与 start/stop_lease_capture 是不同动作，前者删租约（端口归池、QR 失效），
- * 后者只关/开抓包（出口保留）。误按 release 想再创建会拿到不同端口。 */
+ * 后者只关/开抓包（租约保留）。误按 release 想再创建会拿到不同端口。 */
 export function useReleaseProxyLease() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -747,7 +776,7 @@ export function useReleaseProxyLease() {
   });
 }
 
-/** start_lease_capture：在已有租约上开新一轮抓包（出口端口/QR 不变）。
+/** start_lease_capture：在已有租约上开新一轮抓包（代理端口/QR 不变）。
  * 返回新的 session_id 与最新 lease 视图；调用方应同时使能 sessions 列表刷新。 */
 export function useStartLeaseCapture() {
   const queryClient = useQueryClient();
@@ -766,7 +795,7 @@ export function useStartLeaseCapture() {
   });
 }
 
-/** stop_lease_capture：停掉租约当前的抓包会话回归 idle（出口/agent 保留）。 */
+/** stop_lease_capture：停掉租约当前的抓包会话回归 idle（租约/agent 保留）。 */
 export function useStopLeaseCapture() {
   const queryClient = useQueryClient();
   return useMutation({

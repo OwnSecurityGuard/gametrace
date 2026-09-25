@@ -1,6 +1,6 @@
 // 协议事件展示的公共工具与组件。
 //
-// 从 event-table.tsx 抽出，供事件表格、会话级关系树、状态变更等视图复用，
+// 从 event-table.tsx 抽出，供事件表格、状态变更等视图复用，
 // 避免在多处复制 extractMeta / MessageCell / JSON 高亮等逻辑。
 import { useMemo, useState } from "react";
 import { ArrowRight, ArrowLeft, ChevronRight } from "lucide-react";

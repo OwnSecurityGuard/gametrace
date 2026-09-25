@@ -1,7 +1,7 @@
 /** 代理抓包租约快照（list_proxy_leases / get_proxy_lease / create_proxy_lease /
  *  start_lease_capture / stop_lease_capture 返回）。
  *
- * 租约（agent + 出口端口 + 控制端口）与抓包会话（mobile session + 抓到的
+ * 租约（agent + 代理端口 + 控制端口）与抓包会话（mobile session + 抓到的
  *  SQLite）解耦：lease_id 跨多次抓包不变；session_id 在 idle 时为 ""，
  * 抓包中时是真实会话 id。旧版「lease_id = session_id 1:1」已废止。 */
 export interface ProxyLease {
@@ -120,7 +120,7 @@ export interface CreateProxyLeaseVars {
   device?: string;
   /** 租约会话归属的项目 id。 */
   projectId?: string;
-  /** true=只建出口不立即抓包；默认 false 自动开抓包。 */
+  /** true=只建租约不立即抓包；默认 false 自动开抓包。 */
   noAutoStart?: boolean;
 }
 

@@ -79,6 +79,26 @@ describe("deriveSessionPhase", () => {
     );
   });
 
+  it("停了但 0 事件时不是一句「可分析」就完事，要给出补解码的路", () => {
+    const view = describeSessionPhase({
+      meta: meta({ status: "stopped", raw_packets: 1000, events: 0, decode_errors: 1 }),
+      status: status({ state: "stopped", decode_errors: 1 }),
+    });
+    expect(view.tone).toBe("warn");
+    expect(view.detail).toContain("没有解析出任何事件");
+    const tips = view.guidance?.steps.join(" ") ?? "";
+    expect(tips).toContain("用插件解码");
+    expect(tips).toContain("1 条");
+  });
+
+  it("停了 0 事件且没有解码失败时，说的是「接上了却没产出」而不是旧版本", () => {
+    const view = describeSessionPhase({
+      meta: meta({ status: "stopped", raw_packets: 1000, events: 0 }),
+      status: status({ state: "stopped" }),
+    });
+    expect(view.guidance?.steps.join(" ")).toContain("流量不属于该插件声明的协议");
+  });
+
   it("元数据 running 但实时态已终态判定为中断（pipeline 重启后的 stale）", () => {
     expect(deriveSessionPhase({ meta: meta(), status: status({ state: "stopped" }) })).toBe(
       "interrupted",
@@ -159,6 +179,30 @@ describe("describeSessionPhase", () => {
     });
     expect(view.phase).toBe("capturing");
     expect(view.guidance?.title).toContain("没有配置解析插件");
+  });
+
+  it("绑了插件、有包无事件且已有解码失败：说清插件没接上，而不是继续「等待解析」", () => {
+    const view = describeSessionPhase({
+      meta: meta({ decode_errors: 1 }),
+      status: status({ agent_connected: true, raw_count: 800, decode_errors: 1 }),
+    });
+    expect(view.phase).toBe("capturing");
+    expect(view.tone).toBe("warn");
+    expect(view.title).toContain("没解析出事件");
+    const tips = view.guidance?.steps.join(" ") ?? "";
+    expect(tips).toContain("godot-ecs");
+    // 热加载是真的：别让用户以为必须重抓。
+    expect(tips).toContain("无需重抓");
+  });
+
+  it("刚抓到第一个包、事件还没落地时不吓唬用户", () => {
+    const view = describeSessionPhase({
+      meta: meta(),
+      status: status({ agent_connected: true, raw_count: 3 }),
+    });
+    expect(view.phase).toBe("capturing");
+    expect(view.tone).toBe("live");
+    expect(view.guidance).toBeUndefined();
   });
 
   it("decoding 阶段无解码错误时不给指引（别拿噪音打扰用户）", () => {

@@ -242,10 +242,15 @@ body {
   0%   { transform: translateX(-100%); }
   100% { transform: translateX(350%); }
 }
+@keyframes gt-drawer-in {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
 
 .gt-fade-in { animation: gt-fade-in 0.25s ease-out both; }
 .gt-pop-in  { animation: gt-pop-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both; }
 .gt-toast-in { animation: gt-toast-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.gt-drawer-in { animation: gt-drawer-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both; }
 
 /* 数据刷新中的顶部进度条（keepPreviousData 期间提示后台正在拉取）。
    关键：绝对定位浮层，不占文档流空间，避免出现/消失时把表格顶动造成抖动。 */

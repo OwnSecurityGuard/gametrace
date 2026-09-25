@@ -1,11 +1,11 @@
-// ProjectPage — 「项目详情」页（项目作为一等组织单元）。
+// ProjectPage — 项目空间的主体（项目作为一等组织单元）。
 //
-// 展示项目身份（名称/game/创建者/描述）、运行状态（派生自最近会话）、成员、
-// 解码插件与规则（关联 chips，管理员可增删），以及最近会话入口。不做复杂管理后台，
-// 仅提供轻量的关联 chips + 增删表单 + 一键抓包。
-// 插件关联从「已注册插件」中选择（真实资源），而不是自由输入字符串。
-import { useState } from "react";
-import { ArrowLeft, Play, Plus, X } from "lucide-react";
+// 章节由 URL 决定，而不是页面内部状态：
+//   · `#/project/:id`            → 项目身份 + 会话清单
+//   · `#/project/:id/config/:tab` → 项目身份 + 成员 / 解码插件 / 规则 中的一栏
+// 清单只有这一份：搜索、只看我的、批量删除、逐条删除都在这里，左栏只做空间导航。
+import { useState, type Ref } from "react";
+import { Play, Plus, ShieldAlert, X } from "lucide-react";
 import {
   useProject,
   useAddProjectMember,
@@ -21,27 +21,28 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
+import { SessionList } from "@/components/session-list";
+import { navigate } from "@/lib/router";
+import { WORKSPACE_HREF, type ProjectConfigTab, type ProjectSection } from "@/lib/routes";
 import type { ProjectDetail, ProjectRecentSession, ProjectRole } from "@/types/project";
 
 interface ProjectPageProps {
   projectId: string;
-  onBack: () => void;
+  /** 当前选中的会话（项目空间一般为空，用于高亮与实时统计）。 */
+  selectedSessionId?: string | null;
+  /** 会话删除后回调，用于清空上层选中态 */
+  onDeletedSession?: (sessionId: string) => void;
+  /** Ctrl/Cmd+K 聚焦这里的会话搜索框 */
+  searchInputRef?: Ref<HTMLInputElement>;
+  section: ProjectSection;
+  configTab: ProjectConfigTab;
   onSelectSession: (sessionId: string) => void;
-  /** 从项目一键抓包（带项目默认端口/插件，抓包会话自动归属该项目） */
-  onStartProject: (p: { id: string; name: string; port?: number; plugin?: string }) => void;
+  /** 以该项目开始抓包（自动带入默认端口/插件，会话归属该项目） */
+  onStartCapture: (projectId: string) => void;
 }
 
 function statusDot(status?: string) {
-  return status === "running" ? "bg-emerald-500" : "bg-muted-foreground/40";
-}
-
-function fmtTime(iso?: string) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${hh}:${mm}`;
+  return status === "running" ? "bg-success" : "bg-muted-foreground/40";
 }
 
 function uid(): string {
@@ -52,17 +53,21 @@ function uid(): string {
 
 export function ProjectPage({
   projectId,
-  onBack,
+  section,
+  configTab,
+  selectedSessionId,
+  onDeletedSession,
+  searchInputRef,
   onSelectSession,
-  onStartProject,
+  onStartCapture,
 }: ProjectPageProps) {
-  const { data, isLoading, isError } = useProject(projectId);
+  const { data, isLoading, isError, error } = useProject(projectId);
   const project: ProjectDetail | undefined = data?.project;
-  const recentSessions: ProjectRecentSession[] =
-    data?.recent_sessions ?? project?.recent_sessions ?? [];
+  const recentSessions: ProjectRecentSession[] = data?.recent_sessions ?? project?.recent_sessions ?? [];
 
-  // 权限入口由后端下发（get_project.capabilities，authz.Action 列表），
-  // 前端不再自行判权（2026-09-05：权限判定统一收口在 pkg/authz）。
+  // 权限入口由后端下发（get_project.capabilities 是"当前调用者被放行的管理动作"，
+  // authz.Action 列表），前端不再自行判权（2026-09-05：权限判定统一收口在 pkg/authz）。
+  // 注意 capabilities 只含写动作：读权限由 get_project 本身把关，被拒时整个调用报错。
   // capabilities 缺失时（旧后端）回退到本地启发式判断。
   const identity = useIdentity();
   const caps = data?.capabilities;
@@ -201,16 +206,22 @@ export function ProjectPage({
   }
 
   if (isError || !project) {
+    // 读权限没有独立信号：非成员时 get_project 整个调用被 authz 拒掉（forbidden）。
+    const msg = error instanceof Error ? error.message : "";
+    const forbidden = /forbidden/i.test(msg);
     return (
       <div className="mx-auto max-w-4xl p-6">
         <EmptyState
-          icon={<Play className="h-5 w-5" />}
-          title={isError ? "项目加载失败" : "项目不存在"}
-          hint={isError ? data?.error ?? "无法加载项目详情，请稍后重试。" : "该项目可能已被删除，或你暂无访问权限。"}
+          icon={forbidden ? <ShieldAlert className="h-5 w-5" /> : <Play className="h-5 w-5" />}
+          title={forbidden ? "无权访问该项目" : isError ? "项目加载失败" : "项目不存在"}
+          hint={
+            forbidden
+              ? "你不是这个项目的成员，项目内容按成员边界隐藏。让项目 Owner 在成员里加上你的用户名。"
+              : (msg || "该项目可能已被删除。")
+          }
           action={
-            <Button variant="outline" onClick={onBack}>
-              <ArrowLeft className="h-4 w-4" />
-              返回
+            <Button variant="outline" onClick={() => navigate(WORKSPACE_HREF)}>
+              回到工作台
             </Button>
           }
         />
@@ -221,16 +232,6 @@ export function ProjectPage({
   return (
     <div className="h-full overflow-auto gt-scroll">
       <div className="mx-auto max-w-4xl space-y-6 p-6">
-        {/* 返回 + 头部 */}
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          返回我的抓包
-        </button>
-
         <header className="rounded-2xl border border-border bg-card/60 p-5">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
@@ -238,7 +239,9 @@ export function ProjectPage({
                 <h1 className="text-lg font-semibold gt-gradient-text">{project.name}</h1>
                 {project.game && <Badge variant="outline">{project.game}</Badge>}
                 <Badge variant="secondary">
-                  <span className={`mr-1 h-1.5 w-1.5 rounded-full ${statusDot(running ? "running" : undefined)}`} />
+                  <span
+                    className={`mr-1 h-1.5 w-1.5 rounded-full ${statusDot(running ? "running" : undefined)}`}
+                  />
                   {running ? "在线" : "离线"}
                 </Badge>
               </div>
@@ -255,14 +258,7 @@ export function ProjectPage({
               variant="default"
               size="sm"
               className="h-8 shrink-0"
-              onClick={() =>
-                onStartProject({
-                  id: project.id,
-                  name: project.name,
-                  port: project.default_port,
-                  plugin: project.default_plugin,
-                })
-              }
+              onClick={() => onStartCapture(project.id)}
               title="以该项目开始抓包（自动带入默认端口/插件，会话归属本项目）"
             >
               <Play className="h-4 w-4" />
@@ -271,272 +267,247 @@ export function ProjectPage({
           </div>
         </header>
 
-        {/* 成员 */}
-        <section>
-          <h2 className="text-sm font-medium text-foreground">成员</h2>
-          <div className="mt-2 rounded-2xl border border-border bg-card/60 p-4">
-            {/* Owner 不在 members 表（SSOT 是 projects.owner），单独成行。 */}
-            {project.owner ? (
-              <ul className="mb-1.5 space-y-1.5">
-                <li className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="truncate text-sm">{project.owner}</span>
-                    <Badge variant="default">Owner</Badge>
-                  </div>
-                </li>
-              </ul>
-            ) : null}
-            {members.length === 0 ? (
-              <p className="text-sm text-muted-foreground">暂无其他成员。</p>
-            ) : (
-              <ul className="space-y-1.5">
-                {members.map((m) => {
-                  const isProjectOwner = project.owner === m.user;
-                  // 「待注册」仅在 token 多用户模式下有意义（匿名单机 identity=local）。
-                  const showPending = !isProjectOwner && !m.registered && identity !== null && identity.owner !== "local";
-                  return (
-                    <li
-                      key={m.user}
-                      className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-muted/40"
-                    >
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="truncate text-sm">{m.user}</span>
-                        <Badge variant={isProjectOwner ? "default" : "outline"}>
-                          {isProjectOwner ? "Owner" : m.role === "admin" ? "管理员" : "成员"}
-                        </Badge>
-                        {showPending && (
-                          <Badge
-                            variant="outline"
-                            className="text-muted-foreground"
-                            title="该用户名尚未注册：对方在「设置 → 快速开始」注册同名身份后自动生效"
-                          >
-                            待注册
+        {/* 配置：一次一栏，页签在左栏，位置在 URL */}
+        {section === "config" && configTab === "members" && (
+          <section>
+            <h2 className="text-sm font-medium text-foreground">成员</h2>
+            <div className="mt-2 rounded-2xl border border-border bg-card/60 p-4">
+              {/* Owner 不在 members 表（SSOT 是 projects.owner），单独成行。 */}
+              {project.owner ? (
+                <ul className="mb-1.5 space-y-1.5">
+                  <li className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-sm">{project.owner}</span>
+                      <Badge variant="default">Owner</Badge>
+                    </div>
+                  </li>
+                </ul>
+              ) : null}
+              {members.length === 0 ? (
+                <p className="text-sm text-muted-foreground">暂无其他成员。</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {members.map((m) => {
+                    const isProjectOwner = project.owner === m.user;
+                    // 「待注册」仅在 token 多用户模式下有意义（匿名单机 identity=local）。
+                    const showPending =
+                      !isProjectOwner && !m.registered && identity !== null && identity.owner !== "local";
+                    return (
+                      <li
+                        key={m.user}
+                        className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-muted/40"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate text-sm">{m.user}</span>
+                          <Badge variant={isProjectOwner ? "default" : "outline"}>
+                            {isProjectOwner ? "Owner" : m.role === "admin" ? "管理员" : "成员"}
                           </Badge>
+                          {showPending && (
+                            <Badge
+                              variant="outline"
+                              className="text-muted-foreground"
+                              title="该用户名尚未注册：对方在「设置 → 快速开始」注册同名身份后自动生效"
+                            >
+                              待注册
+                            </Badge>
+                          )}
+                        </div>
+                        {isProjectAdmin && !isProjectOwner && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveMember(m.user)}
+                            title="移除成员"
+                            className="rounded-md p-1 text-muted-foreground hover:bg-muted/50 hover:text-destructive"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
                         )}
-                      </div>
-                      {isProjectAdmin && !isProjectOwner && (
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+
+              {isProjectAdmin && (
+                <div className="mt-3 grid gap-2 border-t border-border pt-3 sm:grid-cols-[1fr_120px_auto]">
+                  <input
+                    value={memberUser}
+                    onChange={(e) => setMemberUser(e.target.value)}
+                    placeholder="用户名"
+                    className="h-9 rounded-md border border-input bg-background px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+                  />
+                  <select
+                    value={memberRole}
+                    onChange={(e) => setMemberRole(e.target.value as ProjectRole)}
+                    className="h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+                  >
+                    <option value="member">成员</option>
+                    <option value="admin">管理员</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleAddMember}
+                    disabled={addMember.isPending || !memberUser.trim()}
+                    className="inline-flex h-9 items-center justify-center gap-1 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    添加
+                  </button>
+                </div>
+              )}
+              {isProjectAdmin && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  成员以用户名标识：对方若尚未注册，会以「待注册」状态加入；对方在 「设置 →
+                  没有令牌？快速开始」注册同名身份后自动生效，即可看到本项目并使用项目插件。
+                </p>
+              )}
+            </div>
+          </section>
+        )}
+
+        {section === "config" && configTab === "plugins" && (
+          <section>
+            <h2 className="text-sm font-medium text-foreground">解码插件</h2>
+            <div className="mt-2 rounded-2xl border border-border bg-card/60 p-4">
+              {plugins.length === 0 ? (
+                <p className="text-sm text-muted-foreground">未配置解码插件。</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {plugins.map((pl) => (
+                    <span
+                      key={pl.id}
+                      className="inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-xs text-foreground"
+                    >
+                      {pl.name}
+                      {(isProjectAdmin || pl.owner === identity?.owner) && (
                         <button
                           type="button"
-                          onClick={() => handleRemoveMember(m.user)}
-                          title="移除成员"
-                          className="rounded-md p-1 text-muted-foreground hover:bg-muted/50 hover:text-destructive"
+                          onClick={() => handleRemovePlugin(pl.id)}
+                          title="移除插件"
+                          className="text-muted-foreground hover:text-destructive"
                         >
-                          <X className="h-3.5 w-3.5" />
+                          <X className="h-3 w-3" />
                         </button>
                       )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+                    </span>
+                  ))}
+                </div>
+              )}
 
-            {isProjectAdmin && (
-              <div className="mt-3 grid gap-2 border-t border-border pt-3 sm:grid-cols-[1fr_120px_auto]">
-                <input
-                  value={memberUser}
-                  onChange={(e) => setMemberUser(e.target.value)}
-                  placeholder="用户名"
-                  className="h-9 rounded-md border border-input bg-background px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-                />
-                <select
-                  value={memberRole}
-                  onChange={(e) => setMemberRole(e.target.value as ProjectRole)}
-                  className="h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-                >
-                  <option value="member">成员</option>
-                  <option value="admin">管理员</option>
-                </select>
-                <button
-                  type="button"
-                  onClick={handleAddMember}
-                  disabled={addMember.isPending || !memberUser.trim()}
-                  className="inline-flex h-9 items-center justify-center gap-1 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  添加
-                </button>
-              </div>
-            )}
-            {isProjectAdmin && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                成员以用户名标识：对方若尚未注册，会以「待注册」状态加入；对方在
-                「设置 → 没有令牌？快速开始」注册同名身份后自动生效，即可看到本项目并使用项目插件。
-              </p>
-            )}
-          </div>
-        </section>
-
-        {/* 解码插件 */}
-        <section>
-          <h2 className="text-sm font-medium text-foreground">解码插件</h2>
-          <div className="mt-2 rounded-2xl border border-border bg-card/60 p-4">
-            {plugins.length === 0 ? (
-              <p className="text-sm text-muted-foreground">未配置解码插件。</p>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {plugins.map((pl) => (
-                  <span
-                    key={pl.id}
-                    className="inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-xs text-foreground"
-                  >
-                    {pl.name}
-                    {(isProjectAdmin || pl.owner === identity?.owner) && (
+              {canManagePlugins && (
+                <div className="mt-3 border-t border-border pt-3">
+                  {candidatePlugins.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      {registeredPluginNames.length === 0
+                        ? "当前没有已注册的插件。先在「插件」页启动解析器，使其注册到 Pipeline 后再关联。"
+                        : isProjectAdmin
+                          ? "所有已注册插件均已关联到本项目。"
+                          : "你名下所有已注册插件均已关联到本项目。"}
+                    </p>
+                  ) : (
+                    <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                      <select
+                        value={pluginName}
+                        onChange={(e) => setPluginName(e.target.value)}
+                        aria-label="选择已注册插件"
+                        className="h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+                      >
+                        <option value="">选择已注册插件…</option>
+                        {candidatePlugins.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
                       <button
                         type="button"
-                        onClick={() => handleRemovePlugin(pl.id)}
-                        title="移除插件"
-                        className="text-muted-foreground hover:text-destructive"
+                        onClick={handleAddPlugin}
+                        disabled={addPlugin.isPending || !pluginName.trim()}
+                        className="inline-flex h-9 items-center justify-center gap-1 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50"
                       >
-                        <X className="h-3 w-3" />
+                        <Plus className="h-3.5 w-3.5" />
+                        添加
                       </button>
-                    )}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {canManagePlugins && (
-              <div className="mt-3 border-t border-border pt-3">
-                {candidatePlugins.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    {registeredPluginNames.length === 0
-                      ? "当前没有已注册的插件。先在「插件」页启动解析器，使其注册到 Pipeline 后再关联。"
-                      : isProjectAdmin
-                        ? "所有已注册插件均已关联到本项目。"
-                        : "你名下所有已注册插件均已关联到本项目。"}
+                    </div>
+                  )}
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {isProjectAdmin
+                      ? "可添加任意已注册插件；添加后项目内所有成员均可使用。"
+                      : "只能添加你自己注册的插件（候选列表已按你的身份过滤）；添加后项目内所有成员均可使用。"}
                   </p>
-                ) : (
-                  <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-                    <select
-                      value={pluginName}
-                      onChange={(e) => setPluginName(e.target.value)}
-                      aria-label="选择已注册插件"
-                      className="h-9 rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-                    >
-                      <option value="">选择已注册插件…</option>
-                      {candidatePlugins.map((name) => (
-                        <option key={name} value={name}>
-                          {name}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={handleAddPlugin}
-                      disabled={addPlugin.isPending || !pluginName.trim()}
-                      className="inline-flex h-9 items-center justify-center gap-1 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50"
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      添加
-                    </button>
-                  </div>
-                )}
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {isProjectAdmin
-                    ? "可添加任意已注册插件；添加后项目内所有成员均可使用。"
-                    : "只能添加你自己注册的插件（候选列表已按你的身份过滤）；添加后项目内所有成员均可使用。"}
-                </p>
-              </div>
-            )}
-          </div>
-        </section>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
-        {/* 规则 */}
-        <section>
-          <h2 className="text-sm font-medium text-foreground">规则</h2>
-          <div className="mt-2 rounded-2xl border border-border bg-card/60 p-4">
-            {rules.length === 0 ? (
-              <p className="text-sm text-muted-foreground">未配置规则。</p>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {rules.map((r) => (
-                  <span
-                    key={r.id}
-                    className="inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-xs text-foreground"
+        {section === "config" && configTab === "rules" && (
+          <section>
+            <h2 className="text-sm font-medium text-foreground">规则</h2>
+            <div className="mt-2 rounded-2xl border border-border bg-card/60 p-4">
+              {rules.length === 0 ? (
+                <p className="text-sm text-muted-foreground">未配置规则。</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {rules.map((r) => (
+                    <span
+                      key={r.id}
+                      className="inline-flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-xs text-foreground"
+                    >
+                      {r.name}
+                      {isProjectAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveRule(r.id)}
+                          title="移除规则"
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {isProjectAdmin && (
+                <div className="mt-3 grid gap-2 border-t border-border pt-3 sm:grid-cols-[1fr_auto]">
+                  <input
+                    value={ruleName}
+                    onChange={(e) => setRuleName(e.target.value)}
+                    placeholder="规则名称"
+                    className="h-9 rounded-md border border-input bg-background px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddRule}
+                    disabled={setRules.isPending || !ruleName.trim()}
+                    className="inline-flex h-9 items-center justify-center gap-1 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50"
                   >
-                    {r.name}
-                    {isProjectAdmin && (
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveRule(r.id)}
-                        title="移除规则"
-                        className="text-muted-foreground hover:text-destructive"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    )}
-                  </span>
-                ))}
-              </div>
-            )}
+                    <Plus className="h-3.5 w-3.5" />
+                    添加
+                  </button>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
-            {isProjectAdmin && (
-              <div className="mt-3 grid gap-2 border-t border-border pt-3 sm:grid-cols-[1fr_auto]">
-                <input
-                  value={ruleName}
-                  onChange={(e) => setRuleName(e.target.value)}
-                  placeholder="规则名称"
-                  className="h-9 rounded-md border border-input bg-background px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-                />
-                <button
-                  type="button"
-                  onClick={handleAddRule}
-                  disabled={setRules.isPending || !ruleName.trim()}
-                  className="inline-flex h-9 items-center justify-center gap-1 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  添加
-                </button>
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* 最近会话 */}
-        <section>
-          <h2 className="text-sm font-medium text-foreground">最近会话</h2>
-          <div className="mt-2 rounded-2xl border border-border bg-card/60 p-4">
-            {recentSessions.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                该项目还没有会话。点右上角「开始抓包」发起第一次抓包。
-              </p>
-            ) : (
-              <ul className="space-y-1.5">
-                {recentSessions.map((s) => (
-                  <li key={s.session_id}>
-                    <button
-                      type="button"
-                      onClick={() => onSelectSession(s.session_id)}
-                      className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-muted/40"
-                    >
-                      <span
-                        className={`h-2 w-2 shrink-0 rounded-full ${statusDot(s.status)}`}
-                        title={s.status === "running" ? "抓包中" : "已停止"}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate font-mono text-xs text-foreground">
-                          {s.session_id}
-                        </p>
-                        <p className="truncate text-[11px] text-muted-foreground">
-                          {s.status === "running" ? "抓包中" : "已停止"} · {fmtTime(s.started_at)}
-                        </p>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <p className="font-mono text-xs text-foreground">
-                          {s.events?.toLocaleString() ?? 0}{" "}
-                          <span className="text-[10px] text-muted-foreground">events</span>
-                        </p>
-                        <p className="font-mono text-[11px] text-muted-foreground">
-                          {s.raw_packets?.toLocaleString() ?? 0} packets
-                        </p>
-                      </div>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </section>
+        {/* 会话：项目空间的主体清单，与未归属共用同一份 SessionList */}
+        {section === "sessions" && (
+          <section>
+            <h2 className="text-sm font-medium text-foreground">会话</h2>
+            <div className="mt-2">
+              <SessionList
+                projectId={project.id}
+                selectedSessionId={selectedSessionId ?? null}
+                onSelectSession={onSelectSession}
+                onDeleted={onDeletedSession}
+                searchInputRef={searchInputRef}
+              />
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );

@@ -7,7 +7,12 @@
 
 /** 一类解码失败。 */
 export interface DecodeErrorGroup {
-  /** plugin = 插件主动报「这条我解不了」；transport = 流断开 / 超时 / 包无法还原。 */
+  /**
+   * plugin = 插件主动报「这条我解不了」；transport = 流断开 / 超时 / 包无法还原；
+   * binding = 会话绑定的插件没有可用实例（未启动 / 离线 / 不属于当前项目），
+   * 解码器从未接上。plugin 与 transport 的次数是按包算，binding 按状态跳变算，
+   * 所以「有包、0 事件、解码失败 1 次」也是整场没解码。
+   */
   kind: string;
   /** 归一化模板，同类错误共用，例如 "unexpected EOF at offset <n>"。 */
   template: string;

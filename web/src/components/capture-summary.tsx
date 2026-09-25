@@ -1,14 +1,9 @@
 import { useMemo } from "react";
 import { useSessions } from "@/hooks/use-mcp";
 import { CheckCircle2 } from "lucide-react";
+import { captureSourceName } from "@/lib/session-source";
 import { describeSessionPhase } from "@/lib/session-phase";
 import { SessionPhaseTracker } from "@/components/session-phase-tracker";
-
-function sourceName(source: string): string {
-  if (source === "agent") return "抓包探针";
-  if (source === "proxy") return "手机代理";
-  return "服务器抓包";
-}
 
 /**
  * 「本次抓包」结果摘要：回答用户最关心的问题——这次抓包到底成功没有。
@@ -56,7 +51,7 @@ export function CaptureSummary({
   }
 
   const items: { label: string; value: string; warn?: boolean }[] = [
-    { label: "来源", value: sourceName(session.source) },
+    { label: "来源", value: captureSourceName(session.source) },
     { label: "Packets", value: packets.toLocaleString() },
     { label: "Events", value: events.toLocaleString() },
     { label: "连接", value: connectionCount.toLocaleString() },

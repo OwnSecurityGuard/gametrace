@@ -1,3 +1,8 @@
+// SessionList — 一个「会话桶」的完整清单：搜索、只看我的、批量删除、逐条删除、
+// 运行中切换解码插件，以及每条会话的阶段徽标与实时统计。
+//
+// 项目与未归属是同一类东西（一个作用域下的会话集合），因此共用这份实现、只出现在内容区
+// 一处，左栏只做空间导航。清单不内置滚动容器：外层滚动由所在页面负责。
 import { useEffect, useState, type Ref } from "react";
 import { cn } from "@/lib/utils";
 import {
@@ -11,11 +16,11 @@ import {
 import { useIdentity } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Dialog } from "@/components/ui/dialog";
 import { describeSessionPhase } from "@/lib/session-phase";
+import { isProbeSource } from "@/lib/session-source";
 import { PhaseBadge } from "@/components/session-phase-tracker";
 import { toast } from "@/components/ui/toast";
 import {
@@ -35,7 +40,9 @@ import {
 import type { SessionInfo } from "@/types/session";
 import type { SessionStatusResult } from "@/types/session-extra";
 
-interface SessionSidebarProps {
+interface SessionListProps {
+  /** 清单边界：string = 该项目；null = 未归属桶。服务端已按身份过滤，这里只收窄到当前空间。 */
+  projectId: string | null;
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
   /** 会话被删除后回调（用于清空选中态，避免后续查询打到已删除的会话） */
@@ -109,7 +116,7 @@ function basename(p: string): string {
 /** 计算会话来源展示标签（列表渲染与搜索过滤共用）。 */
 function sourceLabelOf(session: SessionInfo): string {
   const isFileReplay = !!session.pcap_file;
-  if (session.source === "agent") return "抓包探针";
+  if (isProbeSource(session.source)) return "抓包探针";
   if (session.source === "proxy") {
     return `Mobile Proxy${session.listen_addr ? ` · ${session.listen_addr}` : ""}`;
   }
@@ -179,7 +186,7 @@ function SessionItem({
   // live 抓包用网卡名，文件回放用文件名
   const isFileReplay = !!session.pcap_file;
   const isProxy = session.source === "proxy";
-  const isAgent = session.source === "agent";
+  const isAgent = isProbeSource(session.source);
   const sourceLabel = sourceLabelOf(session);
 
   // 结束时间：同日省略日期
@@ -380,12 +387,13 @@ function SessionItem({
   );
 }
 
-export function SessionSidebar({
+export function SessionList({
+  projectId,
   selectedSessionId,
   onSelectSession,
   onDeleted,
   searchInputRef,
-}: SessionSidebarProps) {
+}: SessionListProps) {
   const { data, isLoading, isError, error, refetch } = useSessions();
   // 仅对当前选中会话拉取 get_session_status（5s 轮询），使其统计与状态点保持“实时”。
   const liveStatus = useSessionStatus(selectedSessionId);
@@ -403,7 +411,11 @@ export function SessionSidebar({
     if (identity === null) setOwnerView("all");
   }, [identity]);
 
-  const sessions = data?.sessions ?? [];
+  // 服务端始终按身份过滤，这里只是把清单收窄到当前空间的边界：
+  // string = 该项目；null = 未归属桶（project_id 为空）。
+  const sessions = (data?.sessions ?? []).filter(
+    (s) => (s.project_id || "") === (projectId ?? ""),
+  );
 
   // 出现他人归属的会话（且身份已回显）说明当前身份能跨 owner 查看（服务端已按身份过滤）。
   const foreignOwners = sessions.some(
@@ -487,22 +499,12 @@ export function SessionSidebar({
   const runningCount = visibleSessions.filter((s) => s.status === "running").length;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {/* 标题 */}
-      <div className="flex items-center justify-between gap-2 px-4 py-3 border-b">
-        <h2 className="text-sm font-semibold">会话列表</h2>
-        {data && (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-            {runningCount > 0 && <span className="gt-live-dot" />}
-            {visibleSessions.length} 个会话{runningCount > 0 && ` · ${runningCount} 运行`}
-          </span>
-        )}
-      </div>
-
-      {/* 搜索 + 批量删除工具栏 */}
+    <div className="min-w-0">
+      {/* 工具栏一行装下搜索、视图筛选、全选与批量删除。计数徽标和下方列表用同一个口径
+          （visibleSessions），放在同一行才不会和标题各说一套数字。 */}
       {sessions.length > 0 && (
-        <div className="space-y-2 border-b px-4 py-2.5">
-          <div className="relative">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[200px] flex-1">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               ref={searchInputRef}
@@ -510,126 +512,128 @@ export function SessionSidebar({
               onChange={(e) => setSearch(e.target.value)}
               aria-label="搜索会话"
               placeholder="搜索会话 ID / 来源 / 插件 / 网卡"
-              className="pl-9"
+              className="h-9 pl-9"
             />
           </div>
-          <div className="flex items-center justify-between gap-2">
-            <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
-              <input
-                type="checkbox"
-                checked={allVisibleSelected}
-                onChange={toggleSelectAll}
-                disabled={filteredSessions.length === 0}
-                className="h-3.5 w-3.5 rounded border-input accent-primary"
-                aria-label="全选可见会话"
-              />
-              {selectedIds.size > 0 ? `已选 ${selectedIds.size} 项` : "全选"}
-            </label>
-            <Button
-              size="sm"
-              variant="destructive"
-              className="h-7 text-xs"
-              disabled={selectedIds.size === 0 || deleteSessions.isPending}
-              onClick={() => setBatchConfirmOpen(true)}
-            >
-              <Trash2 className="h-3 w-3 mr-1" />
-              批量删除{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}
-            </Button>
-          </div>
-        </div>
-      )}
 
-      {/* admin 视图筛选：默认「全部」 */}
-      {showOwnerFilter && (
-        <div
-          className="flex items-center gap-1 border-b px-4 py-2"
-          role="group"
-          aria-label="会话视图筛选"
-        >
-          <span className="mr-1 text-xs text-muted-foreground">视图</span>
-          {(
-            [
-              { id: "all", label: "全部" },
-              { id: "mine", label: "只看我的" },
-            ] as const
-          ).map((opt) => (
-            <button
-              key={opt.id}
-              type="button"
-              aria-pressed={ownerView === opt.id}
-              onClick={() => setOwnerView(opt.id)}
-              className={
-                "rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors " +
-                (ownerView === opt.id
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:text-foreground")
-              }
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      )}
+          {showOwnerFilter && (
+            <div className="flex items-center gap-1" role="group" aria-label="会话视图筛选">
+              <span className="mr-1 text-xs text-muted-foreground">视图</span>
+              {(
+                [
+                  { id: "all", label: "全部" },
+                  { id: "mine", label: "只看我的" },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  aria-pressed={ownerView === opt.id}
+                  onClick={() => setOwnerView(opt.id)}
+                  className={
+                    "rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors " +
+                    (ownerView === opt.id
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground hover:text-foreground")
+                  }
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
 
-      {/* 会话列表 */}
-      <ScrollArea className="flex-1 p-3">
-        {isLoading && (
-          <div className="space-y-3">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-24 w-full rounded-lg" />
-            ))}
-          </div>
-        )}
-
-        {isError && (
-          <div
-            role="alert"
-            className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+          <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={toggleSelectAll}
+              disabled={filteredSessions.length === 0}
+              className="h-3.5 w-3.5 rounded border-input accent-primary"
+              aria-label="全选可见会话"
+            />
+            {selectedIds.size > 0 ? `已选 ${selectedIds.size} 项` : "全选"}
+          </label>
+          <Button
+            size="sm"
+            variant="destructive"
+            className="h-8 text-xs"
+            disabled={selectedIds.size === 0 || deleteSessions.isPending}
+            onClick={() => setBatchConfirmOpen(true)}
           >
-            <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span className="flex-1">加载失败：{error?.message ?? "未知错误"}</span>
-            <Button variant="outline" size="sm" onClick={() => refetch()} className="h-7">
-              <RotateCw className="h-3.5 w-3.5" />
-              重试
-            </Button>
-          </div>
-        )}
+            <Trash2 className="h-3.5 w-3.5 mr-1" />
+            批量删除{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}
+          </Button>
+          {data && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+              {runningCount > 0 && <span className="gt-live-dot" />}
+              {visibleSessions.length} 个会话{runningCount > 0 && ` · ${runningCount} 运行`}
+            </span>
+          )}
+        </div>
+      )}
 
-        {!isLoading && !isError && sessions.length === 0 && (
-          <EmptyState
-            icon={<Inbox className="h-5 w-5" />}
-            title="暂无会话"
-            hint="点击右上角「开始抓包」启动一次抓包会话，或启动插件进行离线解码。"
-          />
-        )}
-
-        {!isLoading && !isError && sessions.length > 0 && filteredSessions.length === 0 && (
-          <EmptyState
-            icon={<Inbox className="h-5 w-5" />}
-            title="无匹配会话"
-            hint="调整搜索关键词，或切换顶部的视图筛选与「全选」范围。"
-          />
-        )}
-
-        <div className="space-y-2">
-          {filteredSessions.map((session) => (
-            <SessionItem
-              key={session.session_id}
-              session={session}
-              isSelected={session.session_id === selectedSessionId}
-              selected={selectedIds.has(session.session_id)}
-              onToggleSelect={() => toggleSelect(session.session_id)}
-              onClick={() => onSelectSession(session.session_id)}
-              onSwitch={setSwitchTarget}
-              onDeleted={onDeleted}
-              ownerBadge={ownerBadgeOf(session)}
-              liveStatus={
-                session.session_id === selectedSessionId ? (liveStatus.data ?? null) : null
-              }
-            />
+      {isLoading && (
+        <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-28 w-full rounded-lg" />
           ))}
         </div>
-      </ScrollArea>
+      )}
+
+      {isError && (
+        <div
+          role="alert"
+          className="mt-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span className="flex-1">加载失败：{error?.message ?? "未知错误"}</span>
+          <Button variant="outline" size="sm" onClick={() => refetch()} className="h-7">
+            <RotateCw className="h-3.5 w-3.5" />
+            重试
+          </Button>
+        </div>
+      )}
+
+      {!isLoading && !isError && sessions.length === 0 && (
+        <EmptyState
+          className="mt-6"
+          icon={<Inbox className="h-5 w-5" />}
+          title={projectId ? "该项目还没有会话" : "还没有未归属会话"}
+          hint={
+            projectId
+              ? "点项目右上角「开始抓包」发起第一轮，会话会自动归属到这个项目。"
+              : "开始抓包时不选归属项目，会话就会落在这里。"
+          }
+        />
+      )}
+      {!isLoading && !isError && sessions.length > 0 && filteredSessions.length === 0 && (
+        <EmptyState
+          className="mt-6"
+          icon={<Inbox className="h-5 w-5" />}
+          title="无匹配会话"
+          hint="调整搜索关键词，或切换「视图」筛选与「全选」范围。"
+        />
+      )}
+
+      <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+        {filteredSessions.map((session) => (
+          <SessionItem
+            key={session.session_id}
+            session={session}
+            isSelected={session.session_id === selectedSessionId}
+            selected={selectedIds.has(session.session_id)}
+            onToggleSelect={() => toggleSelect(session.session_id)}
+            onClick={() => onSelectSession(session.session_id)}
+            onSwitch={setSwitchTarget}
+            onDeleted={onDeleted}
+            ownerBadge={ownerBadgeOf(session)}
+            liveStatus={
+              session.session_id === selectedSessionId ? (liveStatus.data ?? null) : null
+            }
+          />
+        ))}
+      </div>
 
       {switchTarget && (
         <SwitchPluginDialog session={switchTarget} onClose={() => setSwitchTarget(null)} />

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import QRCode from "react-qr-code";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { LeaseQrPanel } from "@/components/proxy-lease-qr";
 import {
   useProxyLeases,
   useCreateProxyLease,
@@ -18,71 +18,13 @@ import {
   Cable,
   Check,
   ChevronDown,
-  Copy,
-  CopyCheck,
-  Download,
-  ExternalLink,
-  MonitorSmartphone,
   PauseCircle,
   PlayCircle,
   Plus,
-  Smartphone,
   Trash2,
   Wifi,
   X,
 } from "lucide-react";
-
-/** 手机端 sing-box 官方客户端下载地址（Project S 官方分发渠道）。 */
-const SINGBOX_CLIENTS = [
-  {
-    key: "android-play",
-    label: "Android · Google Play",
-    href: "https://play.google.com/store/apps/details?id=io.nekohasekai.sfa",
-    title: "sing-box for Android (SFA) · Google Play",
-  },
-  {
-    key: "android-apk",
-    label: "Android · APK",
-    href: "https://github.com/SagerNet/sing-box/releases",
-    title: "sing-box for Android (SFA) · GitHub Releases（含 APK / F-Droid）",
-  },
-  {
-    key: "ios",
-    label: "iOS · App Store",
-    href: "https://apps.apple.com/app/sing-box-vt/id6673731168",
-    title: "sing-box for Apple platforms (SFI) · 需使用非中国大陆区 Apple ID",
-  },
-] as const;
-
-/** sing-box 客户端下载入口：扫码前先让用户装上客户端。 */
-function SingboxDownloadHint() {
-  return (
-    <div className="w-full border-t border-border pt-3">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1">
-          <Download className="h-3.5 w-3.5" />
-          手机还没装 sing-box？
-        </span>
-        {SINGBOX_CLIENTS.map((c) => (
-          <a
-            key={c.key}
-            href={c.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            title={c.title}
-            className="inline-flex items-center gap-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-          >
-            {c.label}
-            <ExternalLink className="h-3 w-3" />
-          </a>
-        ))}
-      </div>
-      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-        用其他客户端（Clash 等）时，按下方「手机代理填」的地址手动配置 HTTP 代理即可。
-      </p>
-    </div>
-  );
-}
 
 interface ProxyConfigDialogProps {
   open: boolean;
@@ -186,7 +128,7 @@ function ConnectionSteps({ steps }: { steps: StepItem[] }) {
 }
 
 /** 代理抓包租约对话框：按用户/设备创建独立会话，多用户互不串流、互不抢配置。
- * 租约（agent + 出口端口 + 控制端口）与抓包会话独立：
+ * 租约（agent + 代理端口 + 控制端口）与抓包会话独立：
  *   - 创建后租约常驻，QR 端口不变；
  *   - 「开始抓包 / 停止抓包」只动会话（不重启 agent，二维码一直有效）；
  *   - 「释放租约」才会杀 agent、回收端口、QR 失效（按钮与上述二者严格区分）。 */
@@ -205,17 +147,15 @@ export function ProxyConfigDialog({ open, onClose, onNavigateToSession }: ProxyC
   const [plugin, setPlugin] = useState("");
   const [filterHosts, setFilterHosts] = useState("");
   const [filterPorts, setFilterPorts] = useState("");
-  const [copied, setCopied] = useState<"uri" | "addr" | null>(null);
 
   // 选中租约：优先保持用户选择，失效时回退到第一个。
   const selected = leases.find((l) => l.lease_id === selectedId) ?? leases[0] ?? null;
   const pluginOptions = plugins.data?.plugins ?? [];
 
-  // 打开时重置创建表单与复制状态。
+  // 打开时回到列表视图（创建表单收起）。
   useEffect(() => {
     if (!open) return;
     setCreating(false);
-    setCopied(null);
   }, [open]);
 
   // 无租约时自动进入创建视图。
@@ -223,18 +163,6 @@ export function ProxyConfigDialog({ open, onClose, onNavigateToSession }: ProxyC
     if (!open) return;
     if (leases.length === 0 && !leasesQuery.isLoading) setCreating(true);
   }, [open, leases.length, leasesQuery.isLoading]);
-
-  async function handleCopy(text: string, kind: "uri" | "addr") {
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(kind);
-      toast.success(kind === "uri" ? "已复制 sing-box 导入链接" : "已复制连接地址", text);
-      setTimeout(() => setCopied((c) => (c === kind ? null : c)), 1500);
-    } catch {
-      toast.info("复制失败，请手动选择地址", text);
-    }
-  }
 
   function handleCreate() {
     createLease.mutate(
@@ -278,7 +206,7 @@ export function ProxyConfigDialog({ open, onClose, onNavigateToSession }: ProxyC
   }
 
   /** start_lease_capture：在已有租约上开新一轮抓包。
-   * 出口端口/QR 一切不变——手机那边无需任何动作也能继续推数据。 */
+   * 代理端口/二维码一切不变——手机那边无需任何动作也能继续推数据。 */
   function handleStart(leaseId: string) {
     startCapture.mutate(
       { leaseId },
@@ -286,7 +214,7 @@ export function ProxyConfigDialog({ open, onClose, onNavigateToSession }: ProxyC
         onSuccess: (res) => {
           const sid = res?.session_id ?? "";
           const q = res?.lease?.session_id ? `（新 session ${sid}）` : "";
-          toast.success("已开始抓包", `出口端口不变，会话数据完整隔离${q}`);
+          toast.success("已开始抓包", `代理端口不变，会话数据完整隔离${q}`);
         },
         onError: (err) => {
           toast.error("开始抓包失败", err.message);
@@ -305,7 +233,7 @@ export function ProxyConfigDialog({ open, onClose, onNavigateToSession }: ProxyC
           const detail = res
             ? `${res.raw_packets ?? 0} 包 · ${res.events ?? 0} 事件 · ${(res.duration_s ?? 0).toFixed(1)}s`
             : "";
-          toast.success("已停止抓包（出口保留）", detail);
+          toast.success("已停止抓包（租约保留）", detail);
         },
         onError: (err) => {
           toast.error("停止抓包失败", err.message);
@@ -496,8 +424,6 @@ export function ProxyConfigDialog({ open, onClose, onNavigateToSession }: ProxyC
             onStart={handleStart}
             onStop={handleStop}
             onRelease={handleRelease}
-            onCopy={handleCopy}
-            copied={copied}
           />
         ) : null}
       </div>
@@ -511,30 +437,21 @@ interface LeaseDetailProps {
   onStart: (leaseId: string) => void;
   onStop: (leaseId: string) => void;
   onRelease: (leaseId: string) => void;
-  onCopy: (text: string, kind: "uri" | "addr") => void;
-  copied: "uri" | "addr" | null;
 }
 
-function LeaseDetail({ lease, onNavigateToSession, onStart, onStop, onRelease, onCopy, copied }: LeaseDetailProps) {
+function LeaseDetail({ lease, onNavigateToSession, onStart, onStop, onRelease }: LeaseDetailProps) {
   const agentUp = !!lease.agent_running;
   // 以 capture_running 为准（agent 是否在推数据）；idle 时 false。
   const capturing = !!(lease.capture_running ?? lease.session_running);
   const activeConns = lease.active_conns ?? 0;
   const totalConns = lease.total_conns ?? 0;
   const totalBytes = lease.total_bytes ?? 0;
-  const connectAddr = lease.connect_addr ?? "";
-  // 手机连的是宿主映射后的端口；public_port 是权威值，兜底旧的 agent_listen_port
-  //（非容器部署两者相同）。
-  const publicPort = lease.public_port || lease.agent_listen_port;
-  const singboxUri = lease.singbox_uri ?? "";
   const phoneConnected = activeConns > 0;
   const captureCount = lease.capture_count ?? 0;
   const lastCaptureAt = lease.last_capture_at_unix ?? 0;
   const lastCaptureText = lastCaptureAt
     ? `${Math.max(0, Math.floor((Date.now() / 1000 - lastCaptureAt)))} 秒前开始/停止过抓包`
     : "从未开始过抓包";
-  const qrValue = singboxUri || connectAddr;
-  const qrLabel = singboxUri ? "sing-box 扫码导入" : "手机代理扫码连接";
 
   const steps: StepItem[] = [
     {
@@ -575,7 +492,7 @@ function LeaseDetail({ lease, onNavigateToSession, onStart, onStop, onRelease, o
             <h4 className="text-sm font-semibold">{lease.device || "连接状态"}</h4>
           </div>
           <div className="flex items-center gap-2">
-            {/* 开始 / 停止 抓包：核心动作，不会影响出口端口，QR 持续有效 */}
+            {/* 开始 / 停止 抓包：核心动作，不会影响代理端口，二维码持续有效 */}
             {agentUp && !capturing && (
               <Button
                 variant="default"
@@ -594,7 +511,7 @@ function LeaseDetail({ lease, onNavigateToSession, onStart, onStop, onRelease, o
                 size="sm"
                 className="h-7 gap-1 px-2 text-xs"
                 onClick={() => onStop(lease.lease_id)}
-                title="停止当前抓包，回归 idle；出口端口/QR 保留，可再次开始"
+                title="停止当前抓包，回归 idle；代理端口/二维码保留，可再次开始"
               >
                 <PauseCircle className="h-3.5 w-3.5" />
                 停止抓包
@@ -612,13 +529,13 @@ function LeaseDetail({ lease, onNavigateToSession, onStart, onStop, onRelease, o
                 <ArrowRight className="h-3.5 w-3.5" />
               </Button>
             )}
-            {/* 释放租约：杀掉 agent、回收端口、QR 失效——与上面 start/stop 严格区分 */}
+            {/* 释放租约：杀掉 agent、回收端口、二维码失效——与上面 start/stop 严格区分 */}
             <Button
               variant="outline"
               size="sm"
               className="h-7 gap-1 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
               onClick={() => onRelease(lease.lease_id)}
-              title="释放租约（杀 agent、收端口、QR 失效；之后再建会拿新端口）"
+              title="释放租约（杀 agent、收端口、二维码失效；之后再建会拿新端口）"
             >
               <Trash2 className="h-3.5 w-3.5" />
               释放租约
@@ -655,82 +572,15 @@ function LeaseDetail({ lease, onNavigateToSession, onStart, onStop, onRelease, o
           </span>
           {!phoneConnected && (
             <span className="w-full pt-0.5">
-              手机尚未接入：请用右侧二维码完成配置，接入后此卡片实时更新。
+              手机尚未接入：请在下方扫码接入，接入后这里会实时更新。
             </span>
           )}
         </div>
       </section>
 
-      {/* 二维码 + 连接信息 */}
-      <section className="rounded-xl border border-border bg-muted/40 p-4">
-        <div className="flex flex-col items-center gap-3">
-          <div className="flex w-full items-center justify-between gap-2 text-sm font-medium">
-            <span className="flex items-center gap-2">
-              <Smartphone className="h-4 w-4 text-muted-foreground" />
-              手机连接
-            </span>
-            <span className="truncate font-mono text-xs text-muted-foreground">
-              {connectAddr || (publicPort ? `${lease.lan_ip || "?"}:${publicPort}` : "")}
-            </span>
-          </div>
-
-          <div className="flex justify-center rounded-lg bg-white p-3 shadow-sm">
-            {qrValue ? (
-              <QRCode value={qrValue} size={176} bgColor="#ffffff" fgColor="#0f172a" />
-            ) : (
-              <div className="flex h-44 w-44 items-center justify-center text-center text-xs text-muted-foreground">
-                暂无局域网地址，无法生成二维码
-              </div>
-            )}
-          </div>
-
-          <p className="text-center text-xs text-muted-foreground">{qrLabel}</p>
-
-          <button
-            type="button"
-            onClick={() => qrValue && onCopy(qrValue, singboxUri ? "uri" : "addr")}
-            disabled={!qrValue}
-            className="flex w-full items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-left text-sm text-foreground transition-colors hover:border-primary/40 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-            title={singboxUri ? "复制 sing-box 导入链接" : "复制连接地址"}
-          >
-            {copied === (singboxUri ? "uri" : "addr") ? (
-              <CopyCheck className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-            ) : (
-              <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            )}
-            <span className="min-w-0 flex-1 truncate font-mono text-xs">{qrValue || "——"}</span>
-          </button>
-
-          {singboxUri ? (
-            <div className="w-full rounded-md border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-2 text-xs leading-relaxed text-emerald-700">
-              <div className="mb-1 flex items-center gap-1 font-medium">
-                <Check className="h-3 w-3" />
-                sing-box（SFA）一键导入
-              </div>
-              用 sing-box「添加配置 → 扫描二维码」导入，自动生成 TUN 配置并走 HTTP 代理连接到{" "}
-              <code className="font-mono">{connectAddr || "本机"}</code>，无需手动填写。
-            </div>
-          ) : (
-            <div className="w-full rounded-md bg-muted/60 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
-              手机代理软件（如 sing-box / Clash）添加 HTTP 代理，服务器填{" "}
-              <code className="font-mono">{lease.lan_ip || "本机IP"}</code>，端口填{" "}
-              <code className="font-mono">{publicPort}</code>。
-            </div>
-          )}
-
-          <div className="w-full border-t border-border pt-3">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <MonitorSmartphone className="h-3.5 w-3.5" />
-              <span className="truncate">
-                手机代理填 <span className="font-mono">{connectAddr || "IP:端口"}</span>
-              </span>
-            </div>
-          </div>
-
-          {/* 客户端下载入口：装上 sing-box 才能扫码导入 */}
-          <SingboxDownloadHint />
-        </div>
-      </section>
+      {/* 手机接入：二维码 / 地址 / 客户端下载。与「开始抓包 → 手机代理」共用同一块，
+          connect_addr 与 singbox_uri 的口径不会在两处漂移。 */}
+      <LeaseQrPanel lease={lease} qrSize={176} />
     </>
   );
 }

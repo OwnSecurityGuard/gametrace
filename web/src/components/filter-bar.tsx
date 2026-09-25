@@ -1,15 +1,16 @@
-// FilterBar — 协议数据页的过滤栏（连接 / 事件 / 关系 / 状态变更 / 原始数据五视图共享）。
+// FilterBar — 协议事件页的过滤栏（连接 / 方向 / 语义 / 关键词，叠加为 AND）。
 //
-// 一行内提供三个过滤条件（叠加 AND）：
-//   - 连接下拉框：依据连接过滤（代理抓包的连接，按 conn_id 命中）；五个子视图
-//     全共享该过滤，即便是「原始数据」也据此选择连接、展示其原始帧；
+// 一行内提供四个过滤条件：
+//   - 连接下拉框：依据连接过滤（代理抓包的连接，按 conn_id 命中）；会话空间的
+//     五个视图共享该过滤，即便是「原始包」也据此选择连接、展示其原始帧；
 //   - 消息方向下拉框：全部 / C→S / S→C；
-//   - 模糊搜索输入框：输入过程中防抖（300ms）提交到 App 状态，再分流给各
-//     子视图做纯前端过滤；Enter 立即提交、Esc 清空（不提供「清除」按钮，
-//     避免这一行被按钮撑长）。
+//   - 语义多选下拉：词表来自本次抓包的实际聚合结果，不是写死闭集（见 semantic-select.tsx）；
+//   - 模糊搜索输入框：输入过程中防抖（300ms）提交，Enter 立即提交、Esc 清空
+//     （不提供「清除」按钮，避免这一行被按钮撑长）。
 // 不调用后端 filter 表达式，无 schema/语法提示。
 import { type ChangeEvent, type KeyboardEvent, type Ref, useEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
+import { SemanticSelect } from "@/components/semantic-select";
 import { Search } from "lucide-react";
 import { useConnections } from "@/hooks/use-mcp";
 import { type DirectionFilter, type SemanticFilter } from "@/lib/fuzzy";
@@ -21,7 +22,7 @@ interface FilterBarProps {
   onQueryChange: (query: string) => void;
   direction: DirectionFilter;
   onDirectionChange: (direction: DirectionFilter) => void;
-  /** 语义标签过滤（SDK annotate：request/response/notification/error）。 */
+  /** 语义标签过滤集合（SDK annotate 声明）；空数组 = 不过滤，多值按「或」合并。 */
   semantic: SemanticFilter;
   onSemanticChange: (semantic: SemanticFilter) => void;
   /** 连接过滤（null = 全部连接）；协议数据全部子视图共享。 */
@@ -35,14 +36,6 @@ const DIRECTION_OPTIONS: { value: DirectionFilter; label: string }[] = [
   { value: "", label: "全部方向" },
   { value: "client_to_server", label: "C→S" },
   { value: "server_to_client", label: "S→C" },
-];
-
-const SEMANTIC_OPTIONS: { value: SemanticFilter; label: string }[] = [
-  { value: "", label: "全部语义" },
-  { value: "request", label: "request" },
-  { value: "response", label: "response" },
-  { value: "notification", label: "notification" },
-  { value: "error", label: "error" },
 ];
 
 export function FilterBar({
@@ -134,19 +127,7 @@ export function FilterBar({
           </option>
         ))}
       </select>
-      <select
-        value={semantic}
-        onChange={(e) => onSemanticChange(e.target.value as SemanticFilter)}
-        className="h-9 shrink-0 rounded-md border border-input bg-background px-2 text-sm"
-        aria-label="语义标签过滤"
-        title="按 annotate 语义标签过滤（request / response / notification / error）；服务端过滤，可精确分页"
-      >
-        {SEMANTIC_OPTIONS.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
+      <SemanticSelect sessionId={sessionId} value={semantic} onChange={onSemanticChange} />
       <div className="relative w-full max-w-md min-w-40">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input

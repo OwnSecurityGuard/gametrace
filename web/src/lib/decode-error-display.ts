@@ -16,6 +16,9 @@ export function describeErrorKind(kind: string): string {
     case "transport":
       // 链路本身出问题：流断开、等待超时、包无法还原。
       return "解码链路中断";
+    case "binding":
+      // 解码器压根没接上：会话绑定的插件没有可用实例。
+      return "解析插件未接入";
     default:
       return "其他失败";
   }
@@ -27,6 +30,8 @@ export function errorKindTone(kind: string): "warn" | "error" | "muted" {
     case "plugin":
       return "warn";
     case "transport":
+    case "binding":
+      // binding 比 transport 更该显眼：它意味着整个会话一个事件都不会有。
       return "error";
     default:
       return "muted";

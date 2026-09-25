@@ -26,9 +26,12 @@ import {
   Activity,
   Hash,
   FileCode2,
+  Crosshair,
 } from "lucide-react";
 import type { DecodedEvent } from "@/types/event";
 import type { ConnectionSummary } from "@/types/connection";
+import { navigate } from "@/lib/router";
+import { sessionHref } from "@/lib/routes";
 import {
   extractMeta,
   formatTimestamp,
@@ -60,11 +63,16 @@ interface EventTableProps {
   query: string;
   /** 消息方向过滤（C→S / S→C，空 = 全部）；与 query 叠加为 AND。 */
   direction: DirectionFilter;
-  /** 语义标签过滤（annotate：request/response/notification/error，空 = 全部）；
-   *  服务端 list_decoded_data 过滤，保持正常分页与精确 total_matched。 */
-  semantic: SemanticFilter;
+  /** 语义标签过滤集合（插件 annotate 声明，词表随项目而变）；空数组 = 全部。
+   *  服务端 list_decoded_data 按「或」合并过滤，保持正常分页与精确 total_matched。 */
+  semantics: SemanticFilter;
   /** 连接过滤（null = 全部连接，由顶部过滤栏切换）；按捕获上下文 conn_id 匹配，与 query/direction 叠加为 AND。 */
   connFilter: ConnectionSummary | null;
+  /** 跨视图定位：状态变更视图跳来看某一条消息时，服务端按 id 精确取那一条。
+   *  走服务端而不是翻分页 —— 目标消息在第几页前端无从得知，翻不到就是跳了个空。 */
+  focusEventId?: string | null;
+  /** 退出定位模式（回到当前过滤条件下的完整列表）。 */
+  onExitFocus?: () => void;
 }
 
 const PAGE_SIZES = [20, 50, 100];
@@ -387,7 +395,15 @@ function TypeChangeBlock({ bucket, tokens }: { bucket: ScTypeBucket; tokens: str
  * 不必再去拉整条操作链：那会把同一次操作里其它消息（请求 / 响应 / 后续推送）的变化一起倒进来，
  * 点一条消息却看到一堆跟它无关的行。
  */
-function StateChangeDialog({ event, onClose }: { event: DecodedEvent | null; onClose: () => void }) {
+function StateChangeDialog({
+  sessionId,
+  event,
+  onClose,
+}: {
+  sessionId: string;
+  event: DecodedEvent | null;
+  onClose: () => void;
+}) {
   const analysis = useMemo(() => (event ? analysisOf(event) : {}), [event]);
   const meta = useMemo(() => (event ? extractMeta(event.data, event.meta) : null), [event]);
   const sc = useMemo(() => {
@@ -459,6 +475,16 @@ function StateChangeDialog({ event, onClose }: { event: DecodedEvent | null; onC
             命中 {hitCount} / {sc.length} 条
           </span>
         )}
+        {/* 这里只有「这一条消息改了什么」；要看这个实体被整条会话改过来的全过程，去状态变更视图 */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 shrink-0"
+          onClick={() => navigate(sessionHref(sessionId, "states"))}
+        >
+          <Crosshair className="h-3.5 w-3.5" />
+          在状态变更视图查看全部
+        </Button>
       </div>
 
       {filtered.length === 0 ? (
@@ -1051,7 +1077,15 @@ const EventRow = memo(function EventRow({
 
 // ─── 主表格组件 ───────────────────────────────────────────────
 
-export function EventTable({ sessionId, query, direction, semantic, connFilter }: EventTableProps) {
+export function EventTable({
+  sessionId,
+  query,
+  direction,
+  semantics,
+  connFilter,
+  focusEventId,
+  onExitFocus,
+}: EventTableProps) {
   const [page, setPage] = useState<number>(0);
   const [pageSize, setPageSize] = useState<number>(PAGE_SIZES[0]!);
   // 允许多行同时展开：对比请求/响应时不用来回点，这是最常见的阅读动作。
@@ -1060,10 +1094,22 @@ export function EventTable({ sessionId, query, direction, semantic, connFilter }
   // 从事件表直接看实体变化：整条事件留在手边，弹窗只渲染它自带的变更，不用再查一次。
   const [scEvent, setScEvent] = useState<DecodedEvent | null>(null);
 
+  const focus = focusEventId ?? null;
+
   useEffect(() => {
     setPage(0);
     setExpandedIds(new Set());
-  }, [sessionId, query, direction, semantic, connFilter]);
+  }, [sessionId, query, direction, semantics, connFilter]);
+
+  // 定位模式：跳过来的人要看的正是这条消息的 payload，不该还让他再点一次；
+  // 退出定位时清掉展开集，否则会带着一个来自上一次的展开回到完整列表。
+  useEffect(() => {
+    if (!focus) {
+      setExpandedIds(new Set());
+      return;
+    }
+    setExpandedIds(new Set([focus]));
+  }, [focus]);
 
   const offset = page * pageSize;
 
@@ -1081,20 +1127,28 @@ export function EventTable({ sessionId, query, direction, semantic, connFilter }
     refetch,
     isFetching,
     isPlaceholderData,
-  } = useDecodedData(sessionId, {
-    limit: effectiveLimit,
-    offset: effectiveOffset,
-    connId: connFilter?.conn_id ?? null,
-    // 语义标签由服务端 list_decoded_data 过滤（meta.semantic 数组成员匹配），
-    // 保持正常分页与精确 total_matched，不参与前端内存过滤。
-    semantic: semantic || undefined,
-  });
+  } = useDecodedData(
+    sessionId,
+    focus
+      ? { limit: 1, offset: 0, filter: `id == ${JSON.stringify(focus)}` }
+      : {
+          limit: effectiveLimit,
+          offset: effectiveOffset,
+          connId: connFilter?.conn_id ?? null,
+          // 语义标签由服务端 list_decoded_data 过滤（meta.semantic 数组成员匹配，多值「或」），
+          // 保持正常分页与精确 total_matched，不参与前端内存过滤。
+          semantics: semantics.length ? semantics : undefined,
+        },
+  );
 
   const events = useMemo(() => data?.events ?? [], [data]);
   const totalMatched = data?.total_matched ?? 0;
 
   // 前端过滤：搜索/方向/连接过滤态在已拉取的批次上过滤（AND）。
+  // 前端过滤：搜索/方向/连接过滤态在已拉取的批次上过滤（AND）。定位模式下服务端已经
+  // 精确取到那一条，再套一层前端过滤只会把落点滤没。
   const filteredEvents = useMemo(() => {
+    if (focus) return events;
     if (!query && !direction && !connFilter) return events;
     return events.filter((e) => {
       if (query && !eventMatchesQuery(e, query)) return false;
@@ -1102,9 +1156,9 @@ export function EventTable({ sessionId, query, direction, semantic, connFilter }
       if (connFilter && !eventMatchesConnection(e, connFilter)) return false;
       return true;
     });
-  }, [events, query, direction, connFilter]);
+  }, [events, focus, query, direction, connFilter]);
 
-  const filtering = !!query || !!direction || !!connFilter;
+  const filtering = !!focus || !!query || !!direction || !!connFilter;
 
   const totalPages = Math.ceil(totalMatched / pageSize);
 
@@ -1195,6 +1249,21 @@ export function EventTable({ sessionId, query, direction, semantic, connFilter }
   }
 
   if (filteredEvents.length === 0) {
+    if (focus) {
+      return (
+        <EmptyState
+          icon={<Crosshair className="h-5 w-5" />}
+          title="定位的消息不在本会话"
+          hint={`会话里找不到 id 为 ${focus} 的事件，它可能已被删除或属于另一次抓包。`}
+          className="h-64 justify-center"
+          action={
+            <Button variant="outline" size="sm" onClick={onExitFocus}>
+              返回全部事件
+            </Button>
+          }
+        />
+      );
+    }
     return (
       <EmptyState
         icon={filtering || totalMatched === 0 ? <SearchX className="h-5 w-5" /> : <Table2 className="h-5 w-5" />}
@@ -1215,6 +1284,19 @@ export function EventTable({ sessionId, query, direction, semantic, connFilter }
     <div className="space-y-3 relative">
       {/* 后台刷新指示 */}
       {isFetching && !isLoading && <div className="gt-loading-bar" aria-hidden="true" />}
+
+      {/* 定位模式横幅：说明这一行是从哪来的，以及怎么回到正常列表 */}
+      {focus && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
+          <Crosshair className="h-3.5 w-3.5 shrink-0 text-primary" />
+          <span className="min-w-0 truncate text-muted-foreground">
+            定位到消息 <b className="font-mono text-foreground">{focus}</b> · 来自状态变更视图
+          </span>
+          <Button variant="outline" size="sm" className="ml-auto h-7" onClick={onExitFocus}>
+            返回全部事件
+          </Button>
+        </div>
+      )}
 
       {/* 统计信息 + 每页条数（搜索态隐藏分页相关控件） */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground" aria-live="polite">
@@ -1279,7 +1361,7 @@ export function EventTable({ sessionId, query, direction, semantic, connFilter }
               event={event}
               partners={partnersMap.get(event.id) ?? []}
               isExpanded={expandedIds.has(event.id)}
-              isHighlighted={highlightId === event.id}
+              isHighlighted={highlightId === event.id || (!!focus && event.id === focus)}
               onToggle={handleToggleExpand}
               onJumpToPartner={handleJumpTo}
               onCollapse={handleCollapse}
@@ -1306,7 +1388,7 @@ export function EventTable({ sessionId, query, direction, semantic, connFilter }
       )}
 
       {/* 实体状态变化弹窗：只展示这条消息自己产生的变化 */}
-      <StateChangeDialog event={scEvent} onClose={() => setScEvent(null)} />
+      <StateChangeDialog sessionId={sessionId} event={scEvent} onClose={() => setScEvent(null)} />
     </div>
   );
 }

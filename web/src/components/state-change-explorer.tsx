@@ -26,6 +26,7 @@ import {
   ListTree,
   Network,
   RotateCw,
+  Table2,
   TableProperties,
   Timer,
 } from "lucide-react";
@@ -48,6 +49,8 @@ interface StateChangeExplorerProps {
   direction?: DirectionFilter;
   /** 连接过滤（null = 全部连接）；按变更携带的 conn_id/flow_id 匹配，与 query/direction 叠加为 AND。 */
   connFilter?: ConnectionSummary | null;
+  /** 跳到协议事件视图并定位这条消息（协议 ↔ 状态变更 的反向落点）。 */
+  onOpenEvent?: (eventId: string) => void;
 }
 
 type ViewId = "operation" | "entity" | "time";
@@ -162,7 +165,13 @@ function TimeLabel({
 
 // ===== 主组件 =====
 
-export function StateChangeExplorer({ sessionId, query, direction, connFilter }: StateChangeExplorerProps) {
+export function StateChangeExplorer({
+  sessionId,
+  query,
+  direction,
+  connFilter,
+  onOpenEvent,
+}: StateChangeExplorerProps) {
   const [view, setView] = useState<ViewId>("operation");
   const [anchorKind, setAnchorKind] = useState<AnchorKind>("");
   const [anchorId, setAnchorId] = useState("");
@@ -453,7 +462,13 @@ export function StateChangeExplorer({ sessionId, query, direction, connFilter }:
         </>
       )}
 
-      <DetailDialog sessionId={sessionId} detail={detail} onClose={() => setDetail(null)} timeMode={timeMode} />
+      <DetailDialog
+        sessionId={sessionId}
+        detail={detail}
+        onClose={() => setDetail(null)}
+        timeMode={timeMode}
+        onOpenEvent={onOpenEvent}
+      />
     </div>
   );
 }
@@ -1331,16 +1346,36 @@ function ChangeRow({
 
 // ===== 详情弹窗 =====
 
+/**
+ * 反向落点：状态变更讲的是「哪条消息改的」，这里把人送回那条消息本身。
+ * 事件表按 id 精确定位，所以不必赌它在第几页。
+ */
+function EventJump({ eventId, onOpen }: { eventId: string; onOpen: (id: string) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(eventId)}
+      title="在协议事件视图查看这条消息"
+      className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+    >
+      <Table2 className="h-3 w-3" />
+      查看该消息
+    </button>
+  );
+}
+
 function DetailDialog({
   sessionId,
   detail,
   onClose,
   timeMode,
+  onOpenEvent,
 }: {
   sessionId: string | null;
   detail: { changeId?: string; eventId?: string; entity?: string; path?: string } | null;
   onClose: () => void;
   timeMode: "relative" | "absolute";
+  onOpenEvent?: (eventId: string) => void;
 }) {
   const { data, isLoading, isError, error } = useStateChangeDetail(sessionId, detail);
   const title = detail?.changeId
@@ -1376,6 +1411,7 @@ function DetailDialog({
                   来自 <KindBadge kind={data.change.source.kind} /> {data.change.source.msg_name}
                 </span>
                 <TimeLabel offsetMs={data.change.offset_ms} iso={data.change.timestamp} mode={timeMode} />
+                {onOpenEvent && <EventJump eventId={data.change.event_id} onOpen={onOpenEvent} />}
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <div>
@@ -1408,6 +1444,11 @@ function DetailDialog({
                       <span className="text-[11px] text-muted-foreground">{step.change_count} 次变化</span>
                     ) : (
                       <span className="text-[11px] text-muted-foreground/60">未产生状态变化</span>
+                    )}
+                    {onOpenEvent && (
+                      <span className="ml-auto">
+                        <EventJump eventId={step.message.event_id} onOpen={onOpenEvent} />
+                      </span>
                     )}
                   </div>
                   {step.entities && step.entities.length > 0 && (

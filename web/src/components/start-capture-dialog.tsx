@@ -1,28 +1,45 @@
-import { useState, useEffect } from "react";
-import { Input } from "@/components/ui/input";
+// StartCaptureDialog — 开始抓包的通道弹窗。
+//
+// 弹窗回答四个问题，顺序就是用户做决定的顺序：
+//   ① 从哪儿抓（探针机器 / 手机代理租约）② 抓什么（网卡、端口、服务端地址、解析器）
+//   ③ 归到哪个项目（可选，不归属也能抓）④ 以上几条的回读摘要。
+// 手机代理这一侧可以在这里直接建租约、拿二维码、停抓包、释放回收端口：抓包时才发现"还没有
+// 租约"、或者想收掉一个正在跑的租约，却被弹去另一层表单，等于把主流程搬到了别处。
+// 「代理服务器配置」只留租约的长期属性（换插件、改筛选）与历史会话入口。
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, Loader2, Play, ShieldQuestion, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import {
-  useRegisteredPlugins,
-  useSessionStatus,
+  AttributionPicker,
+  CapturePreview,
+  ChannelSwitch,
+  FilterFields,
+  ParserPicker,
+  type CaptureChannel,
+} from "@/components/capture-fields";
+import {
+  ProbeChannelPicker,
+  ProxyChannelPicker,
+  leaseSelectable,
+  probeSelectable,
+} from "@/components/capture-channel-pickers";
+import {
   useListProbes,
+  useMoveSessionToProject,
   useProbeStartCapture,
+  useProjects,
+  useProxyLeases,
+  useSessionStatus,
+  useStartLeaseCapture,
 } from "@/hooks/use-mcp";
-import { groupParsers, GROUP_LABEL } from "@/lib/parsers";
 import { toast } from "@/components/ui/toast";
-import type { ProbeInfo } from "@/types/probe";
-import { X, Check, Play, Loader2, Server, MonitorSmartphone, ChevronDown } from "lucide-react";
-
-/** 可选项「已选中」的统一醒目样式：主色边框 + 浅底 + 外圈 ring + 轻投影，配合 Check 角标。 */
-const SELECT_ACTIVE =
-  "border-primary/70 bg-primary/10 text-foreground ring-1 ring-primary/40 shadow-sm";
-/** 未选中态：弱边框，hover 时给一点主色过渡，提示可点。 */
-const SELECT_IDLE =
-  "border-border bg-background text-muted-foreground hover:border-primary/30 hover:bg-muted/60 hover:text-foreground";
+import type { ProjectInfo } from "@/types/project";
 
 interface StartCaptureDialogProps {
   open: boolean;
   onClose: () => void;
+  /** 用户看完启动结果、点「进入会话分析」时回调。 */
   onStarted?: (sessionId: string) => void;
   /** 从项目预填的默认端口（0=不预填） */
   initialPort?: number;
@@ -30,64 +47,20 @@ interface StartCaptureDialogProps {
   initialPlugin?: string;
   /** 从项目一键抓包时绑定的项目 id；抓包会话归属到该项目 */
   initialProjectId?: string;
-  /** 从「下载探针」接入后带入的探针 id，打开时自动切到「探针机器」源并预选它 */
+  /** 从「下载探针」接入后带入的探针 id，打开时自动预选它 */
   initialProbeId?: string;
+  /** 切到「代理服务器配置」去改租约插件/筛选或释放（弹窗互斥，换场由父级负责）。 */
+  onOpenProxyConfig?: () => void;
 }
 
-/** 探针选择卡片的可抓包判定：在线且不在抓包中（idle/stopped/failed 可选）。 */
-function probeSelectable(p: ProbeInfo): boolean {
-  if (p.connection_state !== "online") return false;
-  return p.capture_state !== "starting" && p.capture_state !== "running";
+/** 一次抓包的下发结果：会话已建，剩下的问题只是数据到没到。 */
+interface Started {
+  sessionId: string;
+  channel: CaptureChannel;
+  target: string;
 }
 
-function probeDisabledReason(p: ProbeInfo): string {
-  if (p.connection_state !== "offline") {
-    if (p.capture_state === "running" || p.capture_state === "starting") {
-      return "抓包中";
-    }
-  }
-  return "离线";
-}
-
-/** 探针三维度状态 chip（connection + capture 合并展示）。 */
-function ProbeStateChip({ p }: { p: ProbeInfo }) {
-  if (p.connection_state !== "online") {
-    return (
-      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-        离线
-      </span>
-    );
-  }
-  switch (p.capture_state) {
-    case "running":
-      return (
-        <span className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-300">
-          <span className="gt-live-dot" />
-          抓包中
-        </span>
-      );
-    case "starting":
-      return (
-        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
-          启动中
-        </span>
-      );
-    case "failed":
-      return (
-        <span className="rounded bg-destructive/15 px-1.5 py-0.5 text-[10px] text-destructive">
-          失败
-        </span>
-      );
-    default:
-      return (
-        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-          空闲
-        </span>
-      );
-  }
-}
-
-/** 开始抓包对话框：选一台探针机器抓包（探针是基础设施，管理见「探针」入口）。 */
+/** 开始抓包对话框：选通道 → 填条件 → 下发 → 等数据到达。 */
 export function StartCaptureDialog({
   open,
   onClose,
@@ -96,121 +69,194 @@ export function StartCaptureDialog({
   initialPlugin,
   initialProjectId,
   initialProbeId,
+  onOpenProxyConfig,
 }: StartCaptureDialogProps) {
+  const [channel, setChannel] = useState<CaptureChannel>("probe");
+  // 探针网卡选卡：空数组 = 由探针按出口 IP 挑默认网卡；可多选并发抓。
   const [probeId, setProbeId] = useState("");
-  // 探针抓包选卡：空数组 = 自动选卡（探针按出口 IP 挑默认网卡）；可多选并发抓。
   const [probeIfaces, setProbeIfaces] = useState<string[]>([]);
+  // 代理：租约 id。一次抓包只是在它上面开一个新会话。
+  const [leaseId, setLeaseId] = useState("");
   const [port, setPort] = useState("8080");
   // 端口过滤协议：tcp/udp/both（默认 tcp）。仅探针抓包生效（探针侧派生 BPF）。
   const [protocol, setProtocol] = useState<"tcp" | "udp" | "both">("tcp");
-  // 服务端地址筛选（非必填）：IP 或域名，多个用逗号/空格/换行分隔；
-  // 探针侧派生 BPF host 过滤，与端口同时填写时取交集。
+  // 服务端地址筛选（非必填）：IP 或域名，多个用逗号/空格/换行分隔。
   const [hostFilter, setHostFilter] = useState("");
   const [plugin, setPlugin] = useState("");
-  // 从项目一键抓包时带入的项目 id（本次抓包会话归属到此项目）。
+  // 本次抓包会话的归属项目（空 = 不归属，会话进「未归属抓包」）。
   const [projectId, setProjectId] = useState("");
-  const [started, setStarted] = useState(false);
-  // 探针/agent 源启动成功后保持弹窗打开：轮询会话状态直到推流到达。
-  const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
-  // 高级设置折叠：多网卡等技术细节默认收起，普通用户只看 端口 + 解析器。
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  // 已注册且在线才能用于抓包解码；离线插件无法建立解码流，故置灰禁用但保留可见，便于排查。
-  const { data: pluginsData } = useRegisteredPlugins();
-  const plugins = pluginsData?.plugins ?? [];
-  // 已注册插件归组（Godot/Unity/HTTP/自定义），供普通用户以卡片而非下拉选择解析器。
-  const pluginGroups = groupParsers(plugins);
+  const [started, setStarted] = useState<Started | null>(null);
 
-  // 探针列表：agent 源 = 选一台有权限的探针机器（用户视角是"我要抓这台服务器"）。
   const { data: probesData } = useListProbes();
   const probes = probesData?.probes ?? [];
-  const probeStart = useProbeStartCapture();
+  const { data: leasesData } = useProxyLeases();
+  const leases = leasesData?.leases ?? [];
+  const { data: projectsData } = useProjects();
+  const projects = projectsData?.projects ?? [];
 
-  // 等待推流期间 2s 轮询会话实时状态：packets_in/raw_count > 0 即探针已推流。
-  const { data: agentLiveStatus } = useSessionStatus(agentSessionId, 2000);
-  const agentPacketsIn =
-    (agentLiveStatus?.packets_in ?? 0) + (agentLiveStatus?.raw_count ?? 0);
-  const agentConnected = agentSessionId != null && agentPacketsIn > 0;
+  const probeStart = useProbeStartCapture();
+  const leaseStart = useStartLeaseCapture();
+  const moveSession = useMoveSessionToProject();
+  const pending = probeStart.isPending || leaseStart.isPending;
+
+  const selectedProbe = probes.find((x) => x.probe_id === probeId) ?? null;
+  const selectedLease = leases.find((x) => x.lease_id === leaseId) ?? null;
+  const counts: Record<CaptureChannel, number> = {
+    probe: probes.filter(probeSelectable).length,
+    proxy: leases.filter(leaseSelectable).length,
+  };
+  const targetName =
+    channel === "probe"
+      ? selectedProbe?.name ?? "未选机器"
+      : selectedLease?.device || selectedLease?.connect_addr || "未选设备";
+
+  // 等待数据到达期间 2s 轮询会话实时状态：packets_in/raw_count > 0 即数据已进来。
+  const { data: liveStatus } = useSessionStatus(started?.sessionId ?? null, 2000);
+  const packetsIn = (liveStatus?.packets_in ?? 0) + (liveStatus?.raw_count ?? 0);
+  const hasData = started != null && packetsIn > 0;
   // 实时态非 running 即已终结（词汇与后端一致：running | stopped | error），
-  // 此时再等推流也不会来了，必须让用户重来。
-  const agentSessionClosed =
-    agentSessionId != null && agentLiveStatus?.state != null && agentLiveStatus.state !== "running";
+  // 此时再等也不会有数据进来，得让用户重来。
+  const sessionClosed =
+    started != null && liveStatus?.state != null && liveStatus.state !== "running";
+
+  // 数据到达提示只弹一次（等待 → 已到达 的边沿）。
+  const notifiedRef = useRef(false);
+  useEffect(() => {
+    if (hasData && !notifiedRef.current) {
+      notifiedRef.current = true;
+      toast.success("数据已到达", "正在推流，可以开始分析");
+    }
+    if (!started) notifiedRef.current = false;
+  }, [hasData, started]);
 
   useEffect(() => {
-    if (open) {
-      setStarted(false);
-      setAgentSessionId(null);
-      setProbeId("");
-      setProbeIfaces([]);
-      setHostFilter("");
-      // 打开时应用项目预填：有初始端口/插件才覆盖默认值，否则回到默认。
-      if (initialPort && initialPort > 0) setPort(String(initialPort));
-      if (initialPlugin) setPlugin(initialPlugin);
-      setProjectId(initialProjectId ?? "");
-      // 从「下载探针」接入闭环带入探针 id：自动预选，免手动找。
-      if (initialProbeId) {
-        setProbeId(initialProbeId);
-      }
-    }
-    // 仅在每次打开时读取一次预填（把 initialPort/initialPlugin/initialProbeId 当作当次快照）。
+    if (!open) return;
+    setStarted(null);
+    // 从「下载探针」接入闭环带入探针 id：自动预选，免手动找。
+    setProbeId(initialProbeId ?? "");
+    setProbeIfaces([]);
+    setLeaseId("");
+    setHostFilter("");
+    setProtocol("tcp");
+    // 打开时应用项目预填：有初始端口/插件才覆盖默认值，否则回到默认。
+    setPort(initialPort && initialPort > 0 ? String(initialPort) : "8080");
+    setPlugin(initialPlugin ?? "");
+    setProjectId(initialProjectId ?? "");
+    // 默认通道跟着「哪条通道现在真能抓」走：只接过手机、没有探针的人，打开弹窗
+    // 第一眼就该看到自己能用的那条路，而不是一个空机器列表。
+    if (initialProbeId) setChannel("probe");
+    else if (counts.proxy > 0 && counts.probe === 0) setChannel("proxy");
+    else setChannel("probe");
+    // 只在每次打开时读一次预填（initial* 当次快照）。probes/leases 只用于默认通道判定，
+    // 放进依赖会让 4~5s 一次的轮询反过来重置用户正在填的表单。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // 探针推流到达提示（只弹一次：等待 → 已推流的边沿）。
-  const [agentConnectedNotified, setAgentConnectedNotified] = useState(false);
-  useEffect(() => {
-    if (agentConnected && !agentConnectedNotified) {
-      setAgentConnectedNotified(true);
-      toast.success("数据已到达", "探针正在推流，可以开始分析");
-    }
-    if (agentSessionId == null) setAgentConnectedNotified(false);
-  }, [agentConnected, agentConnectedNotified, agentSessionId]);
+  const hostList = useMemo(
+    () =>
+      hostFilter
+        .split(/[\s,，]+/)
+        .map((s) => s.trim())
+        .filter(Boolean),
+    [hostFilter],
+  );
+  const parsedPort = parseInt(port, 10);
+  const ports = parsedPort > 0 ? [parsedPort] : [];
+
+  /** 本次会话最终归属：手机通道没选时沿用租约自己的归属。 */
+  const effectiveProjectId = projectId || (channel === "proxy" ? selectedLease?.project_id || "" : "");
+  const projectName = projects.find((p) => p.id === effectiveProjectId)?.name ?? "";
+
+  // 选中项目即带上它的默认端口/解析器：这正是「建项目存默认值」的意义。
+  function handleAttribution(nextId: string, project: ProjectInfo | null) {
+    setProjectId(nextId);
+    if (!project) return;
+    if (project.default_port && project.default_port > 0) setPort(String(project.default_port));
+    if (project.default_plugin) setPlugin(project.default_plugin);
+  }
+
+  function fail(err: Error) {
+    toast.error("下发失败", err.message);
+  }
 
   function handleStart() {
-    const p = parseInt(port, 10);
-    // 服务端地址非必填：逗号(中英文)/空格/换行分隔，探针侧派生 host 过滤。
-    const hosts = hostFilter
-      .split(/[\s,，]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    // 探针抓包：建会话 + AssignCapture 一体（probe_start_capture）。
-    const target = probes.find((x) => x.probe_id === probeId);
-    if (!target) {
-      toast.error("请选择一台探针机器");
+    if (channel === "probe") {
+      if (!selectedProbe) {
+        toast.error("请选择一台探针机器");
+        return;
+      }
+      // 探针抓包：建会话 + AssignCapture 一体（probe_start_capture）。
+      probeStart.mutate(
+        {
+          probeId,
+          ports,
+          hosts: hostList,
+          ifaces: probeIfaces,
+          plugin: plugin || undefined,
+          projectId: projectId || undefined,
+          protocol,
+        },
+        {
+          onSuccess: (data) => {
+            const sessionId = data?.session_id ?? "";
+            if (!sessionId) {
+              fail(new Error("探针未返回会话 id"));
+              return;
+            }
+            // 进入「等待推流」闭环：探针收到指令开网卡 → 推流到达。
+            setStarted({ sessionId, channel: "probe", target: targetName });
+            toast.success("抓包已下发", `${targetName} · 会话 ${sessionId}`);
+          },
+          onError: fail,
+        },
+      );
       return;
     }
-    probeStart.mutate(
+
+    if (!selectedLease) {
+      toast.error("请选择一个代理租约");
+      return;
+    }
+    leaseStart.mutate(
       {
-        probeId,
-        ports: p > 0 ? [p] : undefined,
-        hosts: hosts.length > 0 ? hosts : undefined,
-        ifaces: probeIfaces.length > 0 ? probeIfaces : undefined,
+        leaseId,
         plugin: plugin || undefined,
-        projectId: projectId || undefined,
-        protocol,
+        includeHosts: hostList,
+        includePorts: ports,
       },
       {
         onSuccess: (data) => {
           const sessionId = data?.session_id ?? "";
-          if (sessionId) onStarted?.(sessionId);
-          toast.success("抓包已下发", `${target.name} · 会话 ${sessionId}`);
-          // 进入「等待推流」闭环：探针收到指令开网卡 → 推流到达。
-          setStarted(true);
-          setAgentSessionId(sessionId);
+          if (!sessionId) {
+            fail(new Error("代理租约未返回会话 id"));
+            return;
+          }
+          setStarted({ sessionId, channel: "proxy", target: targetName });
+          toast.success("抓包会话已开启", `${targetName} · 会话 ${sessionId}`);
+          // 租约的归属项目在创建时就定死了，而 start_lease_capture 没有 project_id 参数：
+          // 这里选的归属只能在会话建好后补一次归位，否则手机通道的归属选择是空话。
+          if (projectId && projectId !== selectedLease.project_id) {
+            moveSession.mutate(
+              { session_id: sessionId, project_id: projectId },
+              { onError: (err) => toast.error("归位到项目失败", err.message) },
+            );
+          }
         },
-        onError: (err) => {
-          toast.error("下发失败", err.message);
-        },
+        onError: fail,
       },
     );
   }
 
   // 统一关闭路径：清掉等待状态再回调（重新打开时 useEffect 亦会兜底重置）。
   function handleClose() {
-    setAgentSessionId(null);
+    setStarted(null);
     onClose();
   }
 
-  const selectedProbe = probes.find((x) => x.probe_id === probeId);
+  const ready =
+    channel === "probe"
+      ? !!selectedProbe && probeSelectable(selectedProbe)
+      : !!selectedLease && leaseSelectable(selectedLease);
 
   return (
     <Dialog
@@ -218,279 +264,141 @@ export function StartCaptureDialog({
       onClose={handleClose}
       icon={<Play className="h-5 w-5" />}
       title="开始抓包"
-      description="选一台探针机器开始抓包；移动代理抓包为常驻服务，请在「代理服务器配置」中查看连接二维码。"
+      description="先选从哪儿抓：服务器 / PC 上运行的探针，或手机扫码接入的代理租约。"
+      // 手机代理这一侧要就地放二维码 + 接入说明，max-w-md 会把二维码面板挤成竖排。
+      className="max-w-lg"
       footer={
-        <>
-          <Button variant="outline" onClick={handleClose}>
-            <X className="h-4 w-4" />
-            取消
+        started ? (
+          <Button onClick={() => onStarted?.(started.sessionId)}>
+            <Check className="h-4 w-4" />
+            进入会话分析
           </Button>
-          <Button
-            onClick={handleStart}
-            disabled={
-              probeStart.isPending ||
-              !probeId ||
-              !selectedProbe ||
-              !probeSelectable(selectedProbe)
-            }
-          >
-            {started ? (
-              <>
-                <Check className="h-4 w-4" />
-                已启动
-              </>
-            ) : probeStart.isPending ? (
-              "启动中…"
-            ) : (
-              "启动"
-            )}
-          </Button>
-        </>
+        ) : (
+          <>
+            <Button variant="outline" onClick={handleClose}>
+              <X className="h-4 w-4" />
+              取消
+            </Button>
+            <Button onClick={handleStart} disabled={pending || !ready}>
+              {pending ? "启动中…" : "启动抓包"}
+            </Button>
+          </>
+        )
       }
     >
-      {agentSessionId ? (
-        // 探针/agent 源成功态：等待推流 → 已到达 的闭环展示。
+      {started ? (
         <div className="space-y-3">
-          {agentSessionClosed ? (
+          {sessionClosed ? (
             <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/50 px-3 py-2.5 text-sm text-muted-foreground">
-              <X className="h-4 w-4 shrink-0" />
-              会话已结束（可能在探针侧被停止）。
+              <ShieldQuestion className="h-4 w-4 shrink-0" />
+              会话已结束（可能在探针或代理侧被停止）。
             </div>
-          ) : agentConnected ? (
-            <div className="flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2.5 text-sm text-emerald-700 dark:text-emerald-300">
+          ) : hasData ? (
+            <div className="flex items-center gap-2 rounded-lg border border-success/40 bg-success/10 px-3 py-2.5 text-sm text-success">
               <Check className="h-4 w-4 shrink-0" />
-              探针正在推流
+              {started.channel === "probe" ? "探针正在推流" : "手机侧流量已进入"}
               <span className="ml-auto font-mono text-xs">
-                {agentPacketsIn.toLocaleString()} packets ·{" "}
-                {(agentLiveStatus?.event_count ?? 0).toLocaleString()} events
+                {packetsIn.toLocaleString()} packets ·{" "}
+                {(liveStatus?.event_count ?? 0).toLocaleString()} events
               </span>
             </div>
           ) : (
-            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/50 px-3 py-2.5 text-sm">
-              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
-              指令已下发，等待探针开始推流…
-              <span className="ml-auto text-xs text-muted-foreground">
-                探针在线时会自动对齐并开抓
-              </span>
+            <div className="rounded-lg border border-border bg-muted/50 px-3 py-2.5">
+              <div className="flex items-center gap-2 text-sm">
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+                {started.channel === "probe"
+                  ? "指令已下发，等待探针开始推流…"
+                  : "会话已就绪，等待手机侧发起请求…"}
+              </div>
+              {/* 提示另起一行： inline 挤在右侧时，弹窗半宽下会把主句和提示都压成折行。 */}
+              <p className="mt-1 pl-6 text-xs text-muted-foreground">
+                {started.channel === "probe"
+                  ? "探针在线时会自动对齐并开抓"
+                  : "手机没连上代理时不会有数据"}
+              </p>
             </div>
           )}
-          <div className="flex items-center justify-end gap-2">
-            <Button onClick={handleClose}>
-              <Check className="h-4 w-4" />
-              {agentConnected ? "进入会话分析" : "完成"}
-            </Button>
-          </div>
+          <CapturePreview
+            rows={[
+              { label: "会话", value: started.sessionId },
+              { label: "目标", value: started.target },
+              { label: "归属", value: projectName || "不归属项目" },
+            ]}
+          />
         </div>
       ) : (
         <div className="space-y-3">
           <div>
-            <label className="text-sm font-medium">选择机器</label>
-              {probes.length === 0 ? (
-                <div className="mt-1.5 rounded-lg border border-dashed border-border bg-muted/40 px-3 py-4 text-center text-xs text-muted-foreground">
-                  还没有可用的探针机器。通过顶部「接入设备」下载探针，
-                  在目标机器上运行 gt-agent 完成接入。
-                </div>
-              ) : (
-                <div className="mt-1.5 grid max-h-52 grid-cols-1 gap-1.5 overflow-auto gt-scroll">
-                  {probes.map((p) => {
-                    const selectable = probeSelectable(p);
-                    const active = probeId === p.probe_id;
-                    return (
-                      <button
-                        key={p.probe_id}
-                        type="button"
-                        aria-pressed={active}
-                        disabled={!selectable}
-                        onClick={() => {
-                          setProbeId(p.probe_id);
-                          setProbeIfaces([]);
-                        }}
-                        title={selectable ? p.hostname : probeDisabledReason(p)}
-                        className={`flex items-center gap-2.5 rounded-md border px-2.5 py-2 text-left text-sm transition-all ${
-                          active ? SELECT_ACTIVE : SELECT_IDLE
-                        } ${selectable ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}
-                      >
-                        <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-medium text-foreground">{p.name}</span>
-                          <span className="block truncate font-mono text-[10px]">
-                            {p.hostname} · {p.capture_iface || "自动选网卡"}
-                          </span>
-                        </span>
-                        {active && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden />}
-                        <ProbeStateChip p={p} />
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+            <label className="text-sm font-medium">抓包方式</label>
+            <div className="mt-1.5">
+              <ChannelSwitch value={channel} onChange={setChannel} counts={counts} />
             </div>
+          </div>
 
-          <div>
-            <label className="text-sm font-medium">端口</label>
-            <Input
-              value={port}
-              onChange={(e) => setPort(e.target.value)}
-              aria-label="监听端口"
-              inputMode="numeric"
-              placeholder="可留空（全抓）"
-              className="mt-1.5 font-mono"
+          {channel === "probe" ? (
+            <ProbeChannelPicker
+              probes={probes}
+              probeId={probeId}
+              onPick={(id) => {
+                setProbeId(id);
+                setProbeIfaces([]);
+              }}
+              ifaces={probeIfaces}
+              onIfaces={setProbeIfaces}
             />
-          </div>
-          <div>
-            <label className="text-sm font-medium">端口协议</label>
-              <div className="mt-1.5 flex items-center gap-1 rounded-lg bg-muted p-1">
-                {(
-                  [
-                    { id: "tcp", label: "TCP" },
-                    { id: "udp", label: "UDP" },
-                    { id: "both", label: "TCP+UDP" },
-                  ] as const
-                ).map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={protocol === opt.id}
-                    onClick={() => setProtocol(opt.id)}
-                    className={
-                      "flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-[background-color,color] " +
-                      (protocol === opt.id
-                        ? "bg-card text-foreground shadow-sm"
-                        : "text-muted-foreground hover:text-foreground")
-                    }
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                端口非空时按所选协议在探针侧过滤；UDP/TCP+UDP 需要探针 Npcap 支持。
-              </p>
-          </div>
-          <div>
-            <label htmlFor="capture-host-filter" className="text-sm font-medium">
-              服务端 IP/域名（可选）
-            </label>
-            <Input
-              id="capture-host-filter"
-              value={hostFilter}
-              onChange={(e) => setHostFilter(e.target.value)}
-              placeholder="如 10.0.0.8 或 api.example.com；多个用逗号或空格分隔"
-              className="mt-1.5 font-mono"
+          ) : (
+            <ProxyChannelPicker
+              leases={leases}
+              leaseId={leaseId}
+              onPick={setLeaseId}
+              projectId={projectId}
+              onManage={() => {
+                handleClose();
+                onOpenProxyConfig?.();
+              }}
             />
-            <p className="mt-1 text-xs text-muted-foreground">
-              按连接的服务端地址筛选抓包；与端口同时填写时取交集（只抓该服务的对应端口）。
-              域名需探针侧可解析，解析失败会导致抓包启动失败。
-            </p>
-          </div>
-          {/* 高级设置（默认收起）：Interface 等技术细节，普通用户只需选端口 + 解析器。 */}
-          <button
-            type="button"
-            onClick={() => setShowAdvanced((v) => !v)}
-            aria-expanded={showAdvanced}
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAdvanced ? "rotate-180" : ""}`} />
-            高级设置
-          </button>
-          {showAdvanced && (
-            <div>
-              <label className="flex items-center gap-1.5 text-sm font-medium">
-                <MonitorSmartphone className="h-3.5 w-3.5 text-muted-foreground" />
-                探针侧网卡
-              </label>
-              {!selectedProbe || (selectedProbe.interfaces?.length ?? 0) === 0 ? (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {selectedProbe
-                    ? "探针未上报网卡清单（未装 Npcap 或版本过旧），将自动选择默认网卡。"
-                    : "选择探针机器后展示其网卡清单。"}
-                </p>
-              ) : (
-                <>
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {selectedProbe.interfaces!.map((nic) => {
-                      const active = probeIfaces.includes(nic.name);
-                      return (
-                        <button
-                          key={nic.name}
-                          type="button"
-                          aria-pressed={active}
-                          onClick={() =>
-                            setProbeIfaces((prev) =>
-                              active ? prev.filter((x) => x !== nic.name) : [...prev, nic.name],
-                            )
-                          }
-                          title={nic.ips?.length ? `${nic.name} · ${nic.ips.join(", ")}` : nic.name}
-                          className={`inline-flex items-center rounded-md border px-2 py-0.5 font-mono text-[11px] transition-all ${
-                            active
-                              ? "border-primary/70 bg-primary/10 text-primary ring-1 ring-primary/40"
-                              : "border-border bg-muted text-muted-foreground hover:border-primary/30 hover:text-foreground"
-                          }`}
-                        >
-                          {active && <Check className="mr-0.5 inline h-3 w-3" />}
-                          {nic.friendly || nic.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {probeIfaces.length === 0
-                      ? "未选中任何网卡 = 探针自动选默认网卡；可点选一个或多个网卡同时抓。"
-                      : `已选 ${probeIfaces.length} 张网卡，多选时各卡并发抓、汇入同一会话。`}
-                  </p>
-                </>
-              )}
-            </div>
           )}
 
-          <div>
-            <label className="text-sm font-medium">解码解析器（可选）</label>
-            {pluginGroups.order.length === 0 ? (
-              <p className="mt-1.5 text-xs text-muted-foreground">
-                当前没有已注册的解析器，可留空仅抓包；或先启动解析器插件使其注册到 Pipeline。
-              </p>
-            ) : (
-              <>
-                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                  {pluginGroups.order.map((g) =>
-                    pluginGroups.byGroup[g].map((opt) => (
-                      <button
-                        key={opt.plugin}
-                        type="button"
-                        aria-pressed={plugin === opt.plugin}
-                        disabled={!opt.online}
-                        onClick={() => setPlugin(plugin === opt.plugin ? "" : opt.plugin)}
-                        className={`flex w-full items-center gap-2.5 rounded-md border px-2.5 py-2 text-sm transition-all ${
-                          plugin === opt.plugin ? SELECT_ACTIVE : SELECT_IDLE
-                        } ${opt.online ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}
-                      >
-                        <span className="flex min-w-0 flex-1 items-center gap-2">
-                          <span className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] uppercase">
-                            {GROUP_LABEL[g] ?? g}
-                          </span>
-                          <span className="truncate">{opt.label}</span>
-                        </span>
-                        {plugin === opt.plugin && (
-                          <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden />
-                        )}
-                      </button>
-                    )),
-                  )}
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {plugin ? "已选择：留空为不指定（仅抓包）。" : "点击选择一个解析器；离线解析器置灰不可选。"}
-                </p>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+          <FilterFields
+            port={port}
+            onPort={setPort}
+            protocol={protocol}
+            onProtocol={setProtocol}
+            protocolVisible={channel === "probe"}
+            hosts={hostFilter}
+            onHosts={setHostFilter}
+          />
 
-      {probeStart.isError && (
-        <p className="mt-3 text-xs text-destructive">
-          启动失败：{probeStart.error?.message}
-        </p>
+          <ParserPicker value={plugin} onChange={setPlugin} />
+
+          <AttributionPicker value={projectId} onChange={handleAttribution} />
+
+          <CapturePreview
+            rows={[
+              { label: "方式", value: channel === "probe" ? "探针抓包" : "手机代理" },
+              { label: "目标", value: targetName },
+              ...(channel === "probe"
+                ? [
+                    {
+                      label: "网卡",
+                      value: probeIfaces.length
+                        ? probeIfaces.join("、")
+                        : selectedProbe?.capture_iface || "自动选择",
+                    },
+                  ]
+                : []),
+              {
+                label: "端口",
+                value: ports.length
+                  ? `${ports[0]}${channel === "probe" ? `/${protocol === "both" ? "tcp+udp" : protocol}` : ""}`
+                  : "全部",
+              },
+              { label: "服务端", value: hostList.length ? hostList.join("、") : "不限" },
+              { label: "解析器", value: plugin || "仅抓包" },
+              { label: "归属", value: projectName || "不归属项目" },
+            ]}
+          />
+        </div>
       )}
     </Dialog>
   );
