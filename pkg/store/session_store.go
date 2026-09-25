@@ -332,36 +332,22 @@ func (cs *ControlStore) ListSessionsForProject(ctx context.Context, projectID st
 	return result, rows.Err()
 }
 
-// UpdateSession 更新会话元数据（按 session_id 匹配）。
-func (cs *ControlStore) UpdateSession(ctx context.Context, meta SessionMeta) error {
-	var extraJSON sql.NullString
-	if len(meta.Extra) > 0 {
-		b, err := json.Marshal(meta.Extra)
-		if err != nil {
-			return fmt.Errorf("marshal extra: %w", err)
-		}
-		extraJSON = sql.NullString{String: string(b), Valid: true}
-	}
-	var stoppedAt sql.NullTime
-	if meta.StoppedAt != nil {
-		stoppedAt = sql.NullTime{Time: *meta.StoppedAt, Valid: true}
-	}
+// FinishSession 回写会话终态与统计列，不触碰归属列（见 SessionFinish 的说明）。
+func (cs *ControlStore) FinishSession(ctx context.Context, sessionID string, fin SessionFinish) error {
 	res, err := cs.db.ExecContext(ctx, `
-UPDATE sessions SET started_at=?, tenant_id=?, project_id=?, stopped_at=?, status=?, port=?, plugin=?, interface=?, pcap_file=?,
-                    raw_packets=?, events=?, metrics=?, decode_errors=?, duration_sec=?, db_path=?, extra=?,
-                    manifest_snapshot=?
+UPDATE sessions SET stopped_at=?, status=?, port=?, plugin=?, pcap_file=?,
+                    raw_packets=?, events=?, metrics=?, decode_errors=?, duration_sec=?, db_path=?
 WHERE session_id=?`,
-		meta.StartedAt, normalizeTenant(meta.TenantID), meta.ProjectID, stoppedAt, meta.Status, meta.Port, meta.Plugin,
-		meta.Interface, meta.PCAPFile, meta.RawPackets, meta.Events, meta.Metrics,
-		meta.DecodeErrors, meta.DurationSec, meta.DBPath, extraJSON,
-		meta.ManifestSnapshot, meta.SessionID,
+		fin.StoppedAt, fin.Status, fin.Port, fin.Plugin, fin.PCAPFile,
+		fin.RawPackets, fin.Events, fin.Metrics, fin.DecodeErrors, fin.DurationSec, fin.DBPath,
+		sessionID,
 	)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("session %s not found", meta.SessionID)
+		return fmt.Errorf("session %s not found", sessionID)
 	}
 	return nil
 }

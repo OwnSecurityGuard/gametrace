@@ -128,36 +128,22 @@ func (cs *PGControlStore) ListSessionsForProject(ctx context.Context, projectID 
 	return result, rows.Err()
 }
 
-// UpdateSession 更新会话元数据（按 session_id 匹配）。
-func (cs *PGControlStore) UpdateSession(ctx context.Context, meta SessionMeta) error {
-	var extraJSON sql.NullString
-	if len(meta.Extra) > 0 {
-		b, err := json.Marshal(meta.Extra)
-		if err != nil {
-			return fmt.Errorf("marshal extra: %w", err)
-		}
-		extraJSON = sql.NullString{String: string(b), Valid: true}
-	}
-	var stoppedAt sql.NullTime
-	if meta.StoppedAt != nil {
-		stoppedAt = sql.NullTime{Time: *meta.StoppedAt, Valid: true}
-	}
+// FinishSession 回写会话终态与统计列，不触碰归属列（与 SQLite 版一致）。
+func (cs *PGControlStore) FinishSession(ctx context.Context, sessionID string, fin SessionFinish) error {
 	res, err := cs.db.ExecContext(ctx, `
-UPDATE sessions SET started_at=$1, tenant_id=$2, project_id=$3, stopped_at=$4, status=$5, port=$6, plugin=$7, interface=$8, pcap_file=$9,
-                    raw_packets=$10, events=$11, metrics=$12, decode_errors=$13, duration_sec=$14, db_path=$15, extra=$16,
-                    manifest_snapshot=$17
-WHERE session_id=$18`,
-		meta.StartedAt, normalizeTenant(meta.TenantID), meta.ProjectID, stoppedAt, meta.Status, meta.Port, meta.Plugin,
-		meta.Interface, meta.PCAPFile, meta.RawPackets, meta.Events, meta.Metrics,
-		meta.DecodeErrors, meta.DurationSec, meta.DBPath, extraJSON,
-		meta.ManifestSnapshot, meta.SessionID,
+UPDATE sessions SET stopped_at=$1, status=$2, port=$3, plugin=$4, pcap_file=$5,
+                    raw_packets=$6, events=$7, metrics=$8, decode_errors=$9, duration_sec=$10, db_path=$11
+WHERE session_id=$12`,
+		fin.StoppedAt, fin.Status, fin.Port, fin.Plugin, fin.PCAPFile,
+		fin.RawPackets, fin.Events, fin.Metrics, fin.DecodeErrors, fin.DurationSec, fin.DBPath,
+		sessionID,
 	)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("session %s not found", meta.SessionID)
+		return fmt.Errorf("session %s not found", sessionID)
 	}
 	return nil
 }

@@ -101,8 +101,30 @@ type SessionStore interface {
 	ListSessions(ctx context.Context) ([]SessionMeta, error)
 	// ListSessionsFor 是 owner 感知的 ListSessions：只返回该 owner 的会话。
 	ListSessionsFor(ctx context.Context, f SessionOwnerFilter) ([]SessionMeta, error)
-	UpdateSession(ctx context.Context, meta SessionMeta) error
+	// FinishSession 回写会话终态与统计列。
+	// 刻意不写 owner / tenant_id / project_id / extra / manifest_snapshot：归属与
+	// 创建期字段只由 CreateSession 和 MoveSessionToProject 负责。
+	FinishSession(ctx context.Context, sessionID string, fin SessionFinish) error
 	DeleteSession(ctx context.Context, sessionID string) error
+}
+
+// SessionFinish 是会话结束时回写的字段集：只有抓包运行本身产生的事实。
+//
+// 之所以不复用 SessionMeta：会话结束的落库回调手里只有统计快照，若按整行写回，
+// 它不认识的归属列（project_id / tenant_id / extra / manifest_snapshot）会被零值
+// 清空——表现为「项目内抓包一结束，会话就掉进未归属列表」。
+type SessionFinish struct {
+	StoppedAt    time.Time
+	Status       string
+	Port         int
+	Plugin       string
+	PCAPFile     string
+	DBPath       string
+	RawPackets   int64
+	Events       int64
+	Metrics      int64
+	DecodeErrors int64
+	DurationSec  float64
 }
 
 // SessionOwnerFilter 描述会话查询的可见性。

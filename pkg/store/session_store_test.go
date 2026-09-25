@@ -44,23 +44,33 @@ func TestControlStore_CRUD(t *testing.T) {
 		t.Errorf("Extra[note] = %v, want 'test session'", got.Extra["note"])
 	}
 
-	// Update
+	// Finish：只回写终态/统计，创建期与归属列必须原样保留
 	stopped := time.Date(2026, 8, 1, 10, 5, 0, 0, time.UTC)
-	meta.Status = "stopped"
-	meta.StoppedAt = &stopped
-	meta.Events = 42
-	if err := cs.UpdateSession(ctx, meta); err != nil {
-		t.Fatalf("UpdateSession: %v", err)
+	if err := cs.FinishSession(ctx, "sess-1", SessionFinish{
+		StoppedAt: stopped,
+		Status:    "stopped",
+		Port:      meta.Port,
+		Plugin:    meta.Plugin,
+		DBPath:    meta.DBPath,
+		Events:    42,
+	}); err != nil {
+		t.Fatalf("FinishSession: %v", err)
 	}
 	got2, err := cs.GetSession(ctx, "sess-1")
 	if err != nil {
-		t.Fatalf("GetSession after update: %v", err)
+		t.Fatalf("GetSession after finish: %v", err)
 	}
 	if got2.Status != "stopped" || got2.Events != 42 {
-		t.Errorf("after update: status=%q events=%d, want stopped/42", got2.Status, got2.Events)
+		t.Errorf("after finish: status=%q events=%d, want stopped/42", got2.Status, got2.Events)
 	}
 	if got2.StoppedAt == nil || !got2.StoppedAt.Equal(stopped) {
 		t.Errorf("stopped_at = %v, want %v", got2.StoppedAt, stopped)
+	}
+	if !got2.StartedAt.Equal(meta.StartedAt) {
+		t.Errorf("started_at = %v, want %v (immutable)", got2.StartedAt, meta.StartedAt)
+	}
+	if got2.Extra["note"] != "test session" {
+		t.Errorf("Extra after finish = %v, want 'test session' preserved", got2.Extra)
 	}
 
 	// List
@@ -81,7 +91,7 @@ func TestControlStore_CRUD(t *testing.T) {
 	}
 }
 
-func TestControlStore_UpdateNonExistent(t *testing.T) {
+func TestControlStore_FinishNonExistent(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "control.db")
 	cs, err := NewControlStore(db)
 	if err != nil {
@@ -90,9 +100,9 @@ func TestControlStore_UpdateNonExistent(t *testing.T) {
 	defer cs.Close()
 	ctx := context.Background()
 
-	err = cs.UpdateSession(ctx, SessionMeta{SessionID: "no-such", Status: "stopped"})
+	err = cs.FinishSession(ctx, "no-such", SessionFinish{Status: "stopped"})
 	if err == nil {
-		t.Error("UpdateSession non-existent: expected error, got nil")
+		t.Error("FinishSession non-existent: expected error, got nil")
 	}
 }
 
@@ -297,7 +307,10 @@ VALUES ('legacy-1', '2026-08-01 10:00:00', 'stopped', 0, '', '', '', 0, '/tmp/le
 	}
 }
 
-// owner 一等字段持久化往返；UpdateSession 不改 owner（owner 不可变）。
+// owner 一等字段持久化往返；FinishSession 不改归属列（owner 不可变）。
+//
+// 回归场景：会话结束的落库回写如果把整行覆盖，project_id 会被清零，
+// 项目内抓包一结束会话就掉进「未归属抓包」。
 func TestControlStore_OwnerRoundTrip(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "control.db")
 	cs, err := NewControlStore(db)
@@ -308,8 +321,11 @@ func TestControlStore_OwnerRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	if err := cs.CreateSession(ctx, SessionMeta{
-		Owner: "alice", SessionID: "s-alice", Status: "running",
-		DBPath: "/tmp/s-alice/capture.sqlite",
+		Owner: "alice", TenantID: "acme", ProjectID: "proj-1",
+		SessionID: "s-alice", Status: "running",
+		DBPath:           "/tmp/s-alice/capture.sqlite",
+		Extra:            map[string]any{"source": "probe-archive"},
+		ManifestSnapshot: "name: tcp",
 	}); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -321,17 +337,30 @@ func TestControlStore_OwnerRoundTrip(t *testing.T) {
 		t.Errorf("owner = %q, want alice", got.Owner)
 	}
 
-	// 更新其他字段不应清空 owner
-	got.Status = "stopped"
-	if err := cs.UpdateSession(ctx, *got); err != nil {
-		t.Fatalf("UpdateSession: %v", err)
+	if err := cs.FinishSession(ctx, "s-alice", SessionFinish{
+		Status: "stopped", Port: got.Port, Plugin: got.Plugin,
+		DBPath: got.DBPath, RawPackets: 100, Events: 7,
+	}); err != nil {
+		t.Fatalf("FinishSession: %v", err)
 	}
 	got2, _ := cs.GetSession(ctx, "s-alice")
-	if got2.Owner != "alice" {
-		t.Errorf("owner after update = %q, want alice (owner is immutable)", got2.Owner)
+	if got2.Status != "stopped" || got2.Events != 7 || got2.RawPackets != 100 {
+		t.Errorf("after finish: %+v, want stopped/7/100", got2)
 	}
-	if got2.Status != "stopped" {
-		t.Errorf("status after update = %q, want stopped", got2.Status)
+	if got2.Owner != "alice" {
+		t.Errorf("owner after finish = %q, want alice (owner is immutable)", got2.Owner)
+	}
+	if got2.ProjectID != "proj-1" {
+		t.Errorf("project_id after finish = %q, want proj-1", got2.ProjectID)
+	}
+	if got2.TenantID != "acme" {
+		t.Errorf("tenant_id after finish = %q, want acme", got2.TenantID)
+	}
+	if got2.Extra["source"] != "probe-archive" {
+		t.Errorf("extra after finish = %v, want source=probe-archive", got2.Extra)
+	}
+	if got2.ManifestSnapshot != "name: tcp" {
+		t.Errorf("manifest_snapshot after finish = %q, want the snapshot", got2.ManifestSnapshot)
 	}
 }
 

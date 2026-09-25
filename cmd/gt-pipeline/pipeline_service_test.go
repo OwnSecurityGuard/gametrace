@@ -187,6 +187,50 @@ func TestPipelineService_StartStopLifecycle(t *testing.T) {
 	}
 }
 
+// TestPipelineService_FinalizeKeepsProjectBinding 回归：项目内会话结束后必须仍归属该项目。
+//
+// finalizeTask 曾用一个只填了统计的 SessionMeta 整行写回 sessions，把 project_id /
+// tenant_id / extra / manifest_snapshot 一并清零——表现为「项目里抓的包，一停止就
+// 掉进未归属抓包」。
+func TestPipelineService_FinalizeKeepsProjectBinding(t *testing.T) {
+	s, workDir, controlStore := newTestPipelineService(t)
+	ctx := context.Background()
+
+	req := fileStartSessionRequest(workDir)
+	req.ProjectID = "proj-keep"
+	req.Metadata = map[string]string{"source": "probe-archive"}
+
+	res, err := s.StartSession(ctx, req)
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	// 无 tcp 插件，run 会立即退出并触发 finalizeTask（自动结束路径）。
+	waitForTaskDone(t, s, res.SessionID, 2*time.Second)
+
+	var meta *store.SessionMeta
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		m, err := controlStore.GetSession(ctx, res.SessionID)
+		if err != nil {
+			t.Fatalf("GetSession: %v", err)
+		}
+		if m.Status == "stopped" {
+			meta = m
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if meta == nil {
+		t.Fatal("session never finalized to stopped")
+	}
+	if meta.ProjectID != "proj-keep" {
+		t.Errorf("project_id after finalize = %q, want proj-keep", meta.ProjectID)
+	}
+	if meta.Extra["source"] != "probe-archive" {
+		t.Errorf("extra after finalize = %v, want source=probe-archive", meta.Extra)
+	}
+}
+
 // TestPipelineService_StopNoActive 验证停止不存在的会话返回 ErrNoActiveCapture。
 func TestPipelineService_StopNoActive(t *testing.T) {
 	s, _, _ := newTestPipelineService(t)

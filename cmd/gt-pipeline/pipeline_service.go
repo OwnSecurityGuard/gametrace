@@ -388,14 +388,11 @@ func (s *pipelineService) finalizeTask(task *captureTask) {
 	stoppedAt := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := s.controlStore.UpdateSession(ctx, store.SessionMeta{
-		SessionID:    task.sessionID,
-		StartedAt:    task.start,
-		StoppedAt:    &stoppedAt,
+	if err := s.controlStore.FinishSession(ctx, task.sessionID, store.SessionFinish{
+		StoppedAt:    stoppedAt,
 		Status:       "stopped",
 		Port:         task.port,
 		Plugin:       task.getPlugin(),
-		Interface:    "",
 		PCAPFile:     task.pcapFile,
 		RawPackets:   snap.RawCount,
 		Events:       snap.EventCount,
