@@ -7,6 +7,7 @@ import {
   useProbeStopCapture,
   useProbeRetryCapture,
   useProbeRename,
+  useProbeNotify,
   useProbeRevoke,
   useProbeListArchive,
   useProbeImportArchive,
@@ -24,6 +25,7 @@ import {
   Download,
   RefreshCw,
   Loader2,
+  Bell,
 } from "lucide-react";
 
 interface ProbeAdminDialogProps {
@@ -87,7 +89,7 @@ function ProbeStatusLine({ p }: { p: ProbeInfo }) {
   );
 }
 
-/** 探针管理弹窗（管理 > 探针）：三维度状态、改名/吊销、停抓/重试、本地归档与离线导入。 */
+/** 探针管理弹窗（管理 > 探针）：三维度状态、改名/吊销、系统通知、停抓/重试、本地归档与离线导入。 */
 export function ProbeAdminDialog({ open, onClose, onImported }: ProbeAdminDialogProps) {
   const { data: probesData, isLoading } = useListProbes();
   const probes = probesData?.probes ?? [];
@@ -95,10 +97,14 @@ export function ProbeAdminDialog({ open, onClose, onImported }: ProbeAdminDialog
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [confirmRevokeId, setConfirmRevokeId] = useState<string | null>(null);
+  const [notifyOpenId, setNotifyOpenId] = useState<string | null>(null);
+  const [notifyTitle, setNotifyTitle] = useState("");
+  const [notifyMessage, setNotifyMessage] = useState("");
 
   const stopCapture = useProbeStopCapture();
   const retry = useProbeRetryCapture();
   const rename = useProbeRename();
+  const notify = useProbeNotify();
   const revoke = useProbeRevoke();
   const importArchive = useProbeImportArchive();
   // 归档展开时查询该探针留存段（带 refresh 实时刷新，探针离线自动落缓存）。
@@ -142,6 +148,26 @@ export function ProbeAdminDialog({ open, onClose, onImported }: ProbeAdminDialog
           toast.success("已改名", name);
         },
         onError: (err) => toast.error("改名失败", err.message),
+      },
+    );
+  }
+
+  function handleNotifySend(p: ProbeInfo) {
+    const message = notifyMessage.trim();
+    if (!message) return;
+    notify.mutate(
+      { probeId: p.probe_id, title: notifyTitle.trim(), message },
+      {
+        onSuccess: (d) => {
+          if (!d?.ok) {
+            toast.error("通知未送达", "探针离线，或其桌面环境没能弹出通知");
+            return;
+          }
+          setNotifyOpenId(null);
+          setNotifyMessage("");
+          toast.success("通知已弹出", `${p.name}：${message}`);
+        },
+        onError: (err) => toast.error("通知失败", err.message),
       },
     );
   }
@@ -286,6 +312,24 @@ export function ProbeAdminDialog({ open, onClose, onImported }: ProbeAdminDialog
                     >
                       <Database className={`h-3.5 w-3.5 ${expanded ? "text-primary" : ""}`} />
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 w-7 px-0"
+                      onClick={() => {
+                        setNotifyOpenId(notifyOpenId === p.probe_id ? null : p.probe_id);
+                        setNotifyTitle("");
+                        setNotifyMessage("");
+                      }}
+                      disabled={p.connection_state !== "online"}
+                      title={
+                        p.connection_state !== "online"
+                          ? "探针离线，无法弹通知"
+                          : "在该机器上弹一条系统通知"
+                      }
+                    >
+                      <Bell className={`h-3.5 w-3.5 ${notifyOpenId === p.probe_id ? "text-primary" : ""}`} />
+                    </Button>
                     {confirmRevokeId === p.probe_id ? (
                       <>
                         <Button
@@ -314,6 +358,46 @@ export function ProbeAdminDialog({ open, onClose, onImported }: ProbeAdminDialog
                     )}
                   </div>
                 </div>
+
+                {notifyOpenId === p.probe_id && (
+                  <div className="border-t border-border px-3 py-2.5">
+                    <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+                      <Bell className="h-3.5 w-3.5" />
+                      系统通知：在该机器上弹一条桌面通知（一次性动作，探针离线不会补发）
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        value={notifyTitle}
+                        onChange={(e) => setNotifyTitle(e.target.value)}
+                        placeholder="标题（可选）"
+                        className="h-7 w-40 text-sm"
+                      />
+                      <Input
+                        value={notifyMessage}
+                        onChange={(e) => setNotifyMessage(e.target.value)}
+                        placeholder="通知内容"
+                        autoFocus
+                        className="h-7 flex-1 text-sm"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleNotifySend(p);
+                          if (e.key === "Escape") setNotifyOpenId(null);
+                        }}
+                      />
+                      <Button
+                        size="sm"
+                        className="h-7"
+                        onClick={() => handleNotifySend(p)}
+                        disabled={!notifyMessage.trim() || notify.isPending}
+                      >
+                        {notify.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                        弹出
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-7" onClick={() => setNotifyOpenId(null)}>
+                        取消
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
                 {expanded && (
                   <div className="border-t border-border px-3 py-2.5">

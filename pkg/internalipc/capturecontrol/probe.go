@@ -28,6 +28,8 @@ type ProbeAdmin interface {
 	UpdateFilter(ctx context.Context, probeID string, ports []int32, hosts []string, protocol string) error
 	Retry(ctx context.Context, probeID string) error
 	Rename(ctx context.Context, probeID, name string) error
+	// SendNotify 让探针弹系统通知（一次性；离线即失败，不补发）。
+	SendNotify(ctx context.Context, probeID, title, message string) error
 	Revoke(ctx context.Context, probeID string) error
 	ListArchiveCached(ctx context.Context, probeID string, fromMs, toMs int64) ([]store.ArchiveSegmentMeta, error)
 	UpsertArchiveSegments(ctx context.Context, probeID string, segs []store.ArchiveSegmentMeta) error
@@ -289,6 +291,28 @@ func (s *Server) ProbeRename(ctx context.Context, req *pb.ProbeRenameRequest) (*
 		return &pb.ProbeRenameResponse{Ok: false}, nil
 	}
 	return &pb.ProbeRenameResponse{Ok: true}, nil
+}
+
+// ProbeNotify 让探针在目标机器上弹一条系统桌面通知。
+//
+// 不预判在线状态：探针离线时 sendAndWait 直接返回 ErrProbeOffline，错误原文
+// 回传调用方，便于区分「机器没开机」与「桌面环境弹不出通知」。
+func (s *Server) ProbeNotify(ctx context.Context, req *pb.ProbeNotifyRequest) (*pb.ProbeNotifyResponse, error) {
+	pa, err := s.probeAdmin()
+	if err != nil {
+		return nil, err
+	}
+	p, err := pa.Get(ctx, req.GetProbeId())
+	if err != nil {
+		return nil, err
+	}
+	if err := authorizeProbe(p, req.GetOwner(), req.GetAllOwners()); err != nil {
+		return nil, err
+	}
+	if err := pa.SendNotify(ctx, req.GetProbeId(), req.GetTitle(), req.GetMessage()); err != nil {
+		return &pb.ProbeNotifyResponse{Ok: false}, nil
+	}
+	return &pb.ProbeNotifyResponse{Ok: true}, nil
 }
 
 // ProbeRevoke 作废 probe_token（探针下次启动需重新接入）。

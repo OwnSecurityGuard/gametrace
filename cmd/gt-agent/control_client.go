@@ -115,7 +115,7 @@ func (c *ControlAgent) connectOnce(ctx context.Context) error {
 		Hello: &proto.ProbeHello{
 			ProbeId:      c.probeID,
 			Version:      version.String(),
-			Capabilities: []string{"pcap", "plugin_host"},
+			Capabilities: []string{"pcap", "plugin_host", "notify"},
 			Interfaces:   ifacesToProto(listInterfacesLocal()),
 		},
 	}}); err != nil {
@@ -294,6 +294,10 @@ func (c *ControlAgent) execute(ctx context.Context, cmd *proto.Command, sendEven
 				p.ArchiveUpload.GetFromUnix()*1000, p.ArchiveUpload.GetToUnix()*1000,
 				c.ingestAddr, c.probeToken)
 		}
+	case *proto.Command_Notify:
+		if err := sendSystemNotification(p.Notify.GetTitle(), p.Notify.GetMessage()); err != nil {
+			ok, errStr = false, err.Error()
+		}
 	default:
 		ok, errStr = false, "unsupported command"
 	}
@@ -323,6 +327,8 @@ func commandKind(cmd *proto.Command) string {
 		return "archive_query"
 	case *proto.Command_ArchiveUpload:
 		return "archive_upload"
+	case *proto.Command_Notify:
+		return "notify"
 	default:
 		return "unknown"
 	}

@@ -68,6 +68,8 @@ service CaptureControl {
   // ProbeRetryCapture 让 failed 状态的探针重试上一次 assign。
   rpc ProbeRetryCapture(ProbeRetryCaptureRequest) returns (ProbeRetryCaptureResponse);
   rpc ProbeRename(ProbeRenameRequest) returns (ProbeRenameResponse);
+  // ProbeNotify 让探针在目标机器上弹一条系统桌面通知（一次性动作，探针离线即失败）。
+  rpc ProbeNotify(ProbeNotifyRequest) returns (ProbeNotifyResponse);
   // ProbeRevoke 作废 probe_token（探针下次启动需重新接入）。
   rpc ProbeRevoke(ProbeRevokeRequest) returns (ProbeRevokeResponse);
   rpc ProbeListArchive(ProbeListArchiveRequest) returns (ProbeListArchiveResponse);
@@ -704,6 +706,15 @@ message ProbeRenameRequest {
   bool all_owners = 4;
 }
 message ProbeRenameResponse { bool ok = 1; }
+
+message ProbeNotifyRequest {
+  string probe_id = 1;
+  string title = 2;
+  string message = 3;
+  string owner = 4;
+  bool all_owners = 5;
+}
+message ProbeNotifyResponse { bool ok = 1; }
 
 message ProbeRevokeRequest {
   string probe_id = 1;

@@ -206,6 +206,14 @@ message ArchiveUpload {
 
 message RetryCmd {}
 
+// Notify 让探针在目标机器上弹一条系统桌面通知（beeep 跨平台）。
+// 用于「平台想提醒机器前的人」：抓包异常告警、任务完成提醒、运维通知等。
+// 一次性动作为语义（不进 desired-state）：探针离线即下发失败，不做断线补发。
+message Notify {
+  string title = 1;
+  string message = 2;
+}
+
 message Command {
   string id = 1;                     // 幂等键；探针侧 LRU 去重
   oneof payload {
@@ -216,6 +224,7 @@ message Command {
     ArchiveQuery archive_query = 6;
     ArchiveUpload archive_upload = 7;
     RetryCmd retry = 8;
+    Notify notify = 9;
   }
 }
 

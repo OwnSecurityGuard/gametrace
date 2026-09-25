@@ -2585,6 +2585,13 @@ func main() {
 		mcp.WithString("name", mcp.Required(), mcp.Description("New display name, e.g. game-server-01")),
 	), capture.handleProbeRename)
 
+	s.AddTool(mcp.NewTool("probe_notify",
+		mcp.WithDescription("Pop a native desktop notification on the probe's machine (Windows/Linux/macOS toast via the probe process). One-shot: nothing is queued, so an offline probe returns an error instead of a delayed delivery. Use for 'wake the human sitting at that machine' — capture anomaly alerts, job finished, credential about to expire."),
+		mcp.WithString("probe_id", mcp.Required(), mcp.Description("Probe ID to notify (must be online)")),
+		mcp.WithString("title", mcp.Description("Notification title; empty falls back to 'GameTrace Probe'")),
+		mcp.WithString("message", mcp.Required(), mcp.Description("Notification body text")),
+	), capture.handleProbeNotify)
+
 	s.AddTool(mcp.NewTool("probe_revoke",
 		mcp.WithDescription("Revoke a probe's long-term credential: the probe's token stops working immediately and it must re-register (claim code / user token) next start. Use when a machine is decommissioned or its credentials leaked."),
 		mcp.WithString("probe_id", mcp.Required(), mcp.Description("Probe ID")),

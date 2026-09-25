@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -232,6 +233,32 @@ func (m *mcpCapture) handleProbeRename(ctx context.Context, req mcp.CallToolRequ
 		return errorResult(fmt.Errorf("probe rename: %w", err)), nil
 	}
 	b, _ := json.MarshalIndent(map[string]any{"ok": resp.GetOk()}, "", "  ")
+	return mcp.NewToolResultText(string(b)), nil
+}
+
+// handleProbeNotify 让探针在目标机器上弹一条系统桌面通知。
+func (m *mcpCapture) handleProbeNotify(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if m.pipelineClient == nil {
+		return errorResult(fmt.Errorf("pipeline client not available")), nil
+	}
+	message := req.GetString("message", "")
+	if strings.TrimSpace(message) == "" {
+		return errorResult(fmt.Errorf("message is required")), nil
+	}
+	grpcReq := &pb.ProbeNotifyRequest{
+		ProbeId: req.GetString("probe_id", ""),
+		Title:   req.GetString("title", ""),
+		Message: message,
+	}
+	fillOwner(ctx, func(o string, a bool) { grpcReq.Owner, grpcReq.AllOwners = o, a })
+	resp, err := m.pipelineClient.ProbeNotify(ctx, grpcReq)
+	if err != nil {
+		return errorResult(fmt.Errorf("probe notify: %w", err)), nil
+	}
+	if !resp.GetOk() {
+		return errorResult(fmt.Errorf("probe did not show the notification (offline or desktop env refused it)")), nil
+	}
+	b, _ := json.MarshalIndent(map[string]any{"ok": true}, "", "  ")
 	return mcp.NewToolResultText(string(b)), nil
 }
 

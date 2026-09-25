@@ -13,6 +13,7 @@ package main
 //	POST /v1/capture/start  {session_id, iface?, ports?[], hosts?[], bpf?, snaplen?, promisc?}
 //	POST /v1/capture/stop
 //	POST /v1/capture/filter {ports?[], hosts?[], bpf?}   热更新，不断流
+//	POST /v1/notify         {title, message}   本机弹系统通知
 //
 // 不监听非回环地址：需要跨机控制走远端控制通道，不放监听。
 
@@ -63,6 +64,7 @@ func newLocalControl(runner *captureRunner, cfg *agentConfig, ingest string) *lo
 	mux.HandleFunc("/v1/capture/start", lc.handleStart)
 	mux.HandleFunc("/v1/capture/stop", lc.handleStop)
 	mux.HandleFunc("/v1/capture/filter", lc.handleFilter)
+	mux.HandleFunc("/v1/notify", lc.handleNotify)
 	lc.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	return lc
 }
@@ -328,6 +330,32 @@ func (lc *localControl) handleFilter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lc.writeStatus(w)
+}
+
+// handleNotify 在本机弹一条系统通知（{title, message}）——与平台下发的 Notify
+// 走同一个实现，供坐在机器前的人自测通知链路是否可用。
+func (lc *localControl) handleNotify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !lc.authorize(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		Title   string `json:"title"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := sendSystemNotification(req.Title, req.Message); err != nil {
+		writeJSONLocal(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSONLocal(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (lc *localControl) writeStatus(w http.ResponseWriter) {

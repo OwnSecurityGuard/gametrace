@@ -44,6 +44,7 @@ const (
 	CaptureControl_ProbeUpdateFilter_FullMethodName   = "/gametrace.internalipc.CaptureControl/ProbeUpdateFilter"
 	CaptureControl_ProbeRetryCapture_FullMethodName   = "/gametrace.internalipc.CaptureControl/ProbeRetryCapture"
 	CaptureControl_ProbeRename_FullMethodName         = "/gametrace.internalipc.CaptureControl/ProbeRename"
+	CaptureControl_ProbeNotify_FullMethodName         = "/gametrace.internalipc.CaptureControl/ProbeNotify"
 	CaptureControl_ProbeRevoke_FullMethodName         = "/gametrace.internalipc.CaptureControl/ProbeRevoke"
 	CaptureControl_ProbeListArchive_FullMethodName    = "/gametrace.internalipc.CaptureControl/ProbeListArchive"
 	CaptureControl_ProbeImportArchive_FullMethodName  = "/gametrace.internalipc.CaptureControl/ProbeImportArchive"
@@ -120,6 +121,8 @@ type CaptureControlClient interface {
 	// ProbeRetryCapture 让 failed 状态的探针重试上一次 assign。
 	ProbeRetryCapture(ctx context.Context, in *ProbeRetryCaptureRequest, opts ...grpc.CallOption) (*ProbeRetryCaptureResponse, error)
 	ProbeRename(ctx context.Context, in *ProbeRenameRequest, opts ...grpc.CallOption) (*ProbeRenameResponse, error)
+	// ProbeNotify 让探针在目标机器上弹一条系统桌面通知（一次性动作，探针离线即失败）。
+	ProbeNotify(ctx context.Context, in *ProbeNotifyRequest, opts ...grpc.CallOption) (*ProbeNotifyResponse, error)
 	// ProbeRevoke 作废 probe_token（探针下次启动需重新接入）。
 	ProbeRevoke(ctx context.Context, in *ProbeRevokeRequest, opts ...grpc.CallOption) (*ProbeRevokeResponse, error)
 	ProbeListArchive(ctx context.Context, in *ProbeListArchiveRequest, opts ...grpc.CallOption) (*ProbeListArchiveResponse, error)
@@ -403,6 +406,16 @@ func (c *captureControlClient) ProbeRename(ctx context.Context, in *ProbeRenameR
 	return out, nil
 }
 
+func (c *captureControlClient) ProbeNotify(ctx context.Context, in *ProbeNotifyRequest, opts ...grpc.CallOption) (*ProbeNotifyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProbeNotifyResponse)
+	err := c.cc.Invoke(ctx, CaptureControl_ProbeNotify_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *captureControlClient) ProbeRevoke(ctx context.Context, in *ProbeRevokeRequest, opts ...grpc.CallOption) (*ProbeRevokeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ProbeRevokeResponse)
@@ -522,6 +535,8 @@ type CaptureControlServer interface {
 	// ProbeRetryCapture 让 failed 状态的探针重试上一次 assign。
 	ProbeRetryCapture(context.Context, *ProbeRetryCaptureRequest) (*ProbeRetryCaptureResponse, error)
 	ProbeRename(context.Context, *ProbeRenameRequest) (*ProbeRenameResponse, error)
+	// ProbeNotify 让探针在目标机器上弹一条系统桌面通知（一次性动作，探针离线即失败）。
+	ProbeNotify(context.Context, *ProbeNotifyRequest) (*ProbeNotifyResponse, error)
 	// ProbeRevoke 作废 probe_token（探针下次启动需重新接入）。
 	ProbeRevoke(context.Context, *ProbeRevokeRequest) (*ProbeRevokeResponse, error)
 	ProbeListArchive(context.Context, *ProbeListArchiveRequest) (*ProbeListArchiveResponse, error)
@@ -620,6 +635,9 @@ func (UnimplementedCaptureControlServer) ProbeRetryCapture(context.Context, *Pro
 }
 func (UnimplementedCaptureControlServer) ProbeRename(context.Context, *ProbeRenameRequest) (*ProbeRenameResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ProbeRename not implemented")
+}
+func (UnimplementedCaptureControlServer) ProbeNotify(context.Context, *ProbeNotifyRequest) (*ProbeNotifyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ProbeNotify not implemented")
 }
 func (UnimplementedCaptureControlServer) ProbeRevoke(context.Context, *ProbeRevokeRequest) (*ProbeRevokeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ProbeRevoke not implemented")
@@ -1100,6 +1118,24 @@ func _CaptureControl_ProbeRename_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CaptureControl_ProbeNotify_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProbeNotifyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CaptureControlServer).ProbeNotify(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CaptureControl_ProbeNotify_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CaptureControlServer).ProbeNotify(ctx, req.(*ProbeNotifyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _CaptureControl_ProbeRevoke_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ProbeRevokeRequest)
 	if err := dec(in); err != nil {
@@ -1292,6 +1328,10 @@ var CaptureControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ProbeRename",
 			Handler:    _CaptureControl_ProbeRename_Handler,
+		},
+		{
+			MethodName: "ProbeNotify",
+			Handler:    _CaptureControl_ProbeNotify_Handler,
 		},
 		{
 			MethodName: "ProbeRevoke",

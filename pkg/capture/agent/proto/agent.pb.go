@@ -1559,6 +1559,61 @@ func (*RetryCmd) Descriptor() ([]byte, []int) {
 	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{21}
 }
 
+// Notify 让探针在目标机器上弹一条系统桌面通知（beeep 跨平台）。
+// 用于「平台想提醒机器前的人」：抓包异常告警、任务完成提醒、运维通知等。
+// 一次性动作为语义（不进 desired-state）：探针离线即下发失败，不做断线补发。
+type Notify struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Title         string                 `protobuf:"bytes,1,opt,name=title,proto3" json:"title,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Notify) Reset() {
+	*x = Notify{}
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Notify) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Notify) ProtoMessage() {}
+
+func (x *Notify) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Notify.ProtoReflect.Descriptor instead.
+func (*Notify) Descriptor() ([]byte, []int) {
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *Notify) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *Notify) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
 type Command struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // 幂等键；探针侧 LRU 去重
@@ -1571,6 +1626,7 @@ type Command struct {
 	//	*Command_ArchiveQuery
 	//	*Command_ArchiveUpload
 	//	*Command_Retry
+	//	*Command_Notify
 	Payload       isCommand_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1578,7 +1634,7 @@ type Command struct {
 
 func (x *Command) Reset() {
 	*x = Command{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[22]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1590,7 +1646,7 @@ func (x *Command) String() string {
 func (*Command) ProtoMessage() {}
 
 func (x *Command) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[22]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1603,7 +1659,7 @@ func (x *Command) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Command.ProtoReflect.Descriptor instead.
 func (*Command) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{22}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *Command) GetId() string {
@@ -1683,6 +1739,15 @@ func (x *Command) GetRetry() *RetryCmd {
 	return nil
 }
 
+func (x *Command) GetNotify() *Notify {
+	if x != nil {
+		if x, ok := x.Payload.(*Command_Notify); ok {
+			return x.Notify
+		}
+	}
+	return nil
+}
+
 type isCommand_Payload interface {
 	isCommand_Payload()
 }
@@ -1715,6 +1780,10 @@ type Command_Retry struct {
 	Retry *RetryCmd `protobuf:"bytes,8,opt,name=retry,proto3,oneof"`
 }
 
+type Command_Notify struct {
+	Notify *Notify `protobuf:"bytes,9,opt,name=notify,proto3,oneof"`
+}
+
 func (*Command_Assign) isCommand_Payload() {}
 
 func (*Command_Stop) isCommand_Payload() {}
@@ -1729,6 +1798,8 @@ func (*Command_ArchiveUpload) isCommand_Payload() {}
 
 func (*Command_Retry) isCommand_Payload() {}
 
+func (*Command_Notify) isCommand_Payload() {}
+
 type ArchiveChunk struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	TargetSessionId string                 `protobuf:"bytes,1,opt,name=target_session_id,json=targetSessionId,proto3" json:"target_session_id,omitempty"`
@@ -1741,7 +1812,7 @@ type ArchiveChunk struct {
 
 func (x *ArchiveChunk) Reset() {
 	*x = ArchiveChunk{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[23]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1753,7 +1824,7 @@ func (x *ArchiveChunk) String() string {
 func (*ArchiveChunk) ProtoMessage() {}
 
 func (x *ArchiveChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[23]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1766,7 +1837,7 @@ func (x *ArchiveChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveChunk.ProtoReflect.Descriptor instead.
 func (*ArchiveChunk) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{23}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ArchiveChunk) GetTargetSessionId() string {
@@ -1807,7 +1878,7 @@ type UploadArchiveAck struct {
 
 func (x *UploadArchiveAck) Reset() {
 	*x = UploadArchiveAck{}
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[24]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1819,7 +1890,7 @@ func (x *UploadArchiveAck) String() string {
 func (*UploadArchiveAck) ProtoMessage() {}
 
 func (x *UploadArchiveAck) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[24]
+	mi := &file_pkg_capture_agent_proto_agent_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1832,7 +1903,7 @@ func (x *UploadArchiveAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadArchiveAck.ProtoReflect.Descriptor instead.
 func (*UploadArchiveAck) Descriptor() ([]byte, []int) {
-	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{24}
+	return file_pkg_capture_agent_proto_agent_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *UploadArchiveAck) GetPackets() uint64 {
@@ -1980,7 +2051,10 @@ const file_pkg_capture_agent_proto_agent_proto_rawDesc = "" +
 	"\tfrom_unix\x18\x02 \x01(\x03R\bfromUnix\x12\x17\n" +
 	"\ato_unix\x18\x03 \x01(\x03R\x06toUnix\"\n" +
 	"\n" +
-	"\bRetryCmd\"\xc6\x03\n" +
+	"\bRetryCmd\"8\n" +
+	"\x06Notify\x12\x14\n" +
+	"\x05title\x18\x01 \x01(\tR\x05title\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xf9\x03\n" +
 	"\aCommand\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x128\n" +
 	"\x06assign\x18\x02 \x01(\v2\x1e.gametrace.agent.AssignCaptureH\x00R\x06assign\x125\n" +
@@ -1989,7 +2063,8 @@ const file_pkg_capture_agent_proto_agent_proto_rawDesc = "" +
 	"\x06config\x18\x05 \x01(\v2\x1a.gametrace.agent.SetConfigH\x00R\x06config\x12D\n" +
 	"\rarchive_query\x18\x06 \x01(\v2\x1d.gametrace.agent.ArchiveQueryH\x00R\farchiveQuery\x12G\n" +
 	"\x0earchive_upload\x18\a \x01(\v2\x1e.gametrace.agent.ArchiveUploadH\x00R\rarchiveUpload\x121\n" +
-	"\x05retry\x18\b \x01(\v2\x19.gametrace.agent.RetryCmdH\x00R\x05retryB\t\n" +
+	"\x05retry\x18\b \x01(\v2\x19.gametrace.agent.RetryCmdH\x00R\x05retry\x121\n" +
+	"\x06notify\x18\t \x01(\v2\x17.gametrace.agent.NotifyH\x00R\x06notifyB\t\n" +
 	"\apayload\"\x96\x01\n" +
 	"\fArchiveChunk\x12*\n" +
 	"\x11target_session_id\x18\x01 \x01(\tR\x0ftargetSessionId\x12\x10\n" +
@@ -2018,7 +2093,7 @@ func file_pkg_capture_agent_proto_agent_proto_rawDescGZIP() []byte {
 	return file_pkg_capture_agent_proto_agent_proto_rawDescData
 }
 
-var file_pkg_capture_agent_proto_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_pkg_capture_agent_proto_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_pkg_capture_agent_proto_agent_proto_goTypes = []any{
 	(*PacketBatch)(nil),          // 0: gametrace.agent.PacketBatch
 	(*RawPacket)(nil),            // 1: gametrace.agent.RawPacket
@@ -2042,15 +2117,16 @@ var file_pkg_capture_agent_proto_agent_proto_goTypes = []any{
 	(*ArchiveQuery)(nil),         // 19: gametrace.agent.ArchiveQuery
 	(*ArchiveUpload)(nil),        // 20: gametrace.agent.ArchiveUpload
 	(*RetryCmd)(nil),             // 21: gametrace.agent.RetryCmd
-	(*Command)(nil),              // 22: gametrace.agent.Command
-	(*ArchiveChunk)(nil),         // 23: gametrace.agent.ArchiveChunk
-	(*UploadArchiveAck)(nil),     // 24: gametrace.agent.UploadArchiveAck
-	nil,                          // 25: gametrace.agent.RawPacket.MetadataEntry
-	nil,                          // 26: gametrace.agent.SetConfig.KvsEntry
+	(*Notify)(nil),               // 22: gametrace.agent.Notify
+	(*Command)(nil),              // 23: gametrace.agent.Command
+	(*ArchiveChunk)(nil),         // 24: gametrace.agent.ArchiveChunk
+	(*UploadArchiveAck)(nil),     // 25: gametrace.agent.UploadArchiveAck
+	nil,                          // 26: gametrace.agent.RawPacket.MetadataEntry
+	nil,                          // 27: gametrace.agent.SetConfig.KvsEntry
 }
 var file_pkg_capture_agent_proto_agent_proto_depIdxs = []int32{
 	1,  // 0: gametrace.agent.PacketBatch.packets:type_name -> gametrace.agent.RawPacket
-	25, // 1: gametrace.agent.RawPacket.metadata:type_name -> gametrace.agent.RawPacket.MetadataEntry
+	26, // 1: gametrace.agent.RawPacket.metadata:type_name -> gametrace.agent.RawPacket.MetadataEntry
 	6,  // 2: gametrace.agent.ProbeHello.interfaces:type_name -> gametrace.agent.ProbeIface
 	7,  // 3: gametrace.agent.ProbeHeartbeat.capture:type_name -> gametrace.agent.ProbeCaptureStatus
 	8,  // 4: gametrace.agent.ProbeHeartbeat.data:type_name -> gametrace.agent.ProbeDataStatus
@@ -2060,7 +2136,7 @@ var file_pkg_capture_agent_proto_agent_proto_depIdxs = []int32{
 	10, // 8: gametrace.agent.ControlEvent.heartbeat:type_name -> gametrace.agent.ProbeHeartbeat
 	11, // 9: gametrace.agent.ControlEvent.result:type_name -> gametrace.agent.CommandResult
 	13, // 10: gametrace.agent.ControlEvent.archive_segments:type_name -> gametrace.agent.ArchiveSegmentsReply
-	26, // 11: gametrace.agent.SetConfig.kvs:type_name -> gametrace.agent.SetConfig.KvsEntry
+	27, // 11: gametrace.agent.SetConfig.kvs:type_name -> gametrace.agent.SetConfig.KvsEntry
 	15, // 12: gametrace.agent.Command.assign:type_name -> gametrace.agent.AssignCapture
 	16, // 13: gametrace.agent.Command.stop:type_name -> gametrace.agent.StopCaptureCmd
 	17, // 14: gametrace.agent.Command.filter:type_name -> gametrace.agent.UpdateFilter
@@ -2068,20 +2144,21 @@ var file_pkg_capture_agent_proto_agent_proto_depIdxs = []int32{
 	19, // 16: gametrace.agent.Command.archive_query:type_name -> gametrace.agent.ArchiveQuery
 	20, // 17: gametrace.agent.Command.archive_upload:type_name -> gametrace.agent.ArchiveUpload
 	21, // 18: gametrace.agent.Command.retry:type_name -> gametrace.agent.RetryCmd
-	1,  // 19: gametrace.agent.ArchiveChunk.packet:type_name -> gametrace.agent.RawPacket
-	0,  // 20: gametrace.agent.AgentIngest.Push:input_type -> gametrace.agent.PacketBatch
-	3,  // 21: gametrace.agent.AgentControl.RegisterProbe:input_type -> gametrace.agent.RegisterProbeRequest
-	14, // 22: gametrace.agent.AgentControl.Connect:input_type -> gametrace.agent.ControlEvent
-	23, // 23: gametrace.agent.AgentControl.UploadArchive:input_type -> gametrace.agent.ArchiveChunk
-	2,  // 24: gametrace.agent.AgentIngest.Push:output_type -> gametrace.agent.PushAck
-	4,  // 25: gametrace.agent.AgentControl.RegisterProbe:output_type -> gametrace.agent.RegisterProbeAck
-	22, // 26: gametrace.agent.AgentControl.Connect:output_type -> gametrace.agent.Command
-	24, // 27: gametrace.agent.AgentControl.UploadArchive:output_type -> gametrace.agent.UploadArchiveAck
-	24, // [24:28] is the sub-list for method output_type
-	20, // [20:24] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	22, // 19: gametrace.agent.Command.notify:type_name -> gametrace.agent.Notify
+	1,  // 20: gametrace.agent.ArchiveChunk.packet:type_name -> gametrace.agent.RawPacket
+	0,  // 21: gametrace.agent.AgentIngest.Push:input_type -> gametrace.agent.PacketBatch
+	3,  // 22: gametrace.agent.AgentControl.RegisterProbe:input_type -> gametrace.agent.RegisterProbeRequest
+	14, // 23: gametrace.agent.AgentControl.Connect:input_type -> gametrace.agent.ControlEvent
+	24, // 24: gametrace.agent.AgentControl.UploadArchive:input_type -> gametrace.agent.ArchiveChunk
+	2,  // 25: gametrace.agent.AgentIngest.Push:output_type -> gametrace.agent.PushAck
+	4,  // 26: gametrace.agent.AgentControl.RegisterProbe:output_type -> gametrace.agent.RegisterProbeAck
+	23, // 27: gametrace.agent.AgentControl.Connect:output_type -> gametrace.agent.Command
+	25, // 28: gametrace.agent.AgentControl.UploadArchive:output_type -> gametrace.agent.UploadArchiveAck
+	25, // [25:29] is the sub-list for method output_type
+	21, // [21:25] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_pkg_capture_agent_proto_agent_proto_init() }
@@ -2095,7 +2172,7 @@ func file_pkg_capture_agent_proto_agent_proto_init() {
 		(*ControlEvent_Result)(nil),
 		(*ControlEvent_ArchiveSegments)(nil),
 	}
-	file_pkg_capture_agent_proto_agent_proto_msgTypes[22].OneofWrappers = []any{
+	file_pkg_capture_agent_proto_agent_proto_msgTypes[23].OneofWrappers = []any{
 		(*Command_Assign)(nil),
 		(*Command_Stop)(nil),
 		(*Command_Filter)(nil),
@@ -2103,6 +2180,7 @@ func file_pkg_capture_agent_proto_agent_proto_init() {
 		(*Command_ArchiveQuery)(nil),
 		(*Command_ArchiveUpload)(nil),
 		(*Command_Retry)(nil),
+		(*Command_Notify)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2110,7 +2188,7 @@ func file_pkg_capture_agent_proto_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_capture_agent_proto_agent_proto_rawDesc), len(file_pkg_capture_agent_proto_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   27,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

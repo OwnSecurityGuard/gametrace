@@ -181,7 +181,7 @@ func (x *DecodeRawPacketsResponse) GetDecodeErrors() int64 {
 // TestPluginRequest 插件测试请求（隐私安全：不回传原始包）。
 type TestPluginRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`        // 原始包来源会话（仅离线/stopped）
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`        // 来源会话（离线或运行中均可，运行中走只读 WAL 采样）
 	Plugin        string                 `protobuf:"bytes,2,opt,name=plugin,proto3" json:"plugin,omitempty"`                               // 被测插件名（按名路由，可不同于会话原插件）
 	Protocol      string                 `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`                           // 可选过滤：协议
 	Src           string                 `protobuf:"bytes,4,opt,name=src,proto3" json:"src,omitempty"`                                     // 可选过滤：源 ip:port
@@ -5191,6 +5191,126 @@ func (x *ProbeRenameResponse) GetOk() bool {
 	return false
 }
 
+type ProbeNotifyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProbeId       string                 `protobuf:"bytes,1,opt,name=probe_id,json=probeId,proto3" json:"probe_id,omitempty"`
+	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	Owner         string                 `protobuf:"bytes,4,opt,name=owner,proto3" json:"owner,omitempty"`
+	AllOwners     bool                   `protobuf:"varint,5,opt,name=all_owners,json=allOwners,proto3" json:"all_owners,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProbeNotifyRequest) Reset() {
+	*x = ProbeNotifyRequest{}
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[69]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeNotifyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeNotifyRequest) ProtoMessage() {}
+
+func (x *ProbeNotifyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[69]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeNotifyRequest.ProtoReflect.Descriptor instead.
+func (*ProbeNotifyRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{69}
+}
+
+func (x *ProbeNotifyRequest) GetProbeId() string {
+	if x != nil {
+		return x.ProbeId
+	}
+	return ""
+}
+
+func (x *ProbeNotifyRequest) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *ProbeNotifyRequest) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *ProbeNotifyRequest) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
+func (x *ProbeNotifyRequest) GetAllOwners() bool {
+	if x != nil {
+		return x.AllOwners
+	}
+	return false
+}
+
+type ProbeNotifyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProbeNotifyResponse) Reset() {
+	*x = ProbeNotifyResponse{}
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[70]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeNotifyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeNotifyResponse) ProtoMessage() {}
+
+func (x *ProbeNotifyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[70]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeNotifyResponse.ProtoReflect.Descriptor instead.
+func (*ProbeNotifyResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{70}
+}
+
+func (x *ProbeNotifyResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
 type ProbeRevokeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ProbeId       string                 `protobuf:"bytes,1,opt,name=probe_id,json=probeId,proto3" json:"probe_id,omitempty"`
@@ -5202,7 +5322,7 @@ type ProbeRevokeRequest struct {
 
 func (x *ProbeRevokeRequest) Reset() {
 	*x = ProbeRevokeRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[69]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5214,7 +5334,7 @@ func (x *ProbeRevokeRequest) String() string {
 func (*ProbeRevokeRequest) ProtoMessage() {}
 
 func (x *ProbeRevokeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[69]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5227,7 +5347,7 @@ func (x *ProbeRevokeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeRevokeRequest.ProtoReflect.Descriptor instead.
 func (*ProbeRevokeRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{69}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *ProbeRevokeRequest) GetProbeId() string {
@@ -5260,7 +5380,7 @@ type ProbeRevokeResponse struct {
 
 func (x *ProbeRevokeResponse) Reset() {
 	*x = ProbeRevokeResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[70]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5272,7 +5392,7 @@ func (x *ProbeRevokeResponse) String() string {
 func (*ProbeRevokeResponse) ProtoMessage() {}
 
 func (x *ProbeRevokeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[70]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5285,7 +5405,7 @@ func (x *ProbeRevokeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeRevokeResponse.ProtoReflect.Descriptor instead.
 func (*ProbeRevokeResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{70}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *ProbeRevokeResponse) GetOk() bool {
@@ -5310,7 +5430,7 @@ type ProbeArchiveSegmentMeta struct {
 
 func (x *ProbeArchiveSegmentMeta) Reset() {
 	*x = ProbeArchiveSegmentMeta{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[71]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5322,7 +5442,7 @@ func (x *ProbeArchiveSegmentMeta) String() string {
 func (*ProbeArchiveSegmentMeta) ProtoMessage() {}
 
 func (x *ProbeArchiveSegmentMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[71]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5335,7 +5455,7 @@ func (x *ProbeArchiveSegmentMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeArchiveSegmentMeta.ProtoReflect.Descriptor instead.
 func (*ProbeArchiveSegmentMeta) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{71}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *ProbeArchiveSegmentMeta) GetSegId() string {
@@ -5394,7 +5514,7 @@ type ProbeListArchiveRequest struct {
 
 func (x *ProbeListArchiveRequest) Reset() {
 	*x = ProbeListArchiveRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[72]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5406,7 +5526,7 @@ func (x *ProbeListArchiveRequest) String() string {
 func (*ProbeListArchiveRequest) ProtoMessage() {}
 
 func (x *ProbeListArchiveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[72]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5419,7 +5539,7 @@ func (x *ProbeListArchiveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeListArchiveRequest.ProtoReflect.Descriptor instead.
 func (*ProbeListArchiveRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{72}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *ProbeListArchiveRequest) GetProbeId() string {
@@ -5474,7 +5594,7 @@ type ProbeListArchiveResponse struct {
 
 func (x *ProbeListArchiveResponse) Reset() {
 	*x = ProbeListArchiveResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[73]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5486,7 +5606,7 @@ func (x *ProbeListArchiveResponse) String() string {
 func (*ProbeListArchiveResponse) ProtoMessage() {}
 
 func (x *ProbeListArchiveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[73]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5499,7 +5619,7 @@ func (x *ProbeListArchiveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeListArchiveResponse.ProtoReflect.Descriptor instead.
 func (*ProbeListArchiveResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{73}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *ProbeListArchiveResponse) GetSegments() []*ProbeArchiveSegmentMeta {
@@ -5530,7 +5650,7 @@ type ProbeImportArchiveRequest struct {
 
 func (x *ProbeImportArchiveRequest) Reset() {
 	*x = ProbeImportArchiveRequest{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[74]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5542,7 +5662,7 @@ func (x *ProbeImportArchiveRequest) String() string {
 func (*ProbeImportArchiveRequest) ProtoMessage() {}
 
 func (x *ProbeImportArchiveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[74]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5555,7 +5675,7 @@ func (x *ProbeImportArchiveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeImportArchiveRequest.ProtoReflect.Descriptor instead.
 func (*ProbeImportArchiveRequest) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{74}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *ProbeImportArchiveRequest) GetProbeId() string {
@@ -5611,7 +5731,7 @@ type ProbeImportArchiveResponse struct {
 
 func (x *ProbeImportArchiveResponse) Reset() {
 	*x = ProbeImportArchiveResponse{}
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[75]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5623,7 +5743,7 @@ func (x *ProbeImportArchiveResponse) String() string {
 func (*ProbeImportArchiveResponse) ProtoMessage() {}
 
 func (x *ProbeImportArchiveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[75]
+	mi := &file_pkg_internalipc_proto_internal_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5636,7 +5756,7 @@ func (x *ProbeImportArchiveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeImportArchiveResponse.ProtoReflect.Descriptor instead.
 func (*ProbeImportArchiveResponse) Descriptor() ([]byte, []int) {
-	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{75}
+	return file_pkg_internalipc_proto_internal_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *ProbeImportArchiveResponse) GetSessionId() string {
@@ -6131,6 +6251,15 @@ const file_pkg_internalipc_proto_internal_proto_rawDesc = "" +
 	"\n" +
 	"all_owners\x18\x04 \x01(\bR\tallOwners\"%\n" +
 	"\x13ProbeRenameResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x94\x01\n" +
+	"\x12ProbeNotifyRequest\x12\x19\n" +
+	"\bprobe_id\x18\x01 \x01(\tR\aprobeId\x12\x14\n" +
+	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\x12\x14\n" +
+	"\x05owner\x18\x04 \x01(\tR\x05owner\x12\x1d\n" +
+	"\n" +
+	"all_owners\x18\x05 \x01(\bR\tallOwners\"%\n" +
+	"\x13ProbeNotifyResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"d\n" +
 	"\x12ProbeRevokeRequest\x12\x19\n" +
 	"\bprobe_id\x18\x01 \x01(\tR\aprobeId\x12\x14\n" +
@@ -6171,7 +6300,7 @@ const file_pkg_internalipc_proto_internal_proto_rawDesc = "" +
 	"\x1aProbeImportArchiveResponse\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
-	"\adb_path\x18\x02 \x01(\tR\x06dbPath2\x94\x1a\n" +
+	"\adb_path\x18\x02 \x01(\tR\x06dbPath2\xfa\x1a\n" +
 	"\x0eCaptureControl\x12g\n" +
 	"\fStartCapture\x12*.gametrace.internalipc.StartCaptureRequest\x1a+.gametrace.internalipc.StartCaptureResponse\x12d\n" +
 	"\vStopCapture\x12).gametrace.internalipc.StopCaptureRequest\x1a*.gametrace.internalipc.StopCaptureResponse\x12s\n" +
@@ -6200,6 +6329,7 @@ const file_pkg_internalipc_proto_internal_proto_rawDesc = "" +
 	"\x11ProbeUpdateFilter\x12/.gametrace.internalipc.ProbeUpdateFilterRequest\x1a0.gametrace.internalipc.ProbeUpdateFilterResponse\x12v\n" +
 	"\x11ProbeRetryCapture\x12/.gametrace.internalipc.ProbeRetryCaptureRequest\x1a0.gametrace.internalipc.ProbeRetryCaptureResponse\x12d\n" +
 	"\vProbeRename\x12).gametrace.internalipc.ProbeRenameRequest\x1a*.gametrace.internalipc.ProbeRenameResponse\x12d\n" +
+	"\vProbeNotify\x12).gametrace.internalipc.ProbeNotifyRequest\x1a*.gametrace.internalipc.ProbeNotifyResponse\x12d\n" +
 	"\vProbeRevoke\x12).gametrace.internalipc.ProbeRevokeRequest\x1a*.gametrace.internalipc.ProbeRevokeResponse\x12s\n" +
 	"\x10ProbeListArchive\x12..gametrace.internalipc.ProbeListArchiveRequest\x1a/.gametrace.internalipc.ProbeListArchiveResponse\x12y\n" +
 	"\x12ProbeImportArchive\x120.gametrace.internalipc.ProbeImportArchiveRequest\x1a1.gametrace.internalipc.ProbeImportArchiveResponse\x12v\n" +
@@ -6218,7 +6348,7 @@ func file_pkg_internalipc_proto_internal_proto_rawDescGZIP() []byte {
 	return file_pkg_internalipc_proto_internal_proto_rawDescData
 }
 
-var file_pkg_internalipc_proto_internal_proto_msgTypes = make([]protoimpl.MessageInfo, 79)
+var file_pkg_internalipc_proto_internal_proto_msgTypes = make([]protoimpl.MessageInfo, 81)
 var file_pkg_internalipc_proto_internal_proto_goTypes = []any{
 	(*DecodeRawPacketsRequest)(nil),     // 0: gametrace.internalipc.DecodeRawPacketsRequest
 	(*DecodeRawPacketsResponse)(nil),    // 1: gametrace.internalipc.DecodeRawPacketsResponse
@@ -6289,19 +6419,21 @@ var file_pkg_internalipc_proto_internal_proto_goTypes = []any{
 	(*ProbeRetryCaptureResponse)(nil),   // 66: gametrace.internalipc.ProbeRetryCaptureResponse
 	(*ProbeRenameRequest)(nil),          // 67: gametrace.internalipc.ProbeRenameRequest
 	(*ProbeRenameResponse)(nil),         // 68: gametrace.internalipc.ProbeRenameResponse
-	(*ProbeRevokeRequest)(nil),          // 69: gametrace.internalipc.ProbeRevokeRequest
-	(*ProbeRevokeResponse)(nil),         // 70: gametrace.internalipc.ProbeRevokeResponse
-	(*ProbeArchiveSegmentMeta)(nil),     // 71: gametrace.internalipc.ProbeArchiveSegmentMeta
-	(*ProbeListArchiveRequest)(nil),     // 72: gametrace.internalipc.ProbeListArchiveRequest
-	(*ProbeListArchiveResponse)(nil),    // 73: gametrace.internalipc.ProbeListArchiveResponse
-	(*ProbeImportArchiveRequest)(nil),   // 74: gametrace.internalipc.ProbeImportArchiveRequest
-	(*ProbeImportArchiveResponse)(nil),  // 75: gametrace.internalipc.ProbeImportArchiveResponse
-	nil,                                 // 76: gametrace.internalipc.TestPluginResponse.TypeHistogramEntry
-	nil,                                 // 77: gametrace.internalipc.SampleBytesResponse.LengthHistogramEntry
-	nil,                                 // 78: gametrace.internalipc.SampleBytesResponse.FirstByteDistributionEntry
+	(*ProbeNotifyRequest)(nil),          // 69: gametrace.internalipc.ProbeNotifyRequest
+	(*ProbeNotifyResponse)(nil),         // 70: gametrace.internalipc.ProbeNotifyResponse
+	(*ProbeRevokeRequest)(nil),          // 71: gametrace.internalipc.ProbeRevokeRequest
+	(*ProbeRevokeResponse)(nil),         // 72: gametrace.internalipc.ProbeRevokeResponse
+	(*ProbeArchiveSegmentMeta)(nil),     // 73: gametrace.internalipc.ProbeArchiveSegmentMeta
+	(*ProbeListArchiveRequest)(nil),     // 74: gametrace.internalipc.ProbeListArchiveRequest
+	(*ProbeListArchiveResponse)(nil),    // 75: gametrace.internalipc.ProbeListArchiveResponse
+	(*ProbeImportArchiveRequest)(nil),   // 76: gametrace.internalipc.ProbeImportArchiveRequest
+	(*ProbeImportArchiveResponse)(nil),  // 77: gametrace.internalipc.ProbeImportArchiveResponse
+	nil,                                 // 78: gametrace.internalipc.TestPluginResponse.TypeHistogramEntry
+	nil,                                 // 79: gametrace.internalipc.SampleBytesResponse.LengthHistogramEntry
+	nil,                                 // 80: gametrace.internalipc.SampleBytesResponse.FirstByteDistributionEntry
 }
 var file_pkg_internalipc_proto_internal_proto_depIdxs = []int32{
-	76, // 0: gametrace.internalipc.TestPluginResponse.type_histogram:type_name -> gametrace.internalipc.TestPluginResponse.TypeHistogramEntry
+	78, // 0: gametrace.internalipc.TestPluginResponse.type_histogram:type_name -> gametrace.internalipc.TestPluginResponse.TypeHistogramEntry
 	3,  // 1: gametrace.internalipc.TestPluginResponse.sample_events:type_name -> gametrace.internalipc.TestEventLite
 	4,  // 2: gametrace.internalipc.TestPluginResponse.error_samples:type_name -> gametrace.internalipc.TestErrorLite
 	10, // 3: gametrace.internalipc.TestPluginResponse.applicability:type_name -> gametrace.internalipc.VerifyApplicability
@@ -6310,8 +6442,8 @@ var file_pkg_internalipc_proto_internal_proto_depIdxs = []int32{
 	10, // 6: gametrace.internalipc.VerifyResponse.applicability:type_name -> gametrace.internalipc.VerifyApplicability
 	9,  // 7: gametrace.internalipc.VerifyResponse.checks:type_name -> gametrace.internalipc.VerifyChecks
 	13, // 8: gametrace.internalipc.SampleBytesResponse.packets:type_name -> gametrace.internalipc.SampledPacket
-	77, // 9: gametrace.internalipc.SampleBytesResponse.length_histogram:type_name -> gametrace.internalipc.SampleBytesResponse.LengthHistogramEntry
-	78, // 10: gametrace.internalipc.SampleBytesResponse.first_byte_distribution:type_name -> gametrace.internalipc.SampleBytesResponse.FirstByteDistributionEntry
+	79, // 9: gametrace.internalipc.SampleBytesResponse.length_histogram:type_name -> gametrace.internalipc.SampleBytesResponse.LengthHistogramEntry
+	80, // 10: gametrace.internalipc.SampleBytesResponse.first_byte_distribution:type_name -> gametrace.internalipc.SampleBytesResponse.FirstByteDistributionEntry
 	15, // 11: gametrace.internalipc.StartCaptureRequest.file:type_name -> gametrace.internalipc.PcapFileConfig
 	16, // 12: gametrace.internalipc.StartCaptureRequest.mobile:type_name -> gametrace.internalipc.MobileSourceConfig
 	25, // 13: gametrace.internalipc.ListCaptureSessionsResponse.sessions:type_name -> gametrace.internalipc.CaptureSessionSummary
@@ -6324,7 +6456,7 @@ var file_pkg_internalipc_proto_internal_proto_depIdxs = []int32{
 	54, // 20: gametrace.internalipc.ProbeInfo.interfaces:type_name -> gametrace.internalipc.ProbeNicInfo
 	53, // 21: gametrace.internalipc.ListProbesResponse.probes:type_name -> gametrace.internalipc.ProbeInfo
 	53, // 22: gametrace.internalipc.GetProbeResponse.probe:type_name -> gametrace.internalipc.ProbeInfo
-	71, // 23: gametrace.internalipc.ProbeListArchiveResponse.segments:type_name -> gametrace.internalipc.ProbeArchiveSegmentMeta
+	73, // 23: gametrace.internalipc.ProbeListArchiveResponse.segments:type_name -> gametrace.internalipc.ProbeArchiveSegmentMeta
 	17, // 24: gametrace.internalipc.CaptureControl.StartCapture:input_type -> gametrace.internalipc.StartCaptureRequest
 	19, // 25: gametrace.internalipc.CaptureControl.StopCapture:input_type -> gametrace.internalipc.StopCaptureRequest
 	21, // 26: gametrace.internalipc.CaptureControl.GetCaptureStatus:input_type -> gametrace.internalipc.GetCaptureStatusRequest
@@ -6350,43 +6482,45 @@ var file_pkg_internalipc_proto_internal_proto_depIdxs = []int32{
 	63, // 46: gametrace.internalipc.CaptureControl.ProbeUpdateFilter:input_type -> gametrace.internalipc.ProbeUpdateFilterRequest
 	65, // 47: gametrace.internalipc.CaptureControl.ProbeRetryCapture:input_type -> gametrace.internalipc.ProbeRetryCaptureRequest
 	67, // 48: gametrace.internalipc.CaptureControl.ProbeRename:input_type -> gametrace.internalipc.ProbeRenameRequest
-	69, // 49: gametrace.internalipc.CaptureControl.ProbeRevoke:input_type -> gametrace.internalipc.ProbeRevokeRequest
-	72, // 50: gametrace.internalipc.CaptureControl.ProbeListArchive:input_type -> gametrace.internalipc.ProbeListArchiveRequest
-	74, // 51: gametrace.internalipc.CaptureControl.ProbeImportArchive:input_type -> gametrace.internalipc.ProbeImportArchiveRequest
-	49, // 52: gametrace.internalipc.CaptureControl.StartLeaseCapture:input_type -> gametrace.internalipc.StartLeaseCaptureRequest
-	51, // 53: gametrace.internalipc.CaptureControl.StopLeaseCapture:input_type -> gametrace.internalipc.StopLeaseCaptureRequest
-	18, // 54: gametrace.internalipc.CaptureControl.StartCapture:output_type -> gametrace.internalipc.StartCaptureResponse
-	20, // 55: gametrace.internalipc.CaptureControl.StopCapture:output_type -> gametrace.internalipc.StopCaptureResponse
-	22, // 56: gametrace.internalipc.CaptureControl.GetCaptureStatus:output_type -> gametrace.internalipc.GetCaptureStatusResponse
-	24, // 57: gametrace.internalipc.CaptureControl.ListCaptureSessions:output_type -> gametrace.internalipc.ListCaptureSessionsResponse
-	1,  // 58: gametrace.internalipc.CaptureControl.DecodeRawPackets:output_type -> gametrace.internalipc.DecodeRawPacketsResponse
-	28, // 59: gametrace.internalipc.CaptureControl.ListPlugins:output_type -> gametrace.internalipc.ListPluginsResponse
-	31, // 60: gametrace.internalipc.CaptureControl.GetPluginManifest:output_type -> gametrace.internalipc.GetPluginManifestResponse
-	33, // 61: gametrace.internalipc.CaptureControl.DeregisterPlugin:output_type -> gametrace.internalipc.DeregisterPluginResponse
-	35, // 62: gametrace.internalipc.CaptureControl.SetSessionPlugin:output_type -> gametrace.internalipc.SetSessionPluginResponse
-	37, // 63: gametrace.internalipc.CaptureControl.WatchPlugins:output_type -> gametrace.internalipc.PluginEvent
-	5,  // 64: gametrace.internalipc.CaptureControl.TestPlugin:output_type -> gametrace.internalipc.TestPluginResponse
-	11, // 65: gametrace.internalipc.CaptureControl.Verify:output_type -> gametrace.internalipc.VerifyResponse
-	14, // 66: gametrace.internalipc.CaptureControl.SampleBytes:output_type -> gametrace.internalipc.SampleBytesResponse
-	39, // 67: gametrace.internalipc.CaptureControl.GetRegistryAddr:output_type -> gametrace.internalipc.GetRegistryAddrResponse
-	42, // 68: gametrace.internalipc.CaptureControl.CreateProxyLease:output_type -> gametrace.internalipc.CreateProxyLeaseResponse
-	44, // 69: gametrace.internalipc.CaptureControl.ListProxyLeases:output_type -> gametrace.internalipc.ListProxyLeasesResponse
-	46, // 70: gametrace.internalipc.CaptureControl.GetProxyLease:output_type -> gametrace.internalipc.GetProxyLeaseResponse
-	48, // 71: gametrace.internalipc.CaptureControl.ReleaseProxyLease:output_type -> gametrace.internalipc.ReleaseProxyLeaseResponse
-	56, // 72: gametrace.internalipc.CaptureControl.ListProbes:output_type -> gametrace.internalipc.ListProbesResponse
-	58, // 73: gametrace.internalipc.CaptureControl.GetProbe:output_type -> gametrace.internalipc.GetProbeResponse
-	60, // 74: gametrace.internalipc.CaptureControl.ProbeStartCapture:output_type -> gametrace.internalipc.ProbeStartCaptureResponse
-	62, // 75: gametrace.internalipc.CaptureControl.ProbeStopCapture:output_type -> gametrace.internalipc.ProbeStopCaptureResponse
-	64, // 76: gametrace.internalipc.CaptureControl.ProbeUpdateFilter:output_type -> gametrace.internalipc.ProbeUpdateFilterResponse
-	66, // 77: gametrace.internalipc.CaptureControl.ProbeRetryCapture:output_type -> gametrace.internalipc.ProbeRetryCaptureResponse
-	68, // 78: gametrace.internalipc.CaptureControl.ProbeRename:output_type -> gametrace.internalipc.ProbeRenameResponse
-	70, // 79: gametrace.internalipc.CaptureControl.ProbeRevoke:output_type -> gametrace.internalipc.ProbeRevokeResponse
-	73, // 80: gametrace.internalipc.CaptureControl.ProbeListArchive:output_type -> gametrace.internalipc.ProbeListArchiveResponse
-	75, // 81: gametrace.internalipc.CaptureControl.ProbeImportArchive:output_type -> gametrace.internalipc.ProbeImportArchiveResponse
-	50, // 82: gametrace.internalipc.CaptureControl.StartLeaseCapture:output_type -> gametrace.internalipc.StartLeaseCaptureResponse
-	52, // 83: gametrace.internalipc.CaptureControl.StopLeaseCapture:output_type -> gametrace.internalipc.StopLeaseCaptureResponse
-	54, // [54:84] is the sub-list for method output_type
-	24, // [24:54] is the sub-list for method input_type
+	69, // 49: gametrace.internalipc.CaptureControl.ProbeNotify:input_type -> gametrace.internalipc.ProbeNotifyRequest
+	71, // 50: gametrace.internalipc.CaptureControl.ProbeRevoke:input_type -> gametrace.internalipc.ProbeRevokeRequest
+	74, // 51: gametrace.internalipc.CaptureControl.ProbeListArchive:input_type -> gametrace.internalipc.ProbeListArchiveRequest
+	76, // 52: gametrace.internalipc.CaptureControl.ProbeImportArchive:input_type -> gametrace.internalipc.ProbeImportArchiveRequest
+	49, // 53: gametrace.internalipc.CaptureControl.StartLeaseCapture:input_type -> gametrace.internalipc.StartLeaseCaptureRequest
+	51, // 54: gametrace.internalipc.CaptureControl.StopLeaseCapture:input_type -> gametrace.internalipc.StopLeaseCaptureRequest
+	18, // 55: gametrace.internalipc.CaptureControl.StartCapture:output_type -> gametrace.internalipc.StartCaptureResponse
+	20, // 56: gametrace.internalipc.CaptureControl.StopCapture:output_type -> gametrace.internalipc.StopCaptureResponse
+	22, // 57: gametrace.internalipc.CaptureControl.GetCaptureStatus:output_type -> gametrace.internalipc.GetCaptureStatusResponse
+	24, // 58: gametrace.internalipc.CaptureControl.ListCaptureSessions:output_type -> gametrace.internalipc.ListCaptureSessionsResponse
+	1,  // 59: gametrace.internalipc.CaptureControl.DecodeRawPackets:output_type -> gametrace.internalipc.DecodeRawPacketsResponse
+	28, // 60: gametrace.internalipc.CaptureControl.ListPlugins:output_type -> gametrace.internalipc.ListPluginsResponse
+	31, // 61: gametrace.internalipc.CaptureControl.GetPluginManifest:output_type -> gametrace.internalipc.GetPluginManifestResponse
+	33, // 62: gametrace.internalipc.CaptureControl.DeregisterPlugin:output_type -> gametrace.internalipc.DeregisterPluginResponse
+	35, // 63: gametrace.internalipc.CaptureControl.SetSessionPlugin:output_type -> gametrace.internalipc.SetSessionPluginResponse
+	37, // 64: gametrace.internalipc.CaptureControl.WatchPlugins:output_type -> gametrace.internalipc.PluginEvent
+	5,  // 65: gametrace.internalipc.CaptureControl.TestPlugin:output_type -> gametrace.internalipc.TestPluginResponse
+	11, // 66: gametrace.internalipc.CaptureControl.Verify:output_type -> gametrace.internalipc.VerifyResponse
+	14, // 67: gametrace.internalipc.CaptureControl.SampleBytes:output_type -> gametrace.internalipc.SampleBytesResponse
+	39, // 68: gametrace.internalipc.CaptureControl.GetRegistryAddr:output_type -> gametrace.internalipc.GetRegistryAddrResponse
+	42, // 69: gametrace.internalipc.CaptureControl.CreateProxyLease:output_type -> gametrace.internalipc.CreateProxyLeaseResponse
+	44, // 70: gametrace.internalipc.CaptureControl.ListProxyLeases:output_type -> gametrace.internalipc.ListProxyLeasesResponse
+	46, // 71: gametrace.internalipc.CaptureControl.GetProxyLease:output_type -> gametrace.internalipc.GetProxyLeaseResponse
+	48, // 72: gametrace.internalipc.CaptureControl.ReleaseProxyLease:output_type -> gametrace.internalipc.ReleaseProxyLeaseResponse
+	56, // 73: gametrace.internalipc.CaptureControl.ListProbes:output_type -> gametrace.internalipc.ListProbesResponse
+	58, // 74: gametrace.internalipc.CaptureControl.GetProbe:output_type -> gametrace.internalipc.GetProbeResponse
+	60, // 75: gametrace.internalipc.CaptureControl.ProbeStartCapture:output_type -> gametrace.internalipc.ProbeStartCaptureResponse
+	62, // 76: gametrace.internalipc.CaptureControl.ProbeStopCapture:output_type -> gametrace.internalipc.ProbeStopCaptureResponse
+	64, // 77: gametrace.internalipc.CaptureControl.ProbeUpdateFilter:output_type -> gametrace.internalipc.ProbeUpdateFilterResponse
+	66, // 78: gametrace.internalipc.CaptureControl.ProbeRetryCapture:output_type -> gametrace.internalipc.ProbeRetryCaptureResponse
+	68, // 79: gametrace.internalipc.CaptureControl.ProbeRename:output_type -> gametrace.internalipc.ProbeRenameResponse
+	70, // 80: gametrace.internalipc.CaptureControl.ProbeNotify:output_type -> gametrace.internalipc.ProbeNotifyResponse
+	72, // 81: gametrace.internalipc.CaptureControl.ProbeRevoke:output_type -> gametrace.internalipc.ProbeRevokeResponse
+	75, // 82: gametrace.internalipc.CaptureControl.ProbeListArchive:output_type -> gametrace.internalipc.ProbeListArchiveResponse
+	77, // 83: gametrace.internalipc.CaptureControl.ProbeImportArchive:output_type -> gametrace.internalipc.ProbeImportArchiveResponse
+	50, // 84: gametrace.internalipc.CaptureControl.StartLeaseCapture:output_type -> gametrace.internalipc.StartLeaseCaptureResponse
+	52, // 85: gametrace.internalipc.CaptureControl.StopLeaseCapture:output_type -> gametrace.internalipc.StopLeaseCaptureResponse
+	55, // [55:86] is the sub-list for method output_type
+	24, // [24:55] is the sub-list for method input_type
 	24, // [24:24] is the sub-list for extension type_name
 	24, // [24:24] is the sub-list for extension extendee
 	0,  // [0:24] is the sub-list for field type_name
@@ -6407,7 +6541,7 @@ func file_pkg_internalipc_proto_internal_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_internalipc_proto_internal_proto_rawDesc), len(file_pkg_internalipc_proto_internal_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   79,
+			NumMessages:   81,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
