@@ -6,10 +6,11 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/OwnSecurityGuard/gametrace/sdk v0.10.0
 	github.com/expr-lang/expr v1.17.0
+	github.com/gen2brain/beeep v0.11.2
 	github.com/google/uuid v1.6.0
 	github.com/gopacket/gopacket v1.7.2
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/mark3labs/mcp-go v0.56.0
+	github.com/mark3labs/mcp-go v1.1.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	golang.org/x/sys v0.46.0
 	google.golang.org/grpc v1.71.0
@@ -30,7 +31,6 @@ require (
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/esiqveland/notify v0.13.3 // indirect
-	github.com/gen2brain/beeep v0.11.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
