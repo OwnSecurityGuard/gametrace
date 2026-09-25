@@ -1027,6 +1027,18 @@ func (m *mcpCapture) handleListDecodedData(ctx context.Context, req mcp.CallTool
 	filterExpr := req.GetString("filter", "")
 	connID := req.GetString("conn_id", "")
 	semantic := req.GetString("semantic", "")
+	// 语义过滤集合：单数 semantic 与复数 semantics（多标签 OR）合并为一个集合。
+	// 复数形态供前端语义多选下拉使用 —— 语义标签由各插件 annotate 决定，
+	// 每个项目的词表与数量都不同，单选不足以表达"看 request 和 error"这类需求。
+	semantics := map[string]bool{}
+	if semantic != "" {
+		semantics[semantic] = true
+	}
+	for _, s := range req.GetStringSlice("semantics", nil) {
+		if s != "" {
+			semantics[s] = true
+		}
+	}
 	// sessionID 为空时解析为当前会话的实际 ID：分页查询（QueryEventPage /
 	// StreamEventsDesc / capture context）都以 events.session_id 过滤，需要真实值。
 	// 旧实现的空串会过滤出 0 行（"默认当前会话"对事件查询从未真正生效）。
@@ -1040,7 +1052,7 @@ func (m *mcpCapture) handleListDecodedData(ctx context.Context, req mcp.CallTool
 	if err != nil {
 		return errorResult(err), nil
 	}
-	slog.Info("list_decoded_data requested", "limit", limit, "offset", offset, "filter", filterExpr, "semantic", semantic, "db_path", dbPath, "session_id", sessionID)
+	slog.Info("list_decoded_data requested", "limit", limit, "offset", offset, "filter", filterExpr, "semantic", semantic, "semantics", len(semantics), "db_path", dbPath, "session_id", sessionID)
 	if dbPath == "" {
 		slog.Warn("list_decoded_data rejected: no capture database available")
 		return errorResult(fmt.Errorf("no capture database available; start a capture first")), nil
@@ -1086,7 +1098,7 @@ func (m *mcpCapture) handleListDecodedData(ctx context.Context, req mcp.CallTool
 	// LIMIT/OFFSET/COUNT 全部下推到 SQL，payload msgpack 仅对页内行解码。
 	// 这是前端 2s 轮询的默认路径，代价 O(page) 而非 O(全量事件)。
 	// semantic 无法下推（meta 内嵌 payload msgpack BLOB），非空时强制走流式路径。
-	if (program == nil || pd.Pure) && semantic == "" {
+	if (program == nil || pd.Pure) && len(semantics) == 0 {
 		pageLimit := limit
 		if pageLimit <= 0 {
 			// 保持旧语义：limit<=0 返回空页 + 精确 total。
@@ -1129,9 +1141,9 @@ func (m *mcpCapture) handleListDecodedData(ctx context.Context, req mcp.CallTool
 				}
 			}
 			eventMap := decodedEventMap(ev, captureIdx, rawLenMap)
-			// 语义标签过滤（annotate）：匹配 meta.semantic 数组成员；
+			// 语义标签过滤（annotate）：命中集合内任一标签即保留（多标签 OR）；
 			// meta 内嵌 payload msgpack BLOB，无法 SQL 下推，走应用层（与 conn 兜底同级）。
-			if semantic != "" && !eventMapHasSemantic(eventMap, semantic) {
+			if len(semantics) > 0 && !eventMapHasSemantic(eventMap, semantics) {
 				continue
 			}
 			// filter 表达式仅在确实提供时求值（semantic-only 请求没有 program）。
@@ -1263,27 +1275,24 @@ func decodedEventMap(ev *event.Event, captureIdx map[string]captureContextJSON, 
 	return eventMap
 }
 
-// eventMapHasSemantic 报告事件 map 是否携带给定语义标签（annotate 规则闭集成员）。
-// meta.semantic 是字符串数组（缺失或类型不符视为不命中，与「未标注」语义一致）。
-func eventMapHasSemantic(eventMap map[string]any, label string) bool {
+// eventMapHasSemantic 报告事件的 meta.semantic 是否命中 labels 集合中的任一标签
+// （annotate 规则闭集成员；集合内多标签之间是 OR）。meta.semantic 是字符串数组，
+// 缺失或类型不符视为不命中，与「未标注」语义一致。
+func eventMapHasSemantic(eventMap map[string]any, labels map[string]bool) bool {
 	meta, ok := eventMap["meta"].(map[string]any)
 	if !ok {
 		return false
 	}
-	raw, ok := meta["semantic"]
-	if !ok {
-		return false
-	}
-	switch v := raw.(type) {
+	switch v := meta["semantic"].(type) {
 	case []string:
 		for _, s := range v {
-			if s == label {
+			if labels[s] {
 				return true
 			}
 		}
 	case []any:
 		for _, item := range v {
-			if s, ok := item.(string); ok && s == label {
+			if s, ok := item.(string); ok && labels[s] {
 				return true
 			}
 		}
@@ -1830,6 +1839,7 @@ func (m *mcpCapture) handleListAllSessions(ctx context.Context, req mcp.CallTool
 	// PG 模式下 filesystem 的 metadata.json 可能缺失，以其为列表主源会丢会话。
 	// filesystem 枚举仅作旧数据兼容补充（controlStore 未落库的历史会话）。
 	have := map[string]bool{}
+	fsByID := map[string]sessionMetadata{}
 	sessions := make([]sessionMetadata, 0, 16)
 	if m.controlStore != nil {
 		metas, lerr := m.controlStore.ListSessionsFor(ctx, f)
@@ -1849,10 +1859,33 @@ func (m *mcpCapture) handleListAllSessions(ctx context.Context, req mcp.CallTool
 			slog.Error("list_all_sessions: filesystem list failed", "error", ferr)
 		} else {
 			for _, meta := range fs {
+				fsByID[meta.SessionID] = meta
 				if have[meta.SessionID] {
 					continue
 				}
 				sessions = append(sessions, meta)
+			}
+		}
+		// controlStore 的 sessions 表没有 source/extra 列，而 gt-mcp 在探针与代理
+		// 链路建会话时会另写一份 metadata.json。store 命中就会整个跳过文件侧记录，
+		// 于是探针抓的会话 source 变成空串、UI 把它叫成「服务器网卡」。
+		// 这里只回填 store 没有的字段：状态、端口、归属仍以 store 为准。
+		for i := range sessions {
+			fsMeta, ok := fsByID[sessions[i].SessionID]
+			if !ok {
+				continue
+			}
+			if sessions[i].Source == "" {
+				sessions[i].Source = fsMeta.Source
+			}
+			if sessions[i].ListenAddr == "" {
+				sessions[i].ListenAddr = fsMeta.ListenAddr
+			}
+			if sessions[i].Interface == "" {
+				sessions[i].Interface = fsMeta.Interface
+			}
+			if sessions[i].Extra == nil {
+				sessions[i].Extra = fsMeta.Extra
 			}
 		}
 	}
@@ -2624,7 +2657,8 @@ func main() {
 		mcp.WithNumber("offset", mcp.DefaultNumber(0), mcp.Description("Offset")),
 		mcp.WithString("session_id", mcp.Description("Optional session ID to query; defaults to current session")),
 		mcp.WithString("conn_id", mcp.Description("Optional connection ID to filter by; when set, only events of that capture connection (event_index.conn_id) are returned")),
-		mcp.WithString("semantic", mcp.Description("Optional semantic label to filter by (SDK annotate result): request|response|notification|error. Matches events whose meta.semantic array contains the label.")),
+		mcp.WithString("semantic", mcp.Description("Filter by a single semantic label (SDK annotate result). The vocabulary is decided per decoder plugin, so request|response|notification|error is only typical, not exhaustive. Matches events whose meta.semantic array contains the label.")),
+		mcp.WithArray("semantics", mcp.Description("Filter by multiple semantic labels, OR'ed (an event is kept when its meta.semantic array contains any of them). Merged with the single 'semantic' argument; use this for the multi-select filter instead of issuing one query per label."), mcp.Items(map[string]any{"type": "string"})),
 		mcp.WithString("filter", mcp.Description("Optional expr expression to filter events, e.g. data.entity == \"buff\" && data.hp > 5. Available fields: id, timestamp, session_id, protocol, raw_len, correlation_id, causation_id, data.*, meta.* (msg_name/direction/semantic), analysis.*. Trace fields enable lineage queries: correlation_id == X (one request-response group), causation_id == X (the request that caused this response).")),
 	), capture.handleListDecodedData)
 

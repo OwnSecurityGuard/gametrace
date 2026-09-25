@@ -12,6 +12,7 @@ import (
 
 // TestListDecodedDataSemanticFilter 验证 list_decoded_data 的 semantic 过滤：
 // annotate 标签（meta.semantic 数组成员）精确匹配；分页精确；与 conn_id 叠加；
+// 复数 semantics 多标签按 OR 合并（供前端语义多选下拉）；
 // 空值时仍走纯 SQL 分页路径（回归，不破坏默认路径）。
 func TestListDecodedDataSemanticFilter(t *testing.T) {
 	ctx := context.Background()
@@ -103,6 +104,57 @@ func TestListDecodedDataSemanticFilter(t *testing.T) {
 	all := callDecodedTool(t, m, ctx, map[string]any{"session_id": sessionID})
 	if got := all["total_matched"].(float64); got != 6 {
 		t.Fatalf("no semantic total_matched = %v, want 6", got)
+	}
+
+	// ---- 7. semantics 多标签：命中任一即保留（OR），未标注行不命中 ----
+	or2 := callDecodedTool(t, m, ctx, map[string]any{
+		"session_id": sessionID, "semantics": []any{"request", "notification"},
+	})
+	if got := or2["total_matched"].(float64); got != 2 {
+		t.Fatalf("semantics=[request,notification] total_matched = %v, want 2", got)
+	}
+	assertRowIDs(t, or2["events"], "e1", "e3")
+
+	// ---- 8. semantics 覆盖多标签事件：e2 同时是 response+error，任一标签都算命中 ----
+	or3 := callDecodedTool(t, m, ctx, map[string]any{
+		"session_id": sessionID, "semantics": []any{"request", "error"},
+	})
+	if got := or3["total_matched"].(float64); got != 4 {
+		t.Fatalf("semantics=[request,error] total_matched = %v, want 4", got)
+	}
+	assertRowIDs(t, or3["events"], "e1", "e2", "e5", "e6")
+
+	// ---- 9. 单数与复数并存：合并为一个集合 ----
+	mixed := callDecodedTool(t, m, ctx, map[string]any{
+		"session_id": sessionID, "semantic": "request", "semantics": []any{"notification"},
+	})
+	if got := mixed["total_matched"].(float64); got != 2 {
+		t.Fatalf("semantic+semantics total_matched = %v, want 2", got)
+	}
+
+	// ---- 10. semantics 空数组：等价于不过滤（仍走纯 SQL 分页路径） ----
+	empty := callDecodedTool(t, m, ctx, map[string]any{
+		"session_id": sessionID, "semantics": []any{},
+	})
+	if got := empty["total_matched"].(float64); got != 6 {
+		t.Fatalf("semantics=[] total_matched = %v, want 6", got)
+	}
+}
+
+// assertRowIDs 断言返回行的 id 集合与期望一致（顺序无关）。
+func assertRowIDs(t *testing.T, events any, want ...string) {
+	t.Helper()
+	got := map[string]bool{}
+	for _, r := range events.([]any) {
+		got[r.(map[string]any)["id"].(string)] = true
+	}
+	if len(got) != len(want) {
+		t.Fatalf("row ids = %v, want %v", got, want)
+	}
+	for _, id := range want {
+		if !got[id] {
+			t.Fatalf("row ids = %v, missing %q", got, id)
+		}
 	}
 }
 
