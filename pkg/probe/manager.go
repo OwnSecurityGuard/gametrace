@@ -407,6 +407,21 @@ func (m *Manager) Rename(ctx context.Context, probeID, name string) error {
 	return m.store.RenameProbe(ctx, probeID, name)
 }
 
+// SendNotify 让探针在目标机器上弹一条系统桌面通知。
+//
+// 一次性动作：不写 desired、不进对齐逻辑，因此探针离线即失败且不补发
+// （区别于 StartCapture/StopCapture 那套期望状态语义）。
+// 返回 nil 表示探针已确认弹出（beeep 出错时探针回 CommandResult.ok=false）。
+func (m *Manager) SendNotify(ctx context.Context, probeID, title, message string) error {
+	if _, err := m.store.GetProbe(ctx, probeID); err != nil {
+		return fmt.Errorf("probe %s: %w", probeID, err)
+	}
+	return m.sendAndWait(probeID, &proto.Command{
+		Id:      m.nextCmdID(),
+		Payload: &proto.Command_Notify{Notify: &proto.Notify{Title: title, Message: message}},
+	})
+}
+
 // Revoke 作废凭证（探针下次启动需重新接入）。
 func (m *Manager) Revoke(ctx context.Context, probeID string) error {
 	m.mu.Lock()
@@ -533,6 +548,15 @@ func (m *Manager) applyHeartbeat(probeID string, hb *proto.ProbeHeartbeat) {
 		st.Interfaces = prev.Interfaces
 	}
 	m.latest[probeID] = st
+	// 平台重启自愈：desired/latest 都是纯内存态，重启后清零，探针重连时
+	// openConn→syncLocked 看不到 latest（首个心跳未到），不会补发 Stop，
+	// 于是「无 desired 但仍在抓包」的孤儿状态永不自愈（UI 恒显示抓包中）。
+	// latest 被本次心跳填上后立即对账一次即可闭环。只对无 desired 的探针
+	// 对账：若每次心跳都 sync，failed 探针会被每 10s 自动重发 Assign，
+	// 破坏「失败等待手动 Retry」的语义。
+	if _, hasDesired := m.desired[probeID]; !hasDesired {
+		m.syncLocked(probeID, false)
+	}
 	m.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

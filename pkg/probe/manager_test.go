@@ -128,3 +128,60 @@ func TestStopCaptureDispatchesStop(t *testing.T) {
 		t.Fatal("探针未收到停止指令")
 	}
 }
+
+// TestHeartbeatReconcilesOrphanCaptureAfterRestart 是平台重启后探针卡死在
+// 「抓包中」的回归护栏。
+//
+// 事故链：重启清空 desired/latest → 探针重连时 syncLocked 因 latest 为空判定
+// 「没在抓」不发 Stop → 之后没有任何路径再触发对账 → 探针永远 running，
+// 心跳每 10s 把 running 刷回平台，UI 恒显示「抓包中」。
+// 修复：applyHeartbeat 填上 latest 后，对无 desired 的探针立即对账一次。
+func TestHeartbeatReconcilesOrphanCaptureAfterRestart(t *testing.T) {
+	m := NewManager(newFakeProbeStore(), nil, nil, nil)
+	// 模拟重启后探针重连：此刻 latest 为空，openConn 的对齐不发任何指令。
+	m.openConn("prb_1", func() {})
+	// 重启前遗留的抓包会话在 desired 里已不存在（内存清零 + 会话被 reconcile）。
+	m.applyHeartbeat("prb_1", &proto.ProbeHeartbeat{
+		Capture: &proto.ProbeCaptureStatus{State: "running", SessionId: "s-orphan"},
+	})
+
+	m.mu.Lock()
+	conn := m.conns["prb_1"]
+	m.mu.Unlock()
+	select {
+	case cmd := <-conn.send:
+		if cmd.GetStop() == nil {
+			t.Fatalf("期望孤儿抓包被 Stop 对账，实际 %T", cmd.GetPayload())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("心跳对账未下发 Stop：重启后探针会永久卡在 running")
+	}
+}
+
+// TestHeartbeatWithDesiredDispatchesNothing 守住对账的边界：desired 存在且
+// 探针状态与之相符（或处于 failed）时，心跳不得投递任何指令——否则 failed
+// 探针会被每 10s 自动重发 Assign，破坏「失败等待手动 Retry」语义。
+func TestHeartbeatWithDesiredDispatchesNothing(t *testing.T) {
+	m := NewManager(newFakeProbeStore(), nil, nil, nil)
+	m.openConn("prb_1", func() {})
+	m.mu.Lock()
+	m.desired["prb_1"] = Desired{SessionID: "s-1"}
+	m.mu.Unlock()
+	// 匹配会话的 running：幂等，无指令。
+	m.applyHeartbeat("prb_1", &proto.ProbeHeartbeat{
+		Capture: &proto.ProbeCaptureStatus{State: "running", SessionId: "s-1"},
+	})
+	// failed：也不得自动重发。
+	m.applyHeartbeat("prb_1", &proto.ProbeHeartbeat{
+		Capture: &proto.ProbeCaptureStatus{State: "failed", SessionId: "s-1", Error: "boom"},
+	})
+
+	m.mu.Lock()
+	conn := m.conns["prb_1"]
+	m.mu.Unlock()
+	select {
+	case cmd := <-conn.send:
+		t.Fatalf("心跳对账不应投递指令，实际收到 %T", cmd.GetPayload())
+	default:
+	}
+}
