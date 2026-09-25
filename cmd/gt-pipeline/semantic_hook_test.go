@@ -3,11 +3,13 @@ package main
 import (
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"gametrace/pkg/event"
 	sdk "github.com/OwnSecurityGuard/gametrace/sdk"
 	"github.com/OwnSecurityGuard/gametrace/sdk/rule"
-	"gametrace/pkg/event"
 )
 
 // 用 wesnoth 真实上报里的 msg_type:"turn" 负载，走通语义 name 规则，
@@ -152,5 +154,106 @@ func TestApplyPairsDirectionBySide(t *testing.T) {
 	}
 	if corr := string(req.Identity.ID); req.Trace.CorrelationID != corr || resp.Trace.CorrelationID != corr {
 		t.Fatalf("correlation 应等于请求方 id：req=%q resp=%q want %q", req.Trace.CorrelationID, resp.Trace.CorrelationID, corr)
+	}
+}
+
+// semanticsOf 取事件 Meta 里的 annotate 标签集合（前端徽章与语义过滤的唯一来源）。
+func semanticsOf(t *testing.T, ev *event.Event) []string {
+	t.Helper()
+	v, ok := ev.MetaValue("semantic")
+	if !ok {
+		return nil
+	}
+	arr, ok := v.AsArray()
+	if !ok {
+		t.Fatalf("meta.semantic 不是数组：%v", v)
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		s, _ := item.AsString()
+		out = append(out, s)
+	}
+	return out
+}
+
+// TestSemanticRulesOnLPTraffic 拿真实 lp-decoder manifest 跑通宿主语义链路：
+// lp 的 pair 规则依赖解码器 Meta 里的 direction，annotate 规则依赖 payload 的
+// cmd / error_code 与 Meta 的 role。这几环任一处断掉，前端就会同时出现
+// 「展开看不到一问一答」和「语义标签一个都没有」——所以这条测试是那两个症状的后端侧护栏。
+func TestSemanticRulesOnLPTraffic(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "examples", "lp-decoder", "plugin.yaml"))
+	if err != nil {
+		t.Fatalf("read lp manifest: %v", err)
+	}
+	m, err := sdk.ParseManifest(raw)
+	if err != nil {
+		t.Fatalf("parse lp manifest: %v", err)
+	}
+	e := newSemanticEngine(slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	e.setRules(m.SemanticRules)
+	if len(m.SemanticRules) == 0 {
+		t.Fatal("lp manifest 没有 semantic_rules")
+	}
+
+	const conn = "tcp:127.0.0.1:40001<->127.0.0.1:8998#1"
+	mk := func(cmd, seq, errCode int, direction, role string) *event.Event {
+		ev := event.NewEvent("sess", event.EventType("lp.message"), "",
+			event.ValueObject(map[string]event.Value{
+				"cmd":        event.ValueInt(int64(cmd)),
+				"seq":        event.ValueInt(int64(seq)),
+				"error_code": event.ValueInt(int64(errCode)),
+			}),
+			event.EventContext{ConnID: conn})
+		ev.Meta = event.ValueObject(map[string]event.Value{
+			"direction": event.ValueString(direction),
+			"role":      event.ValueString(role),
+			"flow_id":   event.ValueString("tcp 127.0.0.1:40001=127.0.0.1:8998"),
+		})
+		return ev
+	}
+
+	// ① 登录请求 → 响应：按 seq 回显配对，响应 causation 指回请求；两侧各带角色标签。
+	req := mk(1001, 1, 0, "client_to_server", "request")
+	resp := mk(1002, 1, 0, "server_to_client", "response")
+	e.enrichSemantics(req)
+	e.enrichSemantics(resp)
+	if resp.Trace.CausationID != req.Identity.ID {
+		t.Fatalf("lp 请求/响应未配对：resp.CausationID=%q want %q", resp.Trace.CausationID, req.Identity.ID)
+	}
+	if corr := string(req.Identity.ID); req.Trace.CorrelationID != corr || resp.Trace.CorrelationID != corr {
+		t.Fatalf("correlation 未收敛到请求方 id：req=%q resp=%q", req.Trace.CorrelationID, resp.Trace.CorrelationID)
+	}
+	assertLabels(t, semanticsOf(t, req), "request")
+	assertLabels(t, semanticsOf(t, resp), "response")
+
+	// ② 道具数量推送（seq=0）：命中 push 号段 → notification，且不参与配对。
+	// role 是 push 而非 response，否则推送会被标成响应。
+	push := mk(2002, 0, 0, "server_to_client", "push")
+	e.enrichSemantics(push)
+	assertLabels(t, semanticsOf(t, push), "notification")
+	if push.Trace.CausationID != "" {
+		t.Fatalf("推送不应被配对，causation_id = %q", push.Trace.CausationID)
+	}
+
+	// ③ 错误回包（error_code!=0）：带着错误码的响应，response 与 error 并存。
+	bad := mk(1006, 2, 7, "server_to_client", "response")
+	e.enrichSemantics(bad)
+	assertLabels(t, semanticsOf(t, bad), "response", "error")
+}
+
+// assertLabels 比对 annotate 标签集合（顺序无关）。
+func assertLabels(t *testing.T, got []string, want ...string) {
+	t.Helper()
+	seen := make(map[string]bool, len(got))
+	for _, g := range got {
+		seen[g] = true
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("语义标签 = %v, want %v", got, want)
+	}
+	for _, w := range want {
+		if !seen[w] {
+			t.Fatalf("语义标签 = %v, want %v", got, want)
+		}
 	}
 }

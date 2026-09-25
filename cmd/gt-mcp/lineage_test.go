@@ -97,6 +97,25 @@ func TestListDecodedDataLineageFields(t *testing.T) {
 	if got := mixed["total_matched"].(float64); got != 1 {
 		t.Fatalf("combined filter total_matched = %v, want 1", got)
 	}
+
+	// ---- 5. 前端展开行的配对组查询（web/src/lib/pair-group.ts pairGroupFilter） ----
+	// 展开一条响应要拿到「请求本人 + 这一组的全部响应」。expr 的 || 与字符串字面量
+	// 必须被 queryEnv 接受，否则前端的并排视图永远空白。
+	pair := callDecodedTool(t, m, ctx, map[string]any{
+		"session_id": sessionID, "filter": `id == "r1" || causation_id == "r1"`,
+	})
+	if got := pair["total_matched"].(float64); got != 2 {
+		t.Fatalf("配对组 total_matched = %v, want 2", got)
+	}
+
+	// 未配对消息（推送 p1）按自己反查应当为空 —— 前端据此保持单事件展示，
+	// 而不是画出半个空壳的并排布局。
+	none := callDecodedTool(t, m, ctx, map[string]any{
+		"session_id": sessionID, "filter": `causation_id == "p1"`,
+	})
+	if got := none["total_matched"].(float64); got != 0 {
+		t.Fatalf("未配对消息的配对组 = %v, want 0", got)
+	}
 }
 
 // writeLineageFixture 写入协议血缘分析的典型数据：

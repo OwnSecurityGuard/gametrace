@@ -404,7 +404,7 @@ export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
           </Button>
           {decodeMutation.isSuccess && decodeMutation.data && decodeMutation.data.decoded > 0 && onDecoded && (
             <Button variant="link" size="sm" className="h-auto p-0" onClick={onDecoded}>
-              查看协议数据 →
+              查看协议事件 →
             </Button>
           )}
         </div>

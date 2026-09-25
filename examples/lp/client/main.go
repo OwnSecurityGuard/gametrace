@@ -181,8 +181,10 @@ func main() {
 	}
 }
 
-// runRound 跑一轮完整场景：登录 → 查询 → 连续使用道具（伴随数量推送）→ 采集资源，
-// 中间穿插各类非法请求，覆盖"服务端回错误提示"与"回包之外还有推送"两种形态。
+// runRound 跑一轮完整场景：登录 → 查背包 → 连续使用道具（伴随道具/资源/玩家档案推送）
+// → 采集资源 → 用尽最后一类道具，中间穿插各类非法请求。
+// 覆盖"服务端回错误提示"与"回包之外还有推送"两种形态，并让同一实体（道具数量、
+// 金币/钻石、等级/经验）在一条流里多次变化，便于观察状态前后值链路。
 func runRound(addr string, round int, pace time.Duration) error {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -194,11 +196,22 @@ func runRound(addr string, round int, pace time.Duration) error {
 	slog.Info("round start", "round", round, "addr", addr)
 
 	account := fmt.Sprintf("acct-%d", round)
+	use := func(name string, itemID, count int) func() error {
+		return func() error {
+			return c.step(name, lp.CmdUseItemRequest, lp.UseItemRequestData{ItemID: itemID, Count: count})
+		}
+	}
+	gather := func(name, resource string, amount int) func() error {
+		return func() error {
+			return c.step(name, lp.CmdGatherRequest, lp.GatherRequestData{Resource: resource, Amount: amount})
+		}
+	}
+
 	steps := []func() error{
 		// 非法请求：未登录就访问业务消息。
 		func() error { return c.step("未登录查背包", lp.CmdGetBagRequest, nil) },
 
-		// 登录：回包之外服务端还会推一条玩家档案。
+		// 登录：回包之外服务端还会推一条玩家档案（等级/经验/在线状态）。
 		func() error {
 			return c.step("登录", lp.CmdLoginRequest,
 				lp.LoginRequestData{Account: account, DeviceID: "lp-sim"})
@@ -207,48 +220,35 @@ func runRound(addr string, round int, pace time.Duration) error {
 		func() error {
 			return c.step("重复登录", lp.CmdLoginRequest, lp.LoginRequestData{Account: account})
 		},
+		// 背包快照：起始 5001×12、5002×6、5003×3，金币 200、钻石 20。
 		func() error { return c.step("查询背包", lp.CmdGetBagRequest, nil) },
 
-		// 连续使用道具：每次都是"响应 + 道具数量推送 + 资源推送"。
-		// 金币起始 120、道具单价 30/60/120，因此这三次正好把金币花光。
-		func() error {
-			return c.step("使用道具 5001", lp.CmdUseItemRequest, lp.UseItemRequestData{ItemID: 5001, Count: 1})
-		},
-		func() error {
-			return c.step("使用道具 5001", lp.CmdUseItemRequest, lp.UseItemRequestData{ItemID: 5001, Count: 1})
-		},
-		func() error {
-			return c.step("使用道具 5002", lp.CmdUseItemRequest, lp.UseItemRequestData{ItemID: 5002, Count: 1})
-		},
-		// 非法请求：金币已耗尽 → 资源不足。
-		func() error {
-			return c.step("金币不足时使用道具 5003", lp.CmdUseItemRequest, lp.UseItemRequestData{ItemID: 5003, Count: 1})
-		},
-		// 非法请求：持有数量不足、道具不存在、参数非正数。
-		func() error {
-			return c.step("超量使用道具 5001", lp.CmdUseItemRequest, lp.UseItemRequestData{ItemID: 5001, Count: 5})
-		},
-		func() error {
-			return c.step("使用未持有道具", lp.CmdUseItemRequest, lp.UseItemRequestData{ItemID: 9999, Count: 1})
-		},
-		func() error {
-			return c.step("使用数量为 0", lp.CmdUseItemRequest, lp.UseItemRequestData{ItemID: 5001, Count: 0})
-		},
+		// 连续使用道具：每次都是"响应 + 道具数量推送 + 资源推送"，
+		// 累计经验达到门槛时再多推一条玩家档案（升级）。
+		use("使用道具 5001×1", 5001, 1),
+		use("使用道具 5001×1", 5001, 1),
+		use("使用道具 5001×2", 5001, 2),
+		use("使用道具 5002×1", 5002, 1),
+		use("使用道具 5002×2", 5002, 2),
+		use("使用道具 5003×1", 5003, 1), // 金币 200-140=60，5003 只剩 2 个
 
-		// 采集资源：回包 + 资源数量推送，随后金币够再吃一次道具。
-		func() error {
-			return c.step("采集金币", lp.CmdGatherRequest, lp.GatherRequestData{Resource: "gold", Amount: 200})
-		},
+		// 非法请求：单价 40×2 超出剩余金币 → 资源不足；持有 2 不足 5 → 数量不足；
+		// 道具不存在；参数非正数。
+		use("金币不足时使用道具 5003×2", 5003, 2),
+		use("超量使用道具 5003×5", 5003, 5),
+		use("使用未持有道具", 9999, 1),
+		use("使用数量为 0", 5001, 0),
+
+		// 采集资源：各推一条资源变化。
+		gather("采集金币", "gold", 50),
+		gather("采集钻石", "diamond", 5),
 		// 非法请求：采集超上限、资源名不存在。
-		func() error {
-			return c.step("采集超上限", lp.CmdGatherRequest, lp.GatherRequestData{Resource: "gold", Amount: 5000})
-		},
-		func() error {
-			return c.step("采集未知资源", lp.CmdGatherRequest, lp.GatherRequestData{Resource: "wood", Amount: 10})
-		},
-		func() error {
-			return c.step("再使用道具 5001", lp.CmdUseItemRequest, lp.UseItemRequestData{ItemID: 5001, Count: 1})
-		},
+		gather("采集超上限", "gold", 5000),
+		gather("采集未知资源", "wood", 10),
+
+		// 花光 5003：数量推送会带 count=0，之后升级再推一条玩家档案。
+		use("用尽道具 5003×2", 5003, 2),
+		func() error { return c.step("再次查询背包", lp.CmdGetBagRequest, nil) },
 
 		// 非法请求：合法号段内但未实现的 cmd、信封缺少 cmd、payload 根本不是 JSON。
 		func() error { return c.step("未实现的请求号", 1999, nil) },

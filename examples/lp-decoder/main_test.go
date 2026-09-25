@@ -190,6 +190,10 @@ func evalView(payload, meta map[string]any) sdkevent.Value {
 // TestSemanticRulesHostBehavior 复现宿主对 semantic_rules 的执行路径：
 // 求值视图（payload+_meta）→ rule.Evaluate → 校验 pair 命中可配对、
 // annotate 语义正确、推送/错误事件不参与配对。
+//
+// _meta 里的 direction/role 一律由 parseEnvelope 现算，与 emit 写 Meta 的来源同一条
+// 链路 —— 规则读的是解码器发布的字段，这里就不该手抄一份常量，否则解码器改了
+// 角色派生、规则却在按旧值匹配，测试照样绿（前端语义标签就是这么空掉的）。
 func TestSemanticRulesHostBehavior(t *testing.T) {
 	m := loadManifest(t)
 
@@ -202,57 +206,60 @@ func TestSemanticRulesHostBehavior(t *testing.T) {
 		return res
 	}
 
-	req := eval(
-		map[string]any{"cmd": int64(1001), "seq": int64(1234), "is_error": false},
-		map[string]any{"direction": "client_to_server"},
-	)
+	// evalFrame 走真实解码派生：信封 → parseEnvelope → emit 写入的 payload/Meta 形状。
+	evalFrame := func(cmd, seq, errCode int64) rule.Result {
+		t.Helper()
+		sem := parseEnvelope(envelopePayload(cmd, seq, errCode))
+		return eval(
+			map[string]any{"cmd": sem.Cmd, "seq": sem.Seq, "error_code": sem.ErrorCode, "is_error": sem.IsError},
+			map[string]any{"direction": sem.direction(), "role": sem.role(), "msg_name": sem.MsgName},
+		)
+	}
+
+	req := evalFrame(1001, 1234, 0)
 	if len(req.Pairs) != 1 || req.Pairs[0].Side != 0 || req.Pairs[0].Key != "1234" {
 		t.Fatalf("request pair hit = %+v, want side 0 key 1234", req.Pairs)
 	}
-	if len(req.Semantics) != 0 {
-		t.Fatalf("request semantics = %v, want none", req.Semantics)
+	if !hasSemantic(req.Semantics, rule.SemRequest) {
+		t.Fatalf("request semantics = %v, want request", req.Semantics)
+	}
+	if hasSemantic(req.Semantics, rule.SemResponse, rule.SemNotification, rule.SemError) {
+		t.Fatalf("request must not carry other labels: %v", req.Semantics)
 	}
 
-	resp := eval(
-		map[string]any{"cmd": int64(1002), "seq": int64(1234), "error_code": int64(1), "is_error": true},
-		map[string]any{"direction": "server_to_client"},
-	)
+	resp := evalFrame(1002, 1234, 1)
 	if len(resp.Pairs) != 1 || resp.Pairs[0].Side != 1 || resp.Pairs[0].Key != "1234" {
 		t.Fatalf("response pair hit = %+v, want side 1 key 1234", resp.Pairs)
 	}
 	if !rule.MatchPair(req.Pairs[0], resp.Pairs[0]) {
 		t.Fatalf("request/response pair hits must match: %+v vs %+v", req.Pairs[0], resp.Pairs[0])
 	}
-	if !hasSemantic(resp.Semantics, rule.SemError) {
-		t.Fatalf("response semantics = %v, want error", resp.Semantics)
+	// 带着错误码的响应仍是响应：两个标签并存，不是二选一。
+	if !hasSemantic(resp.Semantics, rule.SemResponse, rule.SemError) {
+		t.Fatalf("response semantics = %v, want response + error", resp.Semantics)
 	}
 
-	push := eval(
-		map[string]any{"cmd": int64(2001), "seq": int64(0), "is_error": false},
-		map[string]any{"direction": "server_to_client"},
-	)
+	push := evalFrame(2001, 0, 0)
 	if len(push.Pairs) != 0 {
 		t.Fatalf("push message must not participate in pairing, got %+v", push.Pairs)
 	}
 	if !hasSemantic(push.Semantics, rule.SemNotification) {
 		t.Fatalf("push semantics = %v, want notification", push.Semantics)
 	}
+	// 推送的方向同样是服务端→客户端：role 不写成 response 才不会被打上响应标签。
+	if hasSemantic(push.Semantics, rule.SemResponse, rule.SemRequest) {
+		t.Fatalf("push must not be labelled as request/response: %v", push.Semantics)
+	}
 
 	// 推送号段的其余消息（道具 / 资源数量变化）同样命中 push rule。
-	itemPush := eval(
-		map[string]any{"cmd": int64(2002), "seq": int64(0), "is_error": false},
-		map[string]any{"direction": "server_to_client"},
-	)
+	itemPush := evalFrame(2002, 0, 0)
 	if !hasSemantic(itemPush.Semantics, rule.SemNotification) || len(itemPush.Pairs) != 0 {
 		t.Fatalf("item push semantics = %v pairs = %+v, want notification / no pair",
 			itemPush.Semantics, itemPush.Pairs)
 	}
 
 	// 信封级错误回包：payload 解不出 seq 时也为 0，但它不是推送，只是 error。
-	envelopeErr := eval(
-		map[string]any{"cmd": int64(9001), "seq": int64(0), "error_code": int64(1), "is_error": true},
-		map[string]any{"direction": "server_to_client"},
-	)
+	envelopeErr := evalFrame(9001, 0, 1)
 	if !hasSemantic(envelopeErr.Semantics, rule.SemError) {
 		t.Fatalf("bad envelope semantics = %v, want error", envelopeErr.Semantics)
 	}
@@ -262,25 +269,30 @@ func TestSemanticRulesHostBehavior(t *testing.T) {
 	}
 
 	// 业务错误响应：号段内的响应号 + 回显 seq，既配对又标注 error。
-	bizErr := eval(
-		map[string]any{"cmd": int64(1006), "seq": int64(4321), "error_code": int64(7), "is_error": true},
-		map[string]any{"direction": "server_to_client"},
-	)
+	bizErr := evalFrame(1006, 4321, 7)
 	if len(bizErr.Pairs) != 1 || bizErr.Pairs[0].Side != 1 || bizErr.Pairs[0].Key != "4321" {
 		t.Fatalf("business error reply pairs = %+v, want side 1 key 4321", bizErr.Pairs)
 	}
-	if !hasSemantic(bizErr.Semantics, rule.SemError) {
-		t.Fatalf("business error reply semantics = %v, want error", bizErr.Semantics)
+	if !hasSemantic(bizErr.Semantics, rule.SemError, rule.SemResponse) {
+		t.Fatalf("business error reply semantics = %v, want error + response", bizErr.Semantics)
 	}
 }
 
-func hasSemantic(list []rule.Semantic, want rule.Semantic) bool {
-	for _, s := range list {
-		if s == want {
-			return true
+// hasSemantic 报告标注结果里是否含全部给定标签（闭集成员，annotate 可多命中）。
+func hasSemantic(list []rule.Semantic, want ...rule.Semantic) bool {
+	for _, w := range want {
+		found := false
+		for _, s := range list {
+			if s == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // TestEmitChannels drives the full parse -> emit path across request /

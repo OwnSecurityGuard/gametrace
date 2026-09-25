@@ -115,6 +115,7 @@ type PlayerInfoNotifyData struct {
 	PlayerID string `json:"player_id"`
 	Nickname string `json:"nickname"`
 	Level    int    `json:"level"`
+	Exp      int    `json:"exp"`
 	Online   bool   `json:"online"`
 }
 

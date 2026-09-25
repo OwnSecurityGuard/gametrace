@@ -16,8 +16,9 @@ const maxStreamBytes = 4 << 20
 // reassembly is inherently cross-packet, and the per-flow message counters
 // back the declared state layer.
 type decoder struct {
-	reasm  *framing.Reassembler
-	counts map[string]flowCount // key: FlowKey.Canonical()
+	reasm    *framing.Reassembler
+	counts   map[string]flowCount // key: FlowKey.Canonical()
+	entities *entityTracker       // 实体状态（道具/资源/玩家）投影，跨消息补 before
 }
 
 type flowCount struct {
@@ -27,8 +28,9 @@ type flowCount struct {
 
 func newDecoder() *decoder {
 	return &decoder{
-		reasm:  framing.NewReassembler(),
-		counts: make(map[string]flowCount),
+		reasm:    framing.NewReassembler(),
+		counts:   make(map[string]flowCount),
+		entities: newEntityTracker(),
 	}
 }
 

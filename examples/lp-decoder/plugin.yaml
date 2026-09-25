@@ -24,11 +24,20 @@
 #
 # 协议语义通过 semantic_rules 声明（插件定义语义、平台执行）：
 #   - lp.pair_request_response：请求/响应按 seq 回显配对
+#   - lp.mark_request / lp.mark_response：按解码器写入的角色标注 request / response
+#     （号段奇偶只能由解码器判定，规则读 _meta.role；错误回包会同时带 response + error）
 #   - lp.mark_push：cmd 落在 2000~2999 推送号段的消息标注为 notification
 #     （不再用 seq==0 判推送——9001 的 seq 也可能是 0，那是"拿不到 seq"而非推送）
 #   - lp.mark_error：error_code!=0 标注为 error
 #   - 消息名不声明 name 效果：payload 只有数值 cmd，符号名来自解码器的
 #     cmd→名称映射表，故 msg_name 仍由 Meta 通道给出（对照 ws-decoder）。
+#
+# 状态投影（Analysis 通道的 _state_changes，不是 semantic_rules 的职责）：
+#   解码器按流记住最近解到的取值，把服务端消息体里的可变字段投影成前后值——
+#   道具数量（lp_item:<id>.count）、金币/钻石与等级/经验/在线（lp_player:<pid>.*），
+#   外加流内请求/响应计数。约定三条：只有服务端→客户端且 error_code==0 的消息改状态
+#   （被拒绝的请求不产生变更）；首次观测只有 after（基线早于抓包起点）；与最近值同数
+#   不重复产出（响应里的 remain 与紧随其后的数量推送携带同一数值时只算一次）。
 
 api_version: gt.decoder/v2
 name: lp-decoder
@@ -60,6 +69,21 @@ semantic_rules:
       sides:
         - { path: _meta.direction, op: eq, value: client_to_server, key: seq }
         - { path: _meta.direction, op: eq, value: server_to_client, key: seq }
+  # 请求/响应语义：号段奇偶（1000~1999 的奇数号 = 请求）只有解码器握得到，
+  # 它把判定结果写进 Meta 的 role（request / response / push），规则只读。
+  # 错误回包因此同时带 response + error 两个标签——它是"带着错误码的响应"，不是两种消息。
+  - id: lp.mark_request
+    when:
+      - { path: _meta.role, op: eq, value: request }
+    effect:
+      type: annotate
+      semantic: request
+  - id: lp.mark_response
+    when:
+      - { path: _meta.role, op: eq, value: response }
+    effect:
+      type: annotate
+      semantic: response
   # 推送消息：命中 push rule（cmd 在 2000~2999 号段），标注为 notification。
   - id: lp.mark_push
     when:
@@ -93,10 +117,16 @@ meta:
     followed by server pushes. Direction is derived from the message identity
     (odd cmd in 1000~1999 = request, everything else = response-side) because
     the template protocol has distinct request/response command ids — a
-    template-specific decision, NOT a general rule. Frame facts (version /
+    template-specific decision, NOT a general rule. The same derivation is
+    published as Meta role so the annotate rules can label request / response
+    without re-reading a command table. Frame facts (version /
     len_width / endian / length) go to the Meta channel while business fields
-    (cmd / seq / error_code / body_text) stay in the payload, and flow counters
-    project through _state_changes in the Analysis channel.
+    (cmd / seq / error_code / body_text) stay in the payload. The Analysis
+    channel projects _state_changes for both flow counters and the entity state
+    carried by server messages: item counts (lp_item) plus gold / diamond /
+    level / exp / online (lp_player), each with a before value taken from the
+    last observation on that flow (absent for the first one), skipped when the
+    value did not change, and never produced by an error reply.
   game: lp-demo
   transport: length-prefixed-json
   decoded_directions: [client_to_server, server_to_client]

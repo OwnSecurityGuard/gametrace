@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, Fragment, memo, useRef } from "react";
 import type { ReactNode } from "react";
-import { useDecodedData } from "@/hooks/use-mcp";
+import { useDecodedData, usePairGroup } from "@/hooks/use-mcp";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -39,6 +39,7 @@ import {
   DirectionIcon,
   DirectionChip,
   MessageCell,
+  SemanticBadge,
   HighlightedJson,
   StructuredFields,
   classifyPayload,
@@ -56,6 +57,7 @@ import {
   type DirectionFilter,
   type SemanticFilter,
 } from "@/lib/fuzzy";
+import { mergePartnerPool, pairGroupFilter, resolvePairGroup } from "@/lib/pair-group";
 
 interface EventTableProps {
   sessionId: string | null;
@@ -561,7 +563,8 @@ function PairPanel({
         })
       ) : (
         <span className="text-xs text-muted-foreground">
-          配对消息不在当前页（可在上方模糊搜索框输入该消息名或 id 定位）
+          配对记录指向消息 <b className="font-mono text-foreground">{event.causation_id}</b>
+          ，但本会话里已经查不到它（可能被删除或重新解码过）。
         </span>
       )}
     </div>
@@ -825,6 +828,11 @@ function ExpandedHeader({
     <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-border pb-2">
       <DirectionChip direction={meta.direction} />
       <span className="font-mono text-sm font-semibold">{meta.msgName || "(unknown)"}</span>
+      {/* annotate 标签在这里也要出现：展开后是读一条消息的主视图，
+          只显示消息名会让人以为语义只在收起态的行里有。 */}
+      {meta.semantic.map((s) => (
+        <SemanticBadge key={s} label={s} />
+      ))}
       <span className="font-mono text-xs text-muted-foreground">
         {formatTimestamp(event.timestamp)}
       </span>
@@ -890,12 +898,14 @@ function ExpandedHeader({
 
 function ExpandedRow({
   event,
+  sessionId,
   partners,
   colSpan,
   onJumpToPartner,
   onCollapse,
 }: {
   event: DecodedEvent;
+  sessionId: string;
   partners: DecodedEvent[];
   colSpan: number;
   onJumpToPartner: (id: string) => void;
@@ -913,17 +923,14 @@ function ExpandedRow({
   );
   const [showAnalysis, setShowAnalysis] = useState(false);
 
-  // 配对并排视图所需的请求/响应分组：
-  // - 当前事件无 causation_id → 它是请求，响应是 partners 里 causation_id 指向它的事件。
-  // - 当前事件有 causation_id → 它是响应，在 partners 里找到它的请求；找不到则不进入并排。
-  const { request, responses } = useMemo(() => {
-    if (event.causation_id) {
-      const req = partners.find((p) => p.id === event.causation_id);
-      return req ? { request: req, responses: [event] } : { request: event, responses: [] };
-    }
-    const resps = partners.filter((p) => p.causation_id === event.id);
-    return { request: event, responses: resps };
-  }, [event, partners]);
+  // 配对组：页内伙伴先顶上，缺的成员按血缘向服务端补查一次（详见 lib/pair-group.ts）。
+  const groupFilter = useMemo(() => pairGroupFilter(event), [event]);
+  const { data: group } = usePairGroup(sessionId, groupFilter);
+  const pool = useMemo(
+    () => mergePartnerPool(event, partners, group?.events),
+    [event, partners, group],
+  );
+  const { request, responses } = useMemo(() => resolvePairGroup(event, pool), [event, pool]);
   const showPair = responses.length > 0;
 
   return (
@@ -958,7 +965,7 @@ function ExpandedRow({
           <div className="mt-3">
             <AnalysisPanel
               event={event}
-              partners={partners}
+              partners={pool}
               analysis={classes.analysis}
               onJumpToPartner={onJumpToPartner}
             />
@@ -973,6 +980,7 @@ function ExpandedRow({
 
 const EventRow = memo(function EventRow({
   event,
+  sessionId,
   partners,
   isExpanded,
   isHighlighted,
@@ -982,6 +990,7 @@ const EventRow = memo(function EventRow({
   onOpenStateChange,
 }: {
   event: DecodedEvent;
+  sessionId: string;
   partners: DecodedEvent[];
   isExpanded: boolean;
   isHighlighted: boolean;
@@ -1065,6 +1074,7 @@ const EventRow = memo(function EventRow({
       {isExpanded && (
         <ExpandedRow
           event={event}
+          sessionId={sessionId}
           partners={partners}
           colSpan={colSpan}
           onJumpToPartner={onJumpToPartner}
@@ -1163,19 +1173,21 @@ export function EventTable({
   const totalPages = Math.ceil(totalMatched / pageSize);
 
   /**
-   * 配对索引：事件 id → 当前页内的配对伙伴。
+   * 配对索引：事件 id → 已取回批次内的配对伙伴。
    * 配对信号是 causation_id（响应 → 请求事件 id，SDK pair 规则写入），
    * 不用 correlation_id —— 后者可能是插件 decode 侧写的流键（全流共享），不是配对关系。
+   * 建索引用整批取回的事件而不是过滤后的：过滤把请求那条筛掉时，同页的响应照样配得上，
+   * 没必要再为它打一次服务端血缘查询。
    */
   const partnersMap = useMemo(() => {
-    const byId = new Map(filteredEvents.map((e) => [e.id, e]));
+    const byId = new Map(events.map((e) => [e.id, e]));
     const m = new Map<string, DecodedEvent[]>();
     const push = (key: string, val: DecodedEvent) => {
       const arr = m.get(key);
       if (arr) arr.push(val);
       else m.set(key, [val]);
     };
-    for (const ev of filteredEvents) {
+    for (const ev of events) {
       if (!ev.causation_id) continue;
       const req = byId.get(ev.causation_id);
       if (!req) continue;
@@ -1183,10 +1195,15 @@ export function EventTable({
       push(ev.id, req);
     }
     return m;
-  }, [filteredEvents]);
+  }, [events]);
 
   /** 展开并滚动定位到某事件（配对伙伴跳转）。 */
   function handleJumpTo(id: string) {
+    // 页内没有这一行就直说：把它记进展开集只会得到一个永远渲染不出来的目标。
+    if (!document.getElementById(`event-row-${id}`)) {
+      toast.info("配对消息不在当前列表", "展开的这一行已经并排显示了它；要跳到它本身，用上方模糊搜索。");
+      return;
+    }
     setExpandedIds((prev) => new Set(prev).add(id));
     setHighlightId(id);
     setTimeout(() => {
@@ -1359,6 +1376,7 @@ export function EventTable({
             <EventRow
               key={event.id}
               event={event}
+              sessionId={sessionId}
               partners={partnersMap.get(event.id) ?? []}
               isExpanded={expandedIds.has(event.id)}
               isHighlighted={highlightId === event.id || (!!focus && event.id === focus)}

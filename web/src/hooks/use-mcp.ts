@@ -105,6 +105,34 @@ export function useDecodedData(
   });
 }
 
+/** 一组配对最多拉多少条响应：一问多推的场景够用，又不至于拉穿一页。 */
+const PAIR_GROUP_LIMIT = 50;
+
+/**
+ * 按血缘取「一组配对」（展开协议事件行时的左请求 / 右响应）。
+ *
+ * 事件表默认只在当前页内找配对伙伴，伙伴翻到下一页就静默查不到 —— 行上明明有
+ * 配对角标，展开却退化成一条普通 JSON。这里改用 causation_id 精确问服务端：
+ * pair 规则把响应的 causation_id 指向请求，按请求 id 反查得到的就是整组
+ * （filter 由 lib/pair-group.ts 的 pairGroupFilter 生成）。
+ */
+export function usePairGroup(sessionId: string | null, filter: string) {
+  return useQuery({
+    queryKey: ["pairGroup", sessionId, filter],
+    queryFn: () =>
+      mcpClient.callTool<ListDecodedDataResult>("list_decoded_data", {
+        session_id: sessionId ?? undefined,
+        limit: PAIR_GROUP_LIMIT,
+        offset: 0,
+        filter: filter ?? undefined,
+      }),
+    enabled: !!sessionId && !!filter,
+    placeholderData: keepPreviousData,
+    // 抓包进行中响应会比请求晚到；轮询才能把「请求已展开、响应刚到」的组补齐。
+    refetchInterval: sessionId && filter ? 2000 : false,
+  });
+}
+
 /**
  * 协议级聚合目录：后端一次扫全量事件再聚合，代价远高于分页查询。
  * 用途是「这次抓包有哪些协议 / 各自出现过哪些语义标签」，供语义下拉取词表。
@@ -941,6 +969,18 @@ export function useProbeRename() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["probes"] });
     },
+  });
+}
+
+/** probe_notify：让探针在目标机器上弹一条系统桌面通知（一次性，探针须在线）。 */
+export function useProbeNotify() {
+  return useMutation({
+    mutationFn: (vars: { probeId: string; title?: string; message: string }) =>
+      mcpClient.callTool<ProbeOkResult>("probe_notify", {
+        probe_id: vars.probeId,
+        title: vars.title ?? "",
+        message: vars.message,
+      }),
   });
 }
 

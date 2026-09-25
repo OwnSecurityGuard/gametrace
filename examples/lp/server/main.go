@@ -17,10 +17,15 @@ import (
 // 会话初始状态：每条新连接重置，便于反复跑同一套客户端场景。
 // 数值刻意取小，让"资源不足"这类非法请求在演示中真的会触发。
 var (
-	startItems   = map[int]int{5001: 3, 5002: 2, 5003: 1}
-	itemCost     = map[int]int{5001: 30, 5002: 60, 5003: 120}
-	startGold    = 120
+	startItems   = map[int]int{5001: 12, 5002: 6, 5003: 3}
+	itemCost     = map[int]int{5001: 10, 5002: 20, 5003: 40}
+	itemExp      = map[int]int{5001: 20, 5002: 35, 5003: 60}
+	startGold    = 200
 	startDiamond = 20
+
+	// expNeedPerLevel 是升到下一级所需的累计经验（level × 该值），因此道具给的
+	// 经验会让玩家连升几级，服务端每次升级各推一条玩家档案。
+	expNeedPerLevel = 100
 
 	// gatherLimit 单次采集上限；gold / diamond 之外的资源名一律拒绝。
 	gatherLimit = 1000
@@ -28,14 +33,15 @@ var (
 	playerSeq atomic.Uint64
 )
 
-// session 是一条客户端连接上的游戏会话：登录态 + 背包 + 资源。
-// 服务端在回业务响应之外，还会就背包/资源变化追加推送。
+// session 是一条客户端连接上的游戏会话：登录态 + 背包 + 资源 + 等级经验。
+// 服务端在回业务响应之外，还会就背包/资源/玩家档案变化追加推送。
 type session struct {
 	conn     net.Conn
 	loggedIn bool
 	playerID string
 	nickname string
 	level    int
+	exp      int
 	items    map[int]int
 	gold     int
 	diamond  int
@@ -130,7 +136,8 @@ func (s *session) handleGetBag(req lp.Envelope) []lp.Envelope {
 }
 
 // handleUseItem 演示"回包 + 状态推送"：响应告知本次使用结果，
-// 随后各推一条道具数量与资源变化，客户端不需要再查询。
+// 随后各推一条道具数量与资源变化，若这次使用让玩家升级则再推一条玩家档案，
+// 客户端不需要再查询。
 func (s *session) handleUseItem(req lp.Envelope) []lp.Envelope {
 	var body lp.UseItemRequestData
 	if err := lp.UnmarshalData(req.Data, &body); err != nil {
@@ -156,15 +163,29 @@ func (s *session) handleUseItem(req lp.Envelope) []lp.Envelope {
 
 	s.items[body.ItemID] = remain - body.Count
 	s.gold -= cost
-	return []lp.Envelope{
+	replies := []lp.Envelope{
 		okReply(lp.CmdUseItemResponse, req.Seq, lp.UseItemResponseData{
 			ItemID: body.ItemID, Used: body.Count, Remain: s.items[body.ItemID],
 		}),
 		notify(lp.CmdItemCountNotify, lp.ItemCountNotifyData{
 			ItemID: body.ItemID, Count: s.items[body.ItemID], Delta: -body.Count,
 		}),
-		notify(lp.CmdResourceNotify, lp.ResourceNotifyData{Gold: s.gold, Diamond: s.diamond}),
+		notify(lp.CmdResourceNotify, s.resources()),
 	}
+	if s.gainExp(itemExp[body.ItemID] * body.Count) {
+		replies = append(replies, notify(lp.CmdPlayerInfoNotify, s.playerInfo()))
+	}
+	return replies
+}
+
+// gainExp 累加经验并按累计门槛升级，返回是否发生升级。
+func (s *session) gainExp(amount int) bool {
+	before := s.level
+	s.exp += amount
+	for s.exp >= s.level*expNeedPerLevel {
+		s.level++
+	}
+	return s.level != before
 }
 
 func (s *session) handleGather(req lp.Envelope) []lp.Envelope {
@@ -214,7 +235,7 @@ func (s *session) write(env lp.Envelope) error {
 
 func (s *session) playerInfo() lp.PlayerInfoNotifyData {
 	return lp.PlayerInfoNotifyData{
-		PlayerID: s.playerID, Nickname: s.nickname, Level: s.level, Online: s.loggedIn,
+		PlayerID: s.playerID, Nickname: s.nickname, Level: s.level, Exp: s.exp, Online: s.loggedIn,
 	}
 }
 

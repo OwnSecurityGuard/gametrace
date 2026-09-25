@@ -71,16 +71,18 @@ type envelopeSemantics struct {
 	ErrorMsg  string
 	IsError   bool // error rule: error_code != 0
 	IsRequest bool // direction: cmd 号段+奇偶决定（模板协议特有，见 plugin.yaml）
+	Data      json.RawMessage
 }
 
 // parseEnvelope best-effort extracts the envelope semantics from a JSON body.
 // A malformed or non-JSON body yields the zero semantics (unknown, no error).
 func parseEnvelope(body []byte) envelopeSemantics {
 	var raw struct {
-		Cmd       int64  `json:"cmd"`
-		Seq       int64  `json:"seq"`
-		ErrorCode int64  `json:"error_code"`
-		ErrorMsg  string `json:"error_msg"`
+		Cmd       int64           `json:"cmd"`
+		Seq       int64           `json:"seq"`
+		ErrorCode int64           `json:"error_code"`
+		ErrorMsg  string          `json:"error_msg"`
+		Data      json.RawMessage `json:"data"`
 	}
 	_ = json.Unmarshal(body, &raw)
 
@@ -89,6 +91,7 @@ func parseEnvelope(body []byte) envelopeSemantics {
 		Seq:       raw.Seq,
 		ErrorCode: raw.ErrorCode,
 		ErrorMsg:  raw.ErrorMsg,
+		Data:      raw.Data,
 	}
 	s.MsgName = msgName(s.Cmd)
 	s.IsPush = raw.Cmd >= pushCmdLow && raw.Cmd < pushCmdHigh
@@ -108,8 +111,8 @@ func (s envelopeSemantics) direction() string {
 }
 
 // role returns the communication role for one direction.
-// 推送判定仍由解码器给出（供前端即时展示），规则侧的语义标注由平台
-// 依据 semantic_rules 的 annotate 效果独立产出。
+// 号段奇偶的判定只有解码器握得到，结果写进 Meta 供 annotate 规则读取
+// （request/response），推送侧另由 cmd 号段规则标注 notification。
 func (s envelopeSemantics) role() string {
 	if s.IsPush {
 		return "push"
@@ -160,36 +163,31 @@ func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string,
 		"body_truncated": truncated,
 	}
 
-	// 状态变更：请求/响应各按自己的计数路径投影，version 为流内消息总数。
+	// 状态变更两条来源：① 流内请求/响应计数；② 消息体携带的实体状态
+	// （道具数量、金币/钻石、等级/经验/在线）。version 统一取流内消息序号。
 	var draft event.Draft
-	change := map[string]any{
-		"subject_type": "lp_request",
-		"subject_id":   flowID,
-		"op":           "set",
-		"path":         "requests",
-		"before":       c.requests,
-		"after":        c.requests + 1,
-		"version":      c.requests + c.responses + 1,
-	}
+	var counter map[string]any
+	var version int64
 	if sem.IsRequest {
 		c.requests++
+		version = c.requests + c.responses
+		counter = flowCounterChange(flowID, "lp_request", "requests", c.requests-1, c.requests, version)
 		payload["requests"] = c.requests
 		payload["req_seq"] = sem.Seq
 		draft.Type = "lp.request"
 	} else {
 		c.responses++
-		change["subject_type"] = "lp_response"
-		change["path"] = "responses"
-		change["before"] = c.responses - 1
-		change["after"] = c.responses
-		change["version"] = c.requests + c.responses
+		version = c.requests + c.responses
+		counter = flowCounterChange(flowID, "lp_response", "responses", c.responses-1, c.responses, version)
 		payload["responses"] = c.responses
 		draft.Type = "lp.response"
 	}
+	changes := append([]any{counter}, d.entities.project(flowID, sem, version)...)
+
 	draft.Value = event.ValueFromMap(payload)
 	draft.Meta = event.ValueFromMap(meta)
 	draft.Analysis = event.ValueFromMap(map[string]any{
-		"_state_changes": []any{change},
+		"_state_changes": changes,
 	})
 	d.counts[flowID] = c
 
@@ -198,6 +196,19 @@ func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string,
 		return stream.Send(&pb.DecodeResponseV2{InputId: inputID, Done: true, Error: err.Error()})
 	}
 	return stream.Send(resp)
+}
+
+// flowCounterChange 构造一条请求/响应计数的状态变更。
+func flowCounterChange(flowID, subjectType, path string, before, after, version int64) map[string]any {
+	return map[string]any{
+		"subject_type": subjectType,
+		"subject_id":   flowID,
+		"op":           "set",
+		"path":         path,
+		"before":       before,
+		"after":        after,
+		"version":      version,
+	}
 }
 
 // endianName renders the length-field endianness for the Meta channel.
