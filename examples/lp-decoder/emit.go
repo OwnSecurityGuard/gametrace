@@ -8,28 +8,56 @@ import (
 )
 
 // 消息定义：与 examples/lp 的 client/server 信封约定保持一致。
+// 号段语义：1000~1999 请求/响应成对（请求为奇数、响应号 = 请求号 + 1），
+// 2000~2999 服务端推送，9000~9999 信封级错误回包。
 const (
-	cmdLoginRequest  = 1001 // 请求消息（role=request）
-	cmdLoginResponse = 1002 // 正常响应（role=response）
-	cmdPlayerNotify  = 2001 // 推送消息（role=push，命中 push rule）
+	cmdLoginRequest     = 1001
+	cmdLoginResponse    = 1002
+	cmdGetBagRequest    = 1003
+	cmdGetBagResponse   = 1004
+	cmdUseItemRequest   = 1005
+	cmdUseItemResponse  = 1006
+	cmdGatherRequest    = 1007
+	cmdGatherResponse   = 1008
+	cmdPlayerInfoNotify = 2001
+	cmdItemCountNotify  = 2002
+	cmdResourceNotify   = 2003
+	cmdBadRequest       = 9001
+)
+
+// pushCmdRange / requestCmdRange 是号段边界，与 plugin.yaml 的语义规则同源。
+const (
+	requestCmdLow  = 1000
+	requestCmdHigh = 2000
+	pushCmdLow     = 2000
+	pushCmdHigh    = 3000
 )
 
 // maxBodyBytes caps the captured payload text per frame (64KB). Longer
 // payloads are truncated and flagged via body_truncated.
 const maxBodyBytes = 64 << 10
 
-// msgName maps a cmd message id to its symbolic name (unknown when not declared).
+// msgNames maps a cmd message id to its symbolic name (unknown when not declared).
+var msgNames = map[int64]string{
+	cmdLoginRequest:     "LoginRequest",
+	cmdLoginResponse:    "LoginResponse",
+	cmdGetBagRequest:    "GetBagRequest",
+	cmdGetBagResponse:   "GetBagResponse",
+	cmdUseItemRequest:   "UseItemRequest",
+	cmdUseItemResponse:  "UseItemResponse",
+	cmdGatherRequest:    "GatherRequest",
+	cmdGatherResponse:   "GatherResponse",
+	cmdPlayerInfoNotify: "PlayerInfoNotify",
+	cmdItemCountNotify:  "ItemCountNotify",
+	cmdResourceNotify:   "ResourceNotify",
+	cmdBadRequest:       "BadRequest",
+}
+
 func msgName(cmd int64) string {
-	switch cmd {
-	case cmdLoginRequest:
-		return "LoginRequest"
-	case cmdLoginResponse:
-		return "LoginResponse"
-	case cmdPlayerNotify:
-		return "PlayerNotify"
-	default:
-		return "unknown"
+	if name, ok := msgNames[cmd]; ok {
+		return name
 	}
+	return "unknown"
 }
 
 // envelopeSemantics holds the decoded envelope fields of one lp frame,
@@ -37,20 +65,22 @@ func msgName(cmd int64) string {
 type envelopeSemantics struct {
 	Cmd       int64
 	MsgName   string
-	IsPush    bool // push rule: cmd==2001 或 seq==0
+	IsPush    bool // push rule: cmd 落在 2000~2999 推送号段
 	Seq       int64
 	ErrorCode int64
+	ErrorMsg  string
 	IsError   bool // error rule: error_code != 0
-	IsRequest bool // direction: cmd 身份决定（模板协议特有，见 plugin.yaml）
+	IsRequest bool // direction: cmd 号段+奇偶决定（模板协议特有，见 plugin.yaml）
 }
 
 // parseEnvelope best-effort extracts the envelope semantics from a JSON body.
 // A malformed or non-JSON body yields the zero semantics (unknown, no error).
 func parseEnvelope(body []byte) envelopeSemantics {
 	var raw struct {
-		Cmd       int64 `json:"cmd"`
-		Seq       int64 `json:"seq"`
-		ErrorCode int64 `json:"error_code"`
+		Cmd       int64  `json:"cmd"`
+		Seq       int64  `json:"seq"`
+		ErrorCode int64  `json:"error_code"`
+		ErrorMsg  string `json:"error_msg"`
 	}
 	_ = json.Unmarshal(body, &raw)
 
@@ -58,16 +88,17 @@ func parseEnvelope(body []byte) envelopeSemantics {
 		Cmd:       raw.Cmd,
 		Seq:       raw.Seq,
 		ErrorCode: raw.ErrorCode,
+		ErrorMsg:  raw.ErrorMsg,
 	}
 	s.MsgName = msgName(s.Cmd)
-	s.IsPush = s.Cmd == cmdPlayerNotify || s.Seq == 0
-	s.IsRequest = s.Cmd == cmdLoginRequest
+	s.IsPush = raw.Cmd >= pushCmdLow && raw.Cmd < pushCmdHigh
+	s.IsRequest = raw.Cmd >= requestCmdLow && raw.Cmd < requestCmdHigh && raw.Cmd%2 == 1
 	s.IsError = s.ErrorCode != 0
 	return s
 }
 
-// direction 由协议语义（cmd 身份）推导：1001 必为客户端→服务端，
-// 1002/2001 必为服务端→客户端。⚠️ 这是模板协议独有的约定——如果真实协议
+// direction 由协议语义（cmd 号段 + 奇偶）推导：奇数请求号必为客户端→服务端，
+// 其响应、推送与错误回包必为服务端→客户端。⚠️ 这是模板协议独有的约定——如果真实协议
 // 存在双向同 cmd 的消息，就不能沿用此处，必须改用请求方向可判别的字段。
 func (s envelopeSemantics) direction() string {
 	if s.IsRequest {
@@ -118,11 +149,12 @@ func (d *decoder) emit(stream pb.Decoder_DecodeV2Server, inputID, flowID string,
 		},
 	}
 
-	// 业务 payload：共用签名（cmd/seq/error_code/is_error/body_text）。
+	// 业务 payload：共用签名（cmd/seq/error_code/error_msg/is_error/body_text）。
 	payload := map[string]any{
 		"cmd":            sem.Cmd,
 		"seq":            sem.Seq,
 		"error_code":     sem.ErrorCode,
+		"error_msg":      sem.ErrorMsg,
 		"is_error":       sem.IsError,
 		"body_text":      string(body),
 		"body_truncated": truncated,

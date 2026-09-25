@@ -16,9 +16,9 @@ const maxStreamBytes = 4 << 20
 // handshake is parsed first, then RFC 6455 frames (with continuation
 // reassembly and per-frame counters backing the analysis channel).
 type flowState struct {
-	handshaken bool     // 101 响应已消费，进入帧解析
-	fragment   []byte   // 分片重组缓冲区（continuation 帧拼接）
-	fragOpcode byte     // 分片起始 opcode（text/binary）
+	handshaken bool   // 101 响应已消费，进入帧解析
+	fragment   []byte // 分片重组缓冲区（continuation 帧拼接）
+	fragOpcode byte   // 分片起始 opcode（text/binary）
 	counts     flowCount
 }
 

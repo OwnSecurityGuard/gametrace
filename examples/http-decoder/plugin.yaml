@@ -9,6 +9,9 @@
 #   - http.pair_request_response：请求/响应按 body.seq 回显配对
 #   - http.mark_push：cmd==2001 或 seq==0 的推送消息标注为 notification
 #   - http.mark_error：error_code!=0 标注为 error
+#   - 消息名不声明 name 效果：payload 只有数值 cmd，符号名（LoginRequest 等）
+#     来自解码器的 cmd→名称映射表，属于 name 规则"字段自带名称"之外的场景，
+#     故 msg_name 仍由 Meta 通道给出。
 # schema / states 声明层在 v0.9.0 已移除，不再声明。
 
 api_version: gt.decoder/v2

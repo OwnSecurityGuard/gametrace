@@ -10,9 +10,15 @@
 package main
 
 import (
+	"os"
+
 	"github.com/OwnSecurityGuard/gametrace/sdk"
 )
 
 func main() {
-	sdk.RunRegisterLoop(newDecoder().decode)
+	// GT_AUTH_TOKEN 由运行方注入环境变量（token 模式平台必需；匿名模式留空即匿名）。
+	// 注意：Go 不会自动读目录里的 .env，需要先 source 或在启动命令前置变量。
+	sdk.RunRegisterLoopWithOptions(newDecoder().decode, sdk.RegisterOptions{
+		AuthToken: os.Getenv("GT_AUTH_TOKEN"),
+	})
 }

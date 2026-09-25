@@ -33,15 +33,19 @@ func parseTextEnvelope(p []byte) textEnvelope {
 
 // baseMeta builds the Meta channel facts for one event. Direction follows the
 // wire: client frames are masked, server frames are not (RFC 6455 §5.3), and
-// the handshake request/response are inherently c2s / s2c.
+// the handshake request/response are inherently c2s / s2c. An empty msgName
+// omits the key entirely — the name semantic rule supplies it instead.
 func baseMeta(flowID, direction, msgName, role string, isPush bool) map[string]any {
-	return map[string]any{
+	meta := map[string]any{
 		"flow_id":   flowID,
 		"direction": direction,
-		"msg_name":  msgName,
 		"role":      role,
 		"is_push":   isPush,
 	}
+	if msgName != "" {
+		meta["msg_name"] = msgName
+	}
+	return meta
 }
 
 // frameRole derives the communication role of a frame from its direction.
@@ -155,11 +159,14 @@ func (d *decoder) emitData(stream pb.Decoder_DecodeV2Server, inputID, flowID str
 		"text_truncated": truncated,
 	}
 
+	// msg_name 约定（与 plugin.yaml 的 ws.name_message 规则配套）：信封自带
+	// type 字段时不写 msg_name，由 name 规则声明式提取（规则优先于硬编码）；
+	// 没有 type 字段时（binary、非 JSON 文本）解码器兜底。
 	msgName := "text"
 	isPush := false
 	if opcode == wsOpText {
 		if env := parseTextEnvelope(payload); env.Type != "" {
-			msgName = env.Type
+			msgName = ""
 			isPush = env.Type == "push"
 			value["type"] = env.Type
 			value["seq"] = env.Seq

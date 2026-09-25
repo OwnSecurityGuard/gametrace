@@ -128,10 +128,10 @@ func TestParseFrameExtendedLength(t *testing.T) {
 
 func TestParseFrameIncomplete(t *testing.T) {
 	cases := [][]byte{
-		{0x81},                       // 不足 2 字节头
-		{0x81, 0x03, 'a'},            // payload 不完整
-		{0x81, 0x7E, 0x00},           // 扩展长度头不完整
-		{0x81, 0x7F, 0, 0, 0, 0},     // 64 位扩展长度头不完整
+		{0x81},                         // 不足 2 字节头
+		{0x81, 0x03, 'a'},              // payload 不完整
+		{0x81, 0x7E, 0x00},             // 扩展长度头不完整
+		{0x81, 0x7F, 0, 0, 0, 0},       // 64 位扩展长度头不完整
 		{0x81, 0x83, 0x01, 0x02, 0x03}, // mask key 不完整
 	}
 	for _, buf := range cases {
@@ -261,6 +261,20 @@ func TestSemanticRulesHostBehavior(t *testing.T) {
 	if !hasSemantic(push.Semantics, rule.SemNotification) {
 		t.Fatalf("push semantics = %v, want notification", push.Semantics)
 	}
+
+	// name 效果（v0.8.2+）：信封自带 type 字段时由规则声明消息名，
+	// 解码器不再硬编码 msg_name。
+	if len(req.Names) != 1 || req.Names[0].Value != "echo" {
+		t.Fatalf("echo name hits = %+v, want value echo", req.Names)
+	}
+	// 没有 type 字段的帧（binary / ping 等）name 规则静默不命中，解码器兜底。
+	bin := eval(
+		map[string]any{"length": int64(4), "hex": "deadbeef"},
+		map[string]any{"direction": "server_to_client", "msg_name": "binary"},
+	)
+	if len(bin.Names) != 0 {
+		t.Fatalf("binary frame name hits = %+v, want none", bin.Names)
+	}
 }
 
 func hasSemantic(list []rule.Semantic, want rule.Semantic) bool {
@@ -309,6 +323,8 @@ func TestEmitSchemaConformance(t *testing.T) {
 		t.Fatalf("responses = %d, want 5", len(stream.responses))
 	}
 	wantDir := []string{"client_to_server", "server_to_client", "client_to_server", "server_to_client", "server_to_client"}
+	// 空串 = Meta 中不得出现 msg_name：带 type 信封的文本帧改由 name 规则声明。
+	wantMsgName := []string{"handshake", "handshake", "", "", "ping"}
 	for i, r := range stream.responses {
 		if r.Done {
 			t.Fatalf("unexpected done response for %s", r.EventType)
@@ -327,6 +343,13 @@ func TestEmitSchemaConformance(t *testing.T) {
 		}
 		if meta["direction"] != wantDir[i] {
 			t.Errorf("%s: meta.direction = %v, want %s", r.EventType, meta["direction"], wantDir[i])
+		}
+		if wantMsgName[i] == "" {
+			if _, has := meta["msg_name"]; has {
+				t.Errorf("%s: msg_name must come from the name rule, not be hardcoded: %v", r.EventType, meta["msg_name"])
+			}
+		} else if meta["msg_name"] != wantMsgName[i] {
+			t.Errorf("%s: meta.msg_name = %v, want %s", r.EventType, meta["msg_name"], wantMsgName[i])
 		}
 		analysis := unmarshalToMap(t, r.AnalysisMsgpack)
 		if _, has := analysis["_state_changes"]; !has {

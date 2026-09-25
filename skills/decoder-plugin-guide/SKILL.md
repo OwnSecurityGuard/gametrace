@@ -761,10 +761,10 @@ go test -count=1 ./...   # 必须 -count=1：go test 缓存会掩盖问题
 
 | 指标 | 在哪里看 | 含义 | 常见误读 |
 |---|---|---|---|
-| 会话 `decode_errors` 计数 | `get_session_status` 的 `decode_errors` | 该会话累计解码失败次数（插件主动报错 + 链路层失败合计） | `0` 只代表没有报错，不代表每条包都解出了事件——**还要看事件数** |
-| 解码失败分组 | `list_decoded_data` 的 `decode_error_groups` / 宿主 `ReplaceDecodeErrorGroups` 落库表 | 按**归一化错误模板**聚合 `ErrorCollector`：每条含 `kind`（`plugin`=插件主动报错，`transport`=链路层失败）、`template`（模板，如 `unknown message type <n>`）、`count`、`sample`（首条原始错误） | 「有计数但看不到原因」= 没有用模板归一化，写错误时参数化了每次变化的部分 |
+| 会话 `decode_errors` 计数 | `get_session_status` 的 `decode_errors` | 该会话累计解码失败次数（插件主动报错 + 链路层失败 + 解码器未接入合计） | `0` 只代表没有报错，不代表每条包都解出了事件——**还要看事件数**；`binding` 组按状态跳变计数，所以 `1` 也可能代表整场没解码 |
+| 解码失败分组 | `list_decoded_data` 的 `decode_error_groups` / 宿主 `ReplaceDecodeErrorGroups` 落库表 | 按**归一化错误模板**聚合 `ErrorCollector`：每条含 `kind`（`plugin`=插件主动报错，`transport`=链路层失败，`binding`=会话绑定的插件没有可用实例，宿主侧产生、与插件代码无关）、`template`（模板，如 `unknown message type <n>`）、`count`、`sample`（首条原始错误） | 「有计数但看不到原因」= 没有用模板归一化，写错误时参数化了每次变化的部分 |
 | 插件 `kind=plugin` 报错 | 错误响应的 `Error` 字段 | 解码器在 `done=true` 时附带 `Error` 即视为插件主动报错 | 把"这条解不了"当 `Error` 返回会让**整帧算失败**；能恢复的坏消息应跳过并继续，只有整帧不可解时才报错 |
-| 事件产出数 | 会话 `raw_packets` vs `events` | 原始包 vs 解码事件 | 事件数远小于包数是正常的（ACK/握手/推送过滤），但**长期为 0 且无错误** = 链路分析没做对（最常见的 framing 坑） |
+| 事件产出数 | 会话 `raw_packets` vs `events` | 原始包 vs 解码事件 | 事件数远小于包数是正常的（ACK/握手/推送过滤），但**长期为 0** 要先看分组里有没有 `kind=binding`——那是插件压根没接上（未启动 / 离线 / owner 与项目不符），不是 framing 写错；确认接上了仍为 0，才回到链路分析（最常见的 framing 坑） |
 
 **decode_errors 与 template 归一的验收要求**：错误消息必须参数稳定——固定前缀 + `<n>` 占位符（如 `unexpected EOF at offset <n>`），让大量同类失败聚合到同一 `template`；把每次不同的明文直接写进错误（如 `unexpected EOF at offset 12345`）会导致 `decode_error_groups` 每帧一条、`count` 永远 1，前端无法归因。SDK 的 `ErrorCollector` 已按模板哈希聚合并限量，插件只需按上面规范产错。
 

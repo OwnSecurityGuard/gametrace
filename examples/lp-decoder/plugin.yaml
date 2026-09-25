@@ -2,7 +2,7 @@
 #
 # 解码 examples/lp 的 client<->server 流量：帧头(magic/version/param/reserved) +
 # 变长长度字段(1/2/4 字节，大/小端逐帧可选) + JSON 载荷。payload 信封
-#   {"cmd":<message id>,"seq":<correlation>,"error_code":<error>}
+#   {"cmd":<message id>,"seq":<correlation>,"error_code":<error>,"error_msg":<提示>,"data":{...}}
 # 语义字段与 examples/lp 的 client/server 信封约定保持一致，
 # 覆盖 message id / request-response role / seq correlation / push rule / error 五类格式。
 #
@@ -14,10 +14,21 @@
 #   - ws-decoder：  解析 RFC 6455 帧（定长头 + 扩展长度），方向取自 MASK 位
 #   - lp-decoder：  长度字段宽度/端序逐帧变化，方向由 cmd 身份推导（见下方说明）
 #
+# 消息号段（与 examples/lp/internal/lp 的消息表同源）：
+#   1000~1999 请求/响应成对：请求取奇数（1001 登录 / 1003 查背包 / 1005 使用道具 /
+#              1007 采集资源），响应号 = 请求号 + 1，回显同一 seq 完成配对；
+#              校验失败时服务端仍回响应号，但带上 error_code + error_msg 提示
+#   2000~2999 服务端主动推送（玩家档案 2001 / 道具数量 2002 / 资源数量 2003），seq 恒为 0
+#   9000~9999 信封级错误回包（9001）：payload 不是合法 JSON、cmd 未定义时无法映射到
+#              业务响应号；payload 不可解析时连 seq 也拿不到，此时 seq 仍为 0
+#
 # 协议语义通过 semantic_rules 声明（插件定义语义、平台执行）：
 #   - lp.pair_request_response：请求/响应按 seq 回显配对
-#   - lp.mark_push：cmd==2001 或 seq==0 的推送消息标注为 notification
+#   - lp.mark_push：cmd 落在 2000~2999 推送号段的消息标注为 notification
+#     （不再用 seq==0 判推送——9001 的 seq 也可能是 0，那是"拿不到 seq"而非推送）
 #   - lp.mark_error：error_code!=0 标注为 error
+#   - 消息名不声明 name 效果：payload 只有数值 cmd，符号名来自解码器的
+#     cmd→名称映射表，故 msg_name 仍由 Meta 通道给出（对照 ws-decoder）。
 
 api_version: gt.decoder/v2
 name: lp-decoder
@@ -38,8 +49,8 @@ contract:
   version: 1
 semantic_rules:
   # 请求/响应配对：服务端回显请求的 seq，两侧键都取自 payload 的 seq。
-  # seq==0 是推送消息，由 when 拦截不参与配对。方向角色走 _meta.direction：
-  # 模板协议的方向由 cmd 身份推导（1001 请求 / 1002、2001 响应侧），
+  # seq==0 是推送或"seq 不可知"的错误回包，由 when 拦截不参与配对。方向角色走
+  # _meta.direction：模板协议的方向由 cmd 号段+奇偶推导（奇数请求号 / 其余响应侧），
   # 解码器把推导结果写入 Meta 通道，规则只读。
   - id: lp.pair_request_response
     when:
@@ -49,16 +60,15 @@ semantic_rules:
       sides:
         - { path: _meta.direction, op: eq, value: client_to_server, key: seq }
         - { path: _meta.direction, op: eq, value: server_to_client, key: seq }
-  # 推送消息：命中 push rule（cmd==2001 或 seq==0），标注为 notification。
+  # 推送消息：命中 push rule（cmd 在 2000~2999 号段），标注为 notification。
   - id: lp.mark_push
     when:
-      any:
-        - { path: seq, op: eq, value: 0 }
-        - { path: cmd, op: eq, value: 2001 }
+      - { path: cmd, op: gte, value: 2000 }
+      - { path: cmd, op: lt, value: 3000 }
     effect:
       type: annotate
       semantic: notification
-  # 错误语义：error_code != 0，标注为 error。
+  # 错误语义：error_code != 0（服务端给出的错误提示同时带 error_msg）。
   - id: lp.mark_error
     when:
       - { path: error_code, op: neq, value: 0 }
@@ -74,14 +84,19 @@ meta:
     1/2 or 4 bytes wide and big or little endian, chosen per frame: the header
     (magic/version/param/reserved) declares both, so the parser must never
     assume a fixed width or byte order. The JSON envelope (cmd / seq /
-    error_code) covers the five semantic formats: message id,
-    request/response role, seq correlation, push rule and error. Direction is
-    derived from the message identity (cmd 1001 = request, 1002/2001 =
-    response-side) because the template protocol has distinct request/response
-    command ids — a template-specific decision, NOT a general rule. Frame
-    facts (version / len_width / endian / length) go to the Meta channel while
-    business fields (cmd / seq / error_code / body_text) stay in the payload,
-    and flow counters project through _state_changes in the Analysis channel.
+    error_code / error_msg / data) covers the five semantic formats: message id,
+    request/response role, seq correlation, push rule and error — the simulator
+    exercises them with a login → get-bag → use-item → gather-resource scenario,
+    where an illegal request (bad envelope, unknown cmd, missing login, unknown
+    or insufficient item, invalid param, insufficient resource) is answered with
+    an error_code + error_msg reply, and a successful item/resource change is
+    followed by server pushes. Direction is derived from the message identity
+    (odd cmd in 1000~1999 = request, everything else = response-side) because
+    the template protocol has distinct request/response command ids — a
+    template-specific decision, NOT a general rule. Frame facts (version /
+    len_width / endian / length) go to the Meta channel while business fields
+    (cmd / seq / error_code / body_text) stay in the payload, and flow counters
+    project through _state_changes in the Analysis channel.
   game: lp-demo
   transport: length-prefixed-json
   decoded_directions: [client_to_server, server_to_client]

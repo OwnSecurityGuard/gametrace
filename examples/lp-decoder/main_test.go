@@ -93,6 +93,13 @@ func envelopePayload(cmd, seq, errorCode int64) []byte {
 	return []byte(fmt.Sprintf(`{"cmd":%d,"seq":%d,"error_code":%d}`, cmd, seq, errorCode))
 }
 
+// envelopePayloadWithError renders an error reply: the server always puts a
+// human readable error_msg next to error_code.
+func envelopePayloadWithError(cmd, seq, errorCode int64, errMsg string) []byte {
+	return []byte(fmt.Sprintf(`{"cmd":%d,"seq":%d,"error_code":%d,"error_msg":%q}`,
+		cmd, seq, errorCode, errMsg))
+}
+
 // TestParseFrameWidthsAndEndian drives the core template point: the length
 // field may be 1/2/4 bytes and big or little endian, per frame.
 func TestParseFrameWidthsAndEndian(t *testing.T) {
@@ -230,6 +237,41 @@ func TestSemanticRulesHostBehavior(t *testing.T) {
 	if !hasSemantic(push.Semantics, rule.SemNotification) {
 		t.Fatalf("push semantics = %v, want notification", push.Semantics)
 	}
+
+	// 推送号段的其余消息（道具 / 资源数量变化）同样命中 push rule。
+	itemPush := eval(
+		map[string]any{"cmd": int64(2002), "seq": int64(0), "is_error": false},
+		map[string]any{"direction": "server_to_client"},
+	)
+	if !hasSemantic(itemPush.Semantics, rule.SemNotification) || len(itemPush.Pairs) != 0 {
+		t.Fatalf("item push semantics = %v pairs = %+v, want notification / no pair",
+			itemPush.Semantics, itemPush.Pairs)
+	}
+
+	// 信封级错误回包：payload 解不出 seq 时也为 0，但它不是推送，只是 error。
+	envelopeErr := eval(
+		map[string]any{"cmd": int64(9001), "seq": int64(0), "error_code": int64(1), "is_error": true},
+		map[string]any{"direction": "server_to_client"},
+	)
+	if !hasSemantic(envelopeErr.Semantics, rule.SemError) {
+		t.Fatalf("bad envelope semantics = %v, want error", envelopeErr.Semantics)
+	}
+	if hasSemantic(envelopeErr.Semantics, rule.SemNotification) || len(envelopeErr.Pairs) != 0 {
+		t.Fatalf("bad envelope must not be a notification nor paired: %v %+v",
+			envelopeErr.Semantics, envelopeErr.Pairs)
+	}
+
+	// 业务错误响应：号段内的响应号 + 回显 seq，既配对又标注 error。
+	bizErr := eval(
+		map[string]any{"cmd": int64(1006), "seq": int64(4321), "error_code": int64(7), "is_error": true},
+		map[string]any{"direction": "server_to_client"},
+	)
+	if len(bizErr.Pairs) != 1 || bizErr.Pairs[0].Side != 1 || bizErr.Pairs[0].Key != "4321" {
+		t.Fatalf("business error reply pairs = %+v, want side 1 key 4321", bizErr.Pairs)
+	}
+	if !hasSemantic(bizErr.Semantics, rule.SemError) {
+		t.Fatalf("business error reply semantics = %v, want error", bizErr.Semantics)
+	}
 }
 
 func hasSemantic(list []rule.Semantic, want rule.Semantic) bool {
@@ -251,22 +293,33 @@ func TestEmitChannels(t *testing.T) {
 	flowID := "tcp 127.0.0.1:40000=127.0.0.1:8998"
 	stream := &captureStream{}
 
+	// 一条连接上的完整场景：请求 → 错误响应 → 请求 → 响应 → 推送。
 	// 三条消息共用一个 flowID：请求计数 +1、响应（含推送）计数 +1。
 	frames := []struct {
 		cmd, seq, errCode int64
+		errMsg            string
 		width             int
 		little            bool
 		wantType          string
 		wantDir           string
+		wantName          string
+		wantRole          string
+		wantPush          bool
 		countKey          string
 		wantCount         int64
 	}{
-		{1001, 1234, 0, 2, false, "lp.request", "client_to_server", "requests", 1},
-		{1002, 1234, 1, 1, true, "lp.response", "server_to_client", "responses", 1},
-		{2001, 0, 0, 4, true, "lp.response", "server_to_client", "responses", 2},
+		{1001, 1234, 0, "", 2, false, "lp.request", "client_to_server", "LoginRequest", "request", false, "requests", 1},
+		{1002, 1234, 4, "该连接已登录", 1, true, "lp.response", "server_to_client", "LoginResponse", "response", false, "responses", 1},
+		{1005, 1235, 0, "", 4, true, "lp.request", "client_to_server", "UseItemRequest", "request", false, "requests", 2},
+		{1006, 1235, 0, "", 1, false, "lp.response", "server_to_client", "UseItemResponse", "response", false, "responses", 2},
+		{2002, 0, 0, "", 2, true, "lp.response", "server_to_client", "ItemCountNotify", "push", true, "responses", 3},
 	}
 	for i, fc := range frames {
-		f, _, ok := parseFrame(rawLP(envelopePayload(fc.cmd, fc.seq, fc.errCode), fc.width, fc.little))
+		body := envelopePayload(fc.cmd, fc.seq, fc.errCode)
+		if fc.errMsg != "" {
+			body = envelopePayloadWithError(fc.cmd, fc.seq, fc.errCode, fc.errMsg)
+		}
+		f, _, ok := parseFrame(rawLP(body, fc.width, fc.little))
 		if !ok {
 			t.Fatalf("parse frame %d: not ok", i)
 		}
@@ -301,6 +354,9 @@ func TestEmitChannels(t *testing.T) {
 		if payload["seq"] != fc.seq {
 			t.Errorf("%s: payload.seq = %v, want %d", r.EventType, payload["seq"], fc.seq)
 		}
+		if payload["error_msg"] != fc.errMsg {
+			t.Errorf("%s: payload.error_msg = %v, want %q", r.EventType, payload["error_msg"], fc.errMsg)
+		}
 		if payload[fc.countKey] != fc.wantCount {
 			t.Errorf("%s: payload.%s = %v, want %d", r.EventType, fc.countKey, payload[fc.countKey], fc.wantCount)
 		}
@@ -311,6 +367,15 @@ func TestEmitChannels(t *testing.T) {
 		}
 		if meta["direction"] != fc.wantDir {
 			t.Errorf("%s: meta.direction = %v, want %s", r.EventType, meta["direction"], fc.wantDir)
+		}
+		if meta["msg_name"] != fc.wantName {
+			t.Errorf("%s: meta.msg_name = %v, want %s", r.EventType, meta["msg_name"], fc.wantName)
+		}
+		if meta["role"] != fc.wantRole {
+			t.Errorf("%s: meta.role = %v, want %s", r.EventType, meta["role"], fc.wantRole)
+		}
+		if meta["is_push"] != fc.wantPush {
+			t.Errorf("%s: meta.is_push = %v, want %v", r.EventType, meta["is_push"], fc.wantPush)
 		}
 		wantEndian := "big"
 		if fc.little {
