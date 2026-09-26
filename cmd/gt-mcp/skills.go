@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 // skillURIPrefix 是技能 resource 的 URI 前缀：每个技能注册为
@@ -40,6 +43,41 @@ func readSkillMarkdown(skill SkillInfo) (string, error) {
 	return string(b), nil
 }
 
+// findSkill 按名字在技能目录中查找条目。
+func findSkill(name string) (SkillInfo, bool) {
+	for _, s := range loadSkillCatalog() {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return SkillInfo{}, false
+}
+
+// handleReadSkill 以 tool 形式读取技能 SKILL.md 全文。
+// MCP resources 需要 client 发 resources/read，而部分 Agent 桥接面只暴露 tools
+// （无法读 resource）；本工具与 gametrace://skills/<name> resource 返回同一内容，
+// 保证技能方法论对两类客户端都可达。
+func (m *mcpCapture) handleReadSkill(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := req.RequireString("name")
+	if err != nil {
+		return errorResult(err), nil
+	}
+	skill, ok := findSkill(name)
+	if !ok {
+		return errorResult(fmt.Errorf("skill %q not found; call get_capabilities for the Skill Catalog", name)), nil
+	}
+	md, err := readSkillMarkdown(skill)
+	if err != nil {
+		return errorResult(fmt.Errorf("read skill %s: %w", skill.URI, err)), nil
+	}
+	return successResult(map[string]any{
+		"name":        skill.Name,
+		"description": skill.Description,
+		"uri":         skill.URI,
+		"markdown":    md,
+	}), nil
+}
+
 // buildSkillInstructions 依据 Skill Catalog 生成 MCP 服务器的初始化 instructions：
 // 概览可用技能工作流及对应 resource URI，指引 AI agent 在任务匹配时先读技能。
 //
@@ -60,6 +98,7 @@ func buildSkillInstructions(skills []SkillInfo) string {
 		fmt.Fprintf(&b, "\n\n- %s\n  Resource:\n  %s", s.Name, skillResourceURI(s.Name))
 	}
 	b.WriteString("\n\nWhen a user request matches a workflow,\nread the corresponding skill resource before execution.")
+	b.WriteString("\nIf your client cannot read MCP resources, call the read_skill tool with the skill name instead.")
 	return b.String()
 }
 

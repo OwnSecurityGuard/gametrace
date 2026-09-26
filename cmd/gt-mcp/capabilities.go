@@ -72,7 +72,7 @@ func buildCapabilityCatalog() capabilityDoc {
 			{
 				Name:        "plugin-knowledge",
 				Description: "契约 SSOT 与开发指南（写插件前先读）",
-				Tools:       []string{"get_plugin_contract", "get_plugin_dev_guide", "get_capabilities"},
+				Tools:       []string{"get_plugin_contract", "get_plugin_dev_guide", "get_capabilities", "read_skill"},
 			},
 			{
 				Name:        "raw-debug",

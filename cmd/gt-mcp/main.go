@@ -2632,6 +2632,11 @@ func main() {
 		mcp.WithDescription("Return a self-describing catalog of all MCP tools grouped by workflow (capture / proxy / query / plugin-dev / plugin-verify / plugin-runtime / plugin-knowledge / raw-debug) plus recommended call chains and the Skill Catalog scanned from the platform skills/ directory (each skill's name + description + when to use). Call this FIRST when unsure which tool or skill fits, or how tools relate; it replaces reading the README."),
 	), capture.handleGetCapabilities)
 
+	s.AddTool(mcp.NewTool("read_skill",
+		mcp.WithDescription("Read the full SKILL.md content of a Skill Catalog entry by name (see get_capabilities -> skills). Each skill is also registered as an MCP resource (gametrace://skills/<name>); use THIS tool when your client only exposes tools and cannot issue resources/read."),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Skill name from the Skill Catalog, e.g. decoder-plugin-guide")),
+	), capture.handleReadSkill)
+
 	s.AddTool(mcp.NewTool("list_registered_plugins",
 		mcp.WithDescription("List all plugins currently registered with the pipeline (active via gRPC PluginRegistry) with their runtime state (instance_id / online / last_heartbeat / owner). There is no disk view: plugins run on their owners' machines and the platform never scans or stores plugin sources."),
 	), capture.handleListRegisteredPlugins)

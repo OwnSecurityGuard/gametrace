@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 func TestParseSkillFrontmatter(t *testing.T) {
@@ -199,5 +203,48 @@ func writeSkill(t *testing.T, root, name, desc string) {
 	content := "---\nname: \"" + name + "\"\ndescription: \"" + desc + "\"\n---\n# " + name + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestHandleReadSkill 覆盖 tool 兜底路径：与 resource 返回同一份 SKILL.md，
+// 供只暴露 tools、发不了 resources/read 的 agent 桥接面使用。
+func TestHandleReadSkill(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "alpha-skill", "alpha when-to-use")
+	t.Setenv("GT_SKILLS_DIR", root)
+	m := &mcpCapture{}
+
+	call := func(args map[string]any) map[string]any {
+		t.Helper()
+		req := mcp.CallToolRequest{}
+		req.Params.Arguments = args
+		res, err := m.handleReadSkill(context.Background(), req)
+		if err != nil {
+			t.Fatalf("read_skill: %v", err)
+		}
+		var out map[string]any
+		text := contentText(res)
+		if err := json.Unmarshal([]byte(text), &out); err != nil {
+			t.Fatalf("decode %q: %v", text, err)
+		}
+		return out
+	}
+
+	got := call(map[string]any{"name": "alpha-skill"})
+	if got["ok"] != true {
+		t.Fatalf("ok = %v, body = %v", got["ok"], got)
+	}
+	if got["uri"] != skillResourceURI("alpha-skill") {
+		t.Errorf("uri = %v", got["uri"])
+	}
+	if md, _ := got["markdown"].(string); !strings.Contains(md, "# alpha-skill") {
+		t.Errorf("markdown = %q", md)
+	}
+
+	if miss := call(map[string]any{"name": "nope"}); miss["ok"] != false {
+		t.Errorf("unknown skill should be ok=false, got %v", miss)
+	}
+	if noName := call(map[string]any{}); noName["ok"] != false {
+		t.Errorf("missing name should be ok=false, got %v", noName)
 	}
 }
