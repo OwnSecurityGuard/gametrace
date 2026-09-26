@@ -1,0 +1,65 @@
+version: 2
+updates:
+  # 依赖扫描（P1 第 7 条）：Go 多模块逐目录登记——本仓库不是单 module，
+  # 根 / sdk / 每个示例插件各自 go.mod，Dependabot 不会自动递归子模块。
+  # 重点盯 grpc / sqlite / protobuf / yaml 这类网络与存储依赖的漏洞公告。
+  # 注：sdk/examples/http-stream-decoder 属于 sdk 模块，由 /sdk 条目覆盖。
+  # 需在 GitHub 仓库 Settings → Code security and analysis 里打开
+  # Dependabot alerts，本文件只定义检查哪些 manifest。
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: gomod
+    directory: /sdk
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: gomod
+    directory: /examples/http-decoder
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /examples/lp-decoder
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /examples/ws-decoder
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # 三个 workflow 文件本身用的第三方 Action（checkout/setup-go/
+  # softprops/release…）也归 Dependabot 管。
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

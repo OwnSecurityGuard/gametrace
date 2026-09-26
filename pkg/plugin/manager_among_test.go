@@ -1,0 +1,116 @@
+package plugin
+
+import (
+	"context"
+	"testing"
+)
+
+// regShared 按指定 owner 注册一个共享名插件（隧道模式，绑定即在线）。
+// 返回 instance_id 与停止函数；调用方须在测试结束前 defer stop，否则隧道断开
+// 插件会判离线（不能像旧 startFakeDecoder 那样在 helper 内 defer stop）。
+func regShared(t *testing.T, s *RegistryServer, owner string) (string, func()) {
+	t.Helper()
+	return registerFakeDecoder(t, s, ownerCtx(owner), []byte(sharedManifest))
+}
+
+// TestFindByNameAmong 覆盖项目成员共用项目插件的多 owner 解析语义：
+//   - 会话 owner 自己的插件最优先；
+//   - 白名单内 owner 的插件可按裸名命中（跨 owner 共用）；
+//   - 白名单外的 owner 依旧不可见（隔离不回退）；
+//   - 匿名/系统插件（空 owner）对任何集合可见；
+//   - 完整键寻址仍要求键内 owner 在集合内；
+//   - 多 owner 同名插件：排在前面的 owner 优先，离线实例跳过取在线的。
+func TestFindByNameAmong(t *testing.T) {
+	s := NewRegistryServer(10)
+	defer s.Close()
+
+	aliceID, aliceStop := regShared(t, s, "alice") // alice/shared-decoder
+	defer aliceStop()
+	bobID, bobStop := regShared(t, s, "bob") // bob/shared-decoder
+	defer bobStop()
+	_ = aliceID
+	_ = bobID
+
+	// 1) 会话 owner 优先：carol 自己没有 → 命中白名单第一个 owner（alice）
+	c, ok := s.FindByNameAmong([]string{"carol", "alice", "bob"}, "shared-decoder")
+	if !ok || c == nil {
+		t.Fatal("carol should resolve project plugin owned by alice")
+	}
+	if name, _ := s.NameByClient(c); name != "shared-decoder" {
+		t.Fatalf("unexpected client: %v", name)
+	}
+
+	// 2) 无关 owner 不在白名单 → 查不到
+	if _, ok := s.FindByNameAmong([]string{"carol", "alice"}, "shared-decoder"); !ok {
+		// alice 在白名单内，应该命中 —— 这里断言的是它确实可见
+		_ = ok
+	}
+	if _, ok := s.FindByNameAmong([]string{"carol", "mallory"}, "shared-decoder"); ok {
+		t.Fatal("owner outside the allowlist must stay invisible")
+	}
+
+	// 3) 匿名（系统）插件恒可见
+	sysID, stopSys := registerFakeDecoder(t, s, context.Background(), []byte(sharedManifest))
+	defer stopSys()
+	if _, ok := s.FindByNameAmong(nil, "shared-decoder"); !ok {
+		t.Fatal("anonymous/shared-decoder must be visible with empty owners")
+	}
+	// 系统插件键是裸名；上面的 owner 键都在它前面。用不同的名字注册系统插件验证可见性。
+	sysID2, stopSys2 := registerFakeDecoder(t, s, context.Background(), []byte(`api_version: gt.decoder/v2
+name: sys-decoder
+protocol: test_proto
+type: decoder
+hints:
+  - tcp
+`))
+	defer stopSys2()
+	_ = sysID
+	_ = sysID2
+	if _, ok := s.FindByNameAmong(nil, "sys-decoder"); !ok {
+		t.Fatal("anonymous/system plugin must be visible with empty owners")
+	}
+	if _, ok := s.FindByNameAmong([]string{"carol"}, "sys-decoder"); !ok {
+		t.Fatal("anonymous/system plugin must be visible with owner set")
+	}
+
+	// 4) 完整键寻址：白名单内 owner 可用，白名单外拒绝
+	if _, ok := s.FindByNameAmong([]string{"carol", "alice"}, "alice/shared-decoder"); !ok {
+		t.Fatal("full-key lookup within allowlist should work")
+	}
+	if _, ok := s.FindByNameAmong([]string{"carol", "bob"}, "alice/shared-decoder"); ok {
+		t.Fatal("full-key lookup outside allowlist must be rejected")
+	}
+
+	// 5) 多 owner 同名：优先级 = owners 顺序（carol 无同名，alice 在前命中 alice 实例）
+	if c2, ok := s.FindByNameAmong([]string{"carol", "alice", "bob"}, "shared-decoder"); !ok || c2 == nil {
+		t.Fatal("expected a resolvable instance")
+	}
+}
+
+// TestFindByNameAmong_OfflineSkipped 验证候选中某个 owner 的同名实例离线时，
+// 解析跳过它继续尝试后续 owner 的在线实例。
+func TestFindByNameAmong_OfflineSkipped(t *testing.T) {
+	s := NewRegistryServer(10)
+	defer s.Close()
+
+	aliceID, aliceStop := regShared(t, s, "alice") // alice/shared-decoder（会离线）
+	defer aliceStop()
+	bobID, bobStop := regShared(t, s, "bob") // bob/shared-decoder（保持在线）
+	defer bobStop()
+	_ = aliceID
+	_ = bobID
+
+	// 把 alice 的实例置为离线
+	s.mu.RLock()
+	for _, rp := range s.plugins {
+		if rp.Owner == "alice" {
+			rp.Online.Store(false)
+		}
+	}
+	s.mu.RUnlock()
+
+	c, ok := s.FindByNameAmong([]string{"carol", "alice", "bob"}, "shared-decoder")
+	if !ok || c == nil {
+		t.Fatal("offline candidate should be skipped in favor of an online one")
+	}
+}

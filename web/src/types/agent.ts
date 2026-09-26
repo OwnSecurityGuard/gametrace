@@ -1,0 +1,54 @@
+/** get_agent_download_options 返回的单平台预置产物。 */
+export interface AgentPlatform {
+  /** 目标操作系统：windows / linux */
+  os: string;
+  /** 目标架构：amd64 / arm64 */
+  arch: string;
+  /** 展示名，如 "Windows x64" */
+  label: string;
+  /** 是否需要 .exe 后缀 */
+  exe: boolean;
+  /** 该平台产物是否已预置（false 时不可下载） */
+  available: boolean;
+  /** 磁盘文件名（含 .exe 时） */
+  filename: string;
+  /** 该平台能否在服务器现场编译（与 available 无关；darwin 恒 false） */
+  buildable: boolean;
+  /** 现场编译是否在途（前端的「编译中」状态） */
+  building: boolean;
+  /** 最近一次现场编译失败原因（成功后为空） */
+  last_error?: string;
+}
+
+/** 已注册插件归类后的友善呈现项（供 StartCaptureDialog 卡片选择使用）。 */
+export interface ParserOption {
+  /** 归组品牌：godot | unity | http | custom */
+  group: "godot" | "unity" | "http" | "custom";
+  /** 展示名，如 "Godot 世界解码器" */
+  label: string;
+  /** 实际插件名（传给 start_capture / agent 的 plugin 参数） */
+  plugin: string;
+  /** 在线状态（离线置灰） */
+  online: boolean;
+}
+
+/** get_agent_download_options 返回：下载 Agent 页面需要的回连地址 + 可下载平台矩阵。 */
+export interface GetAgentDownloadOptionsResult {
+  ok: boolean;
+  /** 探针应回连的 host（已按对外通告/请求回推解析，不含端口） */
+  host: string;
+  /** 探针回连地址 host:port（插件注册 + 控制面） */
+  registry_addr: string;
+  /** 推流地址 host:port（抓包数据上报） */
+  ingest_addr: string;
+  /** registry 端口 */
+  registry_port: string;
+  /** ingest 端口 */
+  ingest_port: string;
+  /** 地址来源：env=部署方显式通告（可信） / request=按请求回推 / lan=服务端网卡推测 */
+  addr_source: "env" | "request" | "lan";
+  /** 可下载的目标平台矩阵（按预置产物存在与否标记可用性） */
+  platforms: AgentPlatform[];
+  /** 给用户的说明文案（含未配置对外通告地址时的修复提示） */
+  message: string;
+}

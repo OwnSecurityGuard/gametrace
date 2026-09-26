@@ -1,0 +1,766 @@
+syntax = "proto3";
+
+package gametrace.internalipc;
+option go_package = "gametrace/pkg/internalipc/proto";
+
+// CaptureControl 由 gt-pipeline 进程提供，gt-mcp 作为 client 调用。
+// 仅控制面 unary RPC，无 streaming。数据面走 SQLite。
+service CaptureControl {
+  // StartCapture 启动一次抓包会话。
+  rpc StartCapture(StartCaptureRequest) returns (StartCaptureResponse);
+  // StopCapture 停止当前抓包会话。
+  rpc StopCapture(StopCaptureRequest) returns (StopCaptureResponse);
+  // GetCaptureStatus 查询抓包状态与统计。
+  rpc GetCaptureStatus(GetCaptureStatusRequest) returns (GetCaptureStatusResponse);
+  // ListCaptureSessions 列出当前活跃的抓包会话。
+  rpc ListCaptureSessions(ListCaptureSessionsRequest) returns (ListCaptureSessionsResponse);
+  // DecodeRawPackets 用指定插件对离线会话的 raw_packets 批量解码，
+  // 结果写入该 session 的 events 表。
+  rpc DecodeRawPackets(DecodeRawPacketsRequest) returns (DecodeRawPacketsResponse);
+  // ListPlugins 列出当前已注册的插件摘要。
+  rpc ListPlugins(ListPluginsRequest) returns (ListPluginsResponse);
+  // GetPluginManifest 获取指定插件的 manifest bytes（plugin.yaml 原始内容）。
+  rpc GetPluginManifest(GetPluginManifestRequest) returns (GetPluginManifestResponse);
+  // DeregisterPlugin 注销指定插件（按 instance_id 或 name）。
+  rpc DeregisterPlugin(DeregisterPluginRequest) returns (DeregisterPluginResponse);
+  // SetSessionPlugin 运行中热切换某抓包会话的解码插件绑定。
+  // 切换后立即触发解码器重解析，无需停止再重启抓包。
+  rpc SetSessionPlugin(SetSessionPluginRequest) returns (SetSessionPluginResponse);
+  // WatchPlugins 服务端流式推送插件注册表状态变化（register/deregister/online/offline）。
+  // 用于前端即时刷新插件面板、以及抓包侧即时感知插件上下线，避免轮询延迟。
+  rpc WatchPlugins(WatchPluginsRequest) returns (stream PluginEvent);
+  // TestPlugin 用指定插件对离线会话的 raw_packets 解码并采样返回，用于验证插件解码质量。
+  // 原始包字节仅进程内使用，绝不回传前端；结果不落库（隔离测试，不污染会话真实解码数据）。
+  // 该能力不暴露原始包，因此无需 --enable-raw-debug 门控。
+  rpc TestPlugin(TestPluginRequest) returns (TestPluginResponse);
+  // Verify 用指定插件对离线会话的 raw_packets 解码并做契约+质量校验，
+  // 产出 violations（引 SDK checker，带 rule_id）+ quality（gametrace 统计）+ verdict。
+  // 仅统计不落库；validated 证明写入控制库的 plugin_validations 表（跨进程可见）。
+  rpc Verify(VerifyRequest) returns (VerifyResponse);
+  // SampleBytes 读取会话原始包的前若干字节（事实：hexdump/长度直方图/首字节分布/熵），
+  // 不解释，并在 plugin_debug_access 留审计。硬上限由服务端强制（20 包 / 64 字节）。
+  rpc SampleBytes(SampleBytesRequest) returns (SampleBytesResponse);
+  // GetRegistryAddr 返回插件应连接注册中心地址（即 -registry-addr 的值，如 :9091）。
+  // gt-mcp 与插件启动时需要此地址填入 GT_REGISTRY_ADDR；此前只能由人工从
+  // 启动日志中获取。改为由 pipeline 通过本 RPC 直接暴露，避免插件「不知道该连哪里」。
+  rpc GetRegistryAddr(GetRegistryAddrRequest) returns (GetRegistryAddrResponse);
+  // CreateProxyLease 为调用方创建一个代理抓包租约：独立 mobile 抓包会话 +
+  // 独立 gt-singbox-agent 进程（各自独立端口与筛选配置），手机连 agent 的
+  // listen 端口。会话停止时租约自动回收（杀 agent、释放端口）。
+  rpc CreateProxyLease(CreateProxyLeaseRequest) returns (CreateProxyLeaseResponse);
+  // ListProxyLeases 列出调用方可见的租约（admin 全可见，同 ListPlugins 语义）。
+  rpc ListProxyLeases(ListProxyLeasesRequest) returns (ListProxyLeasesResponse);
+  // GetProxyLease 查询单个租约状态快照（owner 校验，不匹配按不存在处理）。
+  rpc GetProxyLease(GetProxyLeaseRequest) returns (GetProxyLeaseResponse);
+  // ReleaseProxyLease 释放租约：停会话、杀 agent、回收端口（幂等）。
+  rpc ReleaseProxyLease(ReleaseProxyLeaseRequest) returns (ReleaseProxyLeaseResponse);
+  // StartLeaseCapture 在常驻租约上开一次新的抓包会话。
+  //
+  // ---- Probe 管理（探针注册/状态/控制全部在 pipeline 侧，gt-mcp 代理调用）----
+  // 探针是个人资源：owner 校验在 pipeline 侧做 creator 轴判定（本人或 admin）。
+  rpc ListProbes(ListProbesRequest) returns (ListProbesResponse);
+  rpc GetProbe(GetProbeRequest) returns (GetProbeResponse);
+  // ProbeStartCapture 选定探针建会话并下发 AssignCapture（建会话 + 指派一体）。
+  rpc ProbeStartCapture(ProbeStartCaptureRequest) returns (ProbeStartCaptureResponse);
+  rpc ProbeStopCapture(ProbeStopCaptureRequest) returns (ProbeStopCaptureResponse);
+  // ProbeUpdateFilter 热更新抓包过滤（BPF 重编译，不中断抓包）。
+  rpc ProbeUpdateFilter(ProbeUpdateFilterRequest) returns (ProbeUpdateFilterResponse);
+  // ProbeRetryCapture 让 failed 状态的探针重试上一次 assign。
+  rpc ProbeRetryCapture(ProbeRetryCaptureRequest) returns (ProbeRetryCaptureResponse);
+  rpc ProbeRename(ProbeRenameRequest) returns (ProbeRenameResponse);
+  // ProbeNotify 让探针在目标机器上弹一条系统桌面通知（一次性动作，探针离线即失败）。
+  rpc ProbeNotify(ProbeNotifyRequest) returns (ProbeNotifyResponse);
+  // ProbeRevoke 作废 probe_token（探针下次启动需重新接入）。
+  rpc ProbeRevoke(ProbeRevokeRequest) returns (ProbeRevokeResponse);
+  rpc ProbeListArchive(ProbeListArchiveRequest) returns (ProbeListArchiveResponse);
+  // ProbeImportArchive 把探针本地归档按时间窗回放导入为新会话（source=probe-archive）。
+  rpc ProbeImportArchive(ProbeImportArchiveRequest) returns (ProbeImportArchiveResponse);
+  //
+  // 租约的代理出口（agent 进程 + 手机 CONNECT 端口）在整个租约生命周期内不变，
+  // 本 RPC 只切换「抓不抓、抓到哪个会话」。手机侧无需重配代理、VPN 不中断。
+  // 每次调用都是一个全新的会话（独立 session_id / 独立 SQLite / 独立 mobile
+  // source），与上一次抓包完全隔离。租约已处于抓包中时返回错误（先 stop 再 start）。
+  rpc StartLeaseCapture(StartLeaseCaptureRequest) returns (StartLeaseCaptureResponse);
+  // StopLeaseCapture 停止租约当前的抓包会话并回到 idle（出口继续保留）：
+  // agent 立即停止上报，此后不再有原始包落盘与上报成本；手机连接不受影响。
+  // 停止后可再次 StartLeaseCapture（新会话），支持反复开始/停止。
+  rpc StopLeaseCapture(StopLeaseCaptureRequest) returns (StopLeaseCaptureResponse);
+}
+
+// DecodeRawPacketsRequest 离线解码请求。
+// session_id 指定待解码的会话；plugin 指定解码插件（必填）。
+// protocol/src/dst/limit 为可选过滤条件，限定解码范围。
+// clear_existing 为 true 时先清空该 session 的 events 再写入。
+message DecodeRawPacketsRequest {
+  string session_id = 1;
+  string plugin = 2;
+  string protocol = 3;
+  string src = 4;
+  string dst = 5;
+  int64 limit = 6;
+  bool clear_existing = 7;
+}
+
+// DecodeRawPacketsResponse 离线解码结果统计。
+message DecodeRawPacketsResponse {
+  int64 total_raw = 1;       // 符合过滤条件的原始包总数
+  int64 decoded = 2;         // 成功解码数
+  int64 decode_errors = 3;   // 解码失败数
+}
+
+// TestPluginRequest 插件测试请求（隐私安全：不回传原始包）。
+message TestPluginRequest {
+  string session_id = 1;     // 来源会话（离线或运行中均可，运行中走只读 WAL 采样）
+  string plugin = 2;         // 被测插件名（按名路由，可不同于会话原插件）
+  string protocol = 3;       // 可选过滤：协议
+  string src = 4;            // 可选过滤：源 ip:port
+  string dst = 5;            // 可选过滤：目的 ip:port
+  int64 limit = 6;           // 测试包上限，0=全部
+  int64 sample_limit = 7;    // 返回的解码事件采样上限（建议默认 50）
+}
+
+// TestEventLite 采样解码事件（插件解出来的相关数据，不含原始字节）。
+message TestEventLite {
+  string id = 1;
+  int64 timestamp_unix = 2;
+  string type = 3;
+  string schema_id = 4;
+  string data_json = 5;      // 拍平后的关键 data.* 字段 JSON（可能截断）
+}
+
+// TestErrorLite 单个解码失败样例（仅含定位信息，不含原始字节）。
+message TestErrorLite {
+  string raw_packet_id = 1;
+  string src = 2;
+  string dst = 3;
+  string error = 4;
+}
+
+// TestPluginResponse 插件测试结果：计数 + 类型分布 + 采样事件 + 错误样例。
+message TestPluginResponse {
+  int64 total_raw = 1;
+  int64 decoded = 2;
+  int64 decode_errors = 3;
+  map<string, int64> type_histogram = 4;   // 事件类型 → 计数（全量）
+  repeated TestEventLite sample_events = 5;
+  repeated TestErrorLite error_samples = 6;
+  VerifyApplicability applicability = 7;  // 会话/插件适用性判定（不阻塞 test_plugin 采样）
+}
+
+// VerifyRequest 插件验证请求（契约+质量校验）。参数与 TestPlugin 同源：
+// 指定会话 + 插件，可选 protocol/src/dst/limit 过滤。
+message VerifyRequest {
+  string session_id = 1;
+  string plugin = 2;
+  string protocol = 3;
+  string src = 4;
+  string dst = 5;
+  int64 limit = 6;        // 0 = 全部
+}
+
+// VerifyViolation 单条契约违规（源自 SDK contract checker，带 rule_id）。
+message VerifyViolation {
+  string rule_id = 1;
+  string topic = 2;
+  string severity = 3;
+  string statement = 4;
+  string doc_ref = 5;
+  int32 count = 6;
+  string sample = 7;
+  string layer = 8; // transport | semantic（判定归属哪条校验轴）
+}
+
+// VerifyQuality gametrace 侧语料级统计（与 plugin.explain 共享判据）。
+// input_* = 语料规模：raw 是窗口内全部原始包，candidate 是命中会话 target port、
+// 插件真正该解的子集；decode_* 只对 candidate 统计（责任边界 = 插件的责任范围）。
+message VerifyQuality {
+  int64 input_raw = 1;
+  int64 input_candidate = 2;
+  int64 decode_success = 3;
+  int64 decode_unknown = 4;
+  double decode_unknown_ratio = 5;
+  int64 correlated_inputs = 6;
+  int64 long_packet_errors = 7;
+  double entropy_estimate = 8;
+  int64 decode_errors = 9;
+}
+
+// VerifyChecks 分层结论：decode（解码质量轴）+ semantic（语义契约轴）。
+// 会话不适用（applicability.result=not_match）时两轴均为 not_run。
+message VerifyChecks {
+  string decode = 1;   // pass | warn | fail | not_run
+  string semantic = 2; // pass | warn | fail | not_run
+}
+
+// VerifyResponse 验证结论：violations + quality + verdict，外加溯源字段。
+// VerifyApplicability 会话对该插件的适用性判定（阶段 1：target port + matching
+// count）。不适用（reason=no_raw_packets / no_matching_packets）时
+// VerifyResponse.verdict=not_applicable —— 属于「换会话重试」而非「插件质量差」。
+message VerifyApplicability {
+  bool applicable = 1;        // 会话流量是否命中插件预期的协议流量
+  string reason = 2;          // 判定原因：ok | no_raw_packets | no_matching_packets
+  int32 target_port = 3;      // 会话的服务端端口（判定依据；<=0 表示无端口信息）
+  int64 total_packets = 4;    // 过滤窗口内原始包总数
+  int64 matched_packets = 5;  // 命中 target port 的包数（matching count）
+  string result = 6;          // match | not_match（applicable 的人话化判定态）
+}
+
+// VerifyResponse 插件验证响应。
+message VerifyResponse {
+  string verdict = 1;                 // pass | warn | fail | not_applicable
+  repeated VerifyViolation violations = 2;
+  VerifyQuality quality = 3;
+  string verify_run_id = 4;
+  string session_id = 5;
+  int64 at_unix = 6;
+  VerifyApplicability applicability = 7;
+  VerifyChecks checks = 8;            // 分层结论（applicability 不适用时全 not_run）
+}
+
+// SampleBytesRequest 取证取样请求。limit/max_bytes 为请求值，服务端封顶
+// （20 包 / 64 字节），审计记真实返回量。
+message SampleBytesRequest {
+  string session_id = 1;
+  string plugin = 2;          // 仅用于审计 actor 标注
+  int64 limit = 3;            // 请求包上限（服务端封顶 20）
+  int32 max_bytes = 4;        // 每包字节上限（服务端封顶 64）
+}
+
+// SampledPacket 单个原始包的事实快照（无解释）。
+message SampledPacket {
+  string raw_packet_id = 1;
+  string src = 2;
+  string dst = 3;
+  int64 length = 4;
+  string hex = 5;             // 截断后的 hexdump
+  double entropy = 6;         // 该包熵估计（bits/byte）
+  int32 first_byte = 7;
+}
+
+// SampleBytesResponse 取证事实 + 审计回执。
+message SampleBytesResponse {
+  string session_id = 1;
+  int64 requested_packets = 2;
+  int64 returned_packets = 3;
+  int64 returned_bytes = 4;
+  bool truncated = 5;
+  repeated SampledPacket packets = 6;
+  map<int32, int64> length_histogram = 7;        // 长度桶 → 计数
+  map<int32, int64> first_byte_distribution = 8; // 首字节 → 计数
+  double mean_entropy = 9;                        // 整体熵估计
+  int64 audit_id = 10;                            // plugin_debug_access 行 id
+}
+
+message PcapFileConfig {
+  string path = 1;
+}
+
+// MobileSourceConfig 启动移动代理抓包（gt-singbox-agent 推送）。
+// 监听地址形如 "127.0.0.1:9090"（tcp）或 "unix:///tmp/gt-mobile.sock"（unix）。
+message MobileSourceConfig {
+  string listen_addr = 1;   // gRPC 服务监听地址，agent 连这里
+}
+
+message StartCaptureRequest {
+  string session_id = 1;
+  string plugin = 2;
+  int32 port = 3;
+  oneof source {
+    PcapFileConfig file = 5;
+    MobileSourceConfig mobile = 6;
+  }
+  // agent 为 true 时本会话订阅 agent capture source（gt-agent 经 AgentIngest
+  // 按 session_id 推送原始帧）。可与 oneof source 组合；单独为 true 且无
+  // oneof source 时表示纯 agent 会话（探针抓包）。
+  bool agent = 7;
+  // 调用方身份（gt-mcp 从 HTTP auth ctx 提取后透传，见 ListPluginsRequest）。
+  // pipeline 用它记录会话归属（ControlStore SessionMeta.Owner / captureTask.owner）。
+  string owner = 8;
+  bool all_owners = 9;
+  // 会话归属的项目（projects.id），可选。gt-mcp 从 HTTP 入参透传。
+  string project_id = 10;
+  // plugin_owners 是允许按名解析解码插件的额外 owner 集合（除会话 owner 外）。
+  // gt-mcp 依据"调用者所属项目的插件条目归属"计算；用于项目成员共用项目插件。
+  repeated string plugin_owners = 11;
+  // check_rules_json 是项目检查规则的 JSON 序列化列表（每项一个 pkg/checkrule.CheckRule）。
+  // gt-mcp 依据 project_id 从项目配置解析；pipeline 在解码事件上求值，命中则向探针下发告警。
+  repeated string check_rules_json = 12;
+}
+
+message StartCaptureResponse {
+  string session_id = 1;
+  string state = 2;
+  string db_path = 3;
+}
+
+message StopCaptureRequest {
+  string session_id = 1;
+}
+
+message StopCaptureResponse {
+  string state = 1;
+  int64 raw_packets = 2;
+  int64 events = 3;
+  int64 metrics = 4;
+  int64 decode_errors = 5;
+  double duration_sec = 6;
+}
+
+message GetCaptureStatusRequest {
+  string session_id = 1;
+}
+
+message GetCaptureStatusResponse {
+  string state = 1;
+  string source_name = 2;
+  uint64 packets_in = 3;
+  uint64 packets_out = 4;
+  uint64 bytes_in = 5;
+  uint64 bytes_out = 6;
+  uint64 drops = 7;
+  uint64 errors = 8;
+  string err = 9;
+  int64 raw_count = 10;
+  int64 event_count = 11;
+  int64 metric_count = 12;
+  int64 decode_errors = 13;
+  // agent_connected：agent 源会话当前是否有活跃推流连接。
+  // true 只代表"连上了"，不代表有流量 —— 连上但 raw_count 为 0 是极常见的
+  // 状态，UI 必须能区分二者并给出不同指引。非 agent 源恒为 false；
+  // pipeline 未注入 agent 活性源时无法判定，按 false 处理。
+  bool agent_connected = 14;
+  // agent_last_seen_unix：最近一次收到该会话 agent 数据包的 Unix 秒。
+  // 0 表示从未收到过数据，用于区分"一直没流量"与"曾经有、现在停了"。
+  int64 agent_last_seen_unix = 15;
+}
+
+message ListCaptureSessionsRequest {}
+
+message ListCaptureSessionsResponse {
+  repeated CaptureSessionSummary sessions = 1;
+}
+
+message CaptureSessionSummary {
+  string session_id = 1;
+  string state = 2;
+  string source_name = 3;
+  int32 port = 4;
+  string plugin = 5;
+  string interface = 6;
+  string pcap_file = 7;
+  int64 started_at_unix = 8;
+}
+
+// ---- Plugin Management ----
+
+// ListPluginsRequest 列出已注册插件。owner/all_owners 来自调用方身份
+// （gt-mcp 从 HTTP auth ctx 提取后透传）：非 admin 只见自己的 + 匿名注册的
+// 插件；all_owners=true（admin）见全部；两者均空 = 匿名/本地语境（只见匿名插件）。
+message ListPluginsRequest {
+  string owner = 1;
+  bool all_owners = 2;
+}
+
+// PluginSummary 插件注册摘要。
+message PluginSummary {
+  string instance_id = 1;
+  string name = 2;
+  string protocol = 3;
+  string type = 4;
+  string api_version = 5;
+  reserved 6;              // 曾为 socket_path（宿主不再回拨插件，无回连地址可上报）
+  bool online = 7;
+  int64 last_heartbeat_unix = 8;
+  string owner = 9; // 注册方属主（空串 = 匿名/系统插件）
+}
+
+message ListPluginsResponse {
+  repeated PluginSummary plugins = 1;
+  // 最近注册失败记录（内存 ring buffer，15min TTL，owner 作用域同 plugins）。
+  repeated PluginFailure recent_failures = 2;
+}
+
+// PluginFailure 最近的解码器注册失败记录（manifest / 契约校验被拒等）。
+message PluginFailure {
+  string name = 1;
+  reserved 2;                // 曾为 socket_path
+  string error = 3;          // 注册被拒原因
+  string owner = 4;          // 注册方属主（空串 = 匿名/系统）
+  int64 timestamp_unix = 5;
+}
+
+message GetPluginManifestRequest {
+  string name = 1; // 插件名，留空返回所有
+  string owner = 2; // 调用方属主（owner 作用域查找，见 ListPluginsRequest）
+  bool all_owners = 3; // admin：任意 owner 的插件均可查
+}
+
+message GetPluginManifestResponse {
+  bytes manifest = 1; // plugin.yaml 原始 bytes
+  string name = 2;
+}
+
+message DeregisterPluginRequest {
+  string instance_id = 1; // 优先使用 instance_id
+  string name = 2;        // 备选：按 name 注销所有匹配实例
+}
+
+message DeregisterPluginResponse {
+  bool ok = 1;
+  string instance_id = 2;
+  string name = 3;
+}
+
+// SetSessionPluginRequest 运行中热切换解码插件绑定请求。
+// session_id 指定目标抓包会话；plugin 为新的解码插件名（按名精确路由）。
+message SetSessionPluginRequest {
+  string session_id = 1;
+  string plugin = 2;
+  // 热切换后允许的额外插件 owner 集合（语义同 StartCaptureRequest.plugin_owners）。
+  repeated string plugin_owners = 3;
+}
+
+// SetSessionPluginResponse 热切换结果。
+message SetSessionPluginResponse {
+  bool ok = 1;
+  string session_id = 2;
+  string plugin = 3;     // 切换后的实际绑定插件名
+  string message = 4;    // 错误信息或状态说明
+}
+
+// ---- Plugin Event Stream ----
+
+// WatchPluginsRequest 订阅插件事件流（无参数）。
+message WatchPluginsRequest {}
+
+// PluginEvent 插件注册表状态变化通知。
+// type 取值：register | deregister | online | offline | register_failed。
+message PluginEvent {
+  string type = 1;             // register | deregister | online | offline | register_failed
+  string instance_id = 2;      // 插件实例 ID
+  string name = 3;             // 插件名（manifest.name）
+  bool online = 4;             // 事件后是否在线
+  int64 timestamp_unix = 5;    // 事件发生时间（Unix 秒）
+  reserved 6;                  // 曾为 socket_path
+  string error = 7;            // register_failed：注册被拒原因
+  string owner = 8;            // 事件归属（register_failed 订阅侧按 owner 过滤）
+}
+
+// GetRegistryAddrRequest 无参数。
+message GetRegistryAddrRequest {}
+
+// GetRegistryAddrResponse 返回插件应连接的注册中心地址。
+// registry_addr 即 gt-pipeline 的 -registry-addr（如 :9091），插件启动时必须
+// 将其填入 GT_REGISTRY_ADDR 才能向运行时注册。空字符串表示 pipeline 未配置注册中心。
+message GetRegistryAddrResponse {
+  string registry_addr = 1;
+}
+
+// ---- Proxy Lease（按用户/设备的常驻代理出口 + 可切换抓包会话）----
+//
+// 租约（出口）与抓包会话的生命周期解耦：
+//   - 租约 = 常驻 gt-singbox-agent 进程 + 固定的手机 CONNECT 端口，
+//     创建后端口不再变化（同一二维码长期有效，VPN 无需重连）；
+//   - 抓包会话 = 一次 StartLeaseCapture/StopLeaseCapture，各自独立 session_id、
+//     独立 SQLite、独立 mobile source，互不串数据。
+// 这样手机配好一次代理，就能反复开始/停止抓包任意多次。
+
+// CreateProxyLeaseRequest 创建代理出口。plugin/include_hosts/include_ports
+// 为该租约私有（不影响其他租约）；device 是设备标签；owner/all_owners 由
+// gt-mcp 从 auth ctx 透传（同 StartCaptureRequest），pipeline 记录归属。
+message CreateProxyLeaseRequest {
+  string plugin = 1;                 // 租约会话绑定的解码插件（空=仅原始包）
+  repeated string include_hosts = 2; // 连接筛选：目标主机（空=不筛选）
+  repeated int32 include_ports = 3;  // 连接筛选：目标端口（空=不筛选）
+  string device = 4;                 // 设备标签，如 "alice-phone"（可选）
+  string project_id = 5;             // 归属项目（可选）
+  string owner = 6;                  // gt-mcp 透传的调用方属主
+  bool all_owners = 7;               // gt-mcp 透传（admin）
+  // no_auto_start 为 true 时只创建常驻出口、不立即开始抓包（等
+  // StartLeaseCapture）。默认 false = 创建后立刻开始抓包（保持既有行为）。
+  // 取反命名是 proto3 默认值所限：bool 只能是 false，无法表达"默认 true"。
+  bool no_auto_start = 8;
+  // sticky 为 true 时按 (owner, device) 复用上一次用过的代理端口：同一台设备
+  // 重新创建租约仍拿到同一个端口，此前扫过的二维码继续有效。默认 true。
+  // 同样因 proto3 默认值限制取反命名为 no_sticky。
+  bool no_sticky = 9;
+  // plugin_owners 允许按名解析解码插件的额外 owner 集合（语义同
+  // StartCaptureRequest）。租约保存该集合，自动开抓包与后续 StartLeaseCapture
+  // 未显式给出时沿用。
+  repeated string plugin_owners = 10;
+}
+
+// ProxyLeaseState 租约配置 + 运行时状态快照。lease_id 与内部抓包会话
+// session_id 一致（1:1 生命周期），前端可直接跳转会话。
+message ProxyLeaseState {
+  string lease_id = 1;         // 租约 id（稳定，跨多次抓包会话不变）
+  string owner = 2;
+  string project_id = 3;
+  string plugin = 4;
+  repeated string include_hosts = 5;
+  repeated int32 include_ports = 6;
+  string device = 7;
+  string listen_addr = 8;      // agent HTTP CONNECT 监听（0.0.0.0:121xx，手机连这里）
+  int32 agent_listen_port = 9; // agent 监听端口（12100-12199，租约内恒定）
+  int32 mobile_grpc_port = 10; // 当前抓包会话的 mobile source gRPC 端口（0=未抓包）
+  bool agent_running = 11;
+  int32 agent_pid = 12;
+  bool session_running = 13;   // 当前是否有活跃抓包会话（== capture_running）
+  string session_id = 14;      // 当前抓包会话 id（未抓包为空）
+  int64 created_at_unix = 15;
+  int64 active_conns = 16;     // 当前活跃手机连接数
+  uint64 total_conns = 17;
+  int64 last_data_unix = 18;   // unix 毫秒（0=从未）
+  uint64 total_bytes = 19;
+  // ---- 以下为常驻出口（stable egress）引入的字段 ----
+  bool capture_running = 20;   // agent 是否正在上报数据（与 session_running 同步）
+  int32 control_port = 21;     // agent 本地控制接口端口（pipeline → agent，19500-19599）
+  int32 capture_count = 22;    // 本租约累计开始过多少次抓包
+  int64 last_capture_at_unix = 23; // 最近一次 start/stop capture 的时间（unix 秒）
+  bool sticky_port = 24;       // 该端口是否为 (owner,device) 复用端口（二维码长期有效）
+}
+
+message CreateProxyLeaseResponse {
+  ProxyLeaseState lease = 1; // 失败走 gRPC error
+}
+
+message ListProxyLeasesRequest {
+  string owner = 1;
+  bool all_owners = 2;
+}
+
+message ListProxyLeasesResponse {
+  repeated ProxyLeaseState leases = 1;
+}
+
+message GetProxyLeaseRequest {
+  string lease_id = 1;
+  string owner = 2;
+  bool all_owners = 3;
+}
+
+message GetProxyLeaseResponse {
+  ProxyLeaseState lease = 1;
+}
+
+message ReleaseProxyLeaseRequest {
+  string lease_id = 1;
+  string owner = 2;
+  bool all_owners = 3;
+}
+
+message ReleaseProxyLeaseResponse {
+  bool ok = 1;
+  string message = 2;
+  string session_id = 3; // 被停止的会话 id
+}
+
+// ---- Lease Capture（在常驻出口上反复开停的抓包会话）----
+
+// StartLeaseCaptureRequest 在指定租约上开一次抓包。
+// plugin/include_hosts/include_ports 留空表示沿用租约创建时的配置；
+// 显式给出则本次抓包临时覆盖（不影响租约自身的配置，也不影响其他租约）。
+message StartLeaseCaptureRequest {
+  string lease_id = 1;
+  string plugin = 2;                 // 可选覆盖：本次抓包绑定的解码插件
+  repeated string include_hosts = 3; // 可选覆盖：连接筛选（目标主机）
+  repeated int32 include_ports = 4;  // 可选覆盖：连接筛选（目标端口）
+  string owner = 5;                  // gt-mcp 透传的调用方属主
+  bool all_owners = 6;               // gt-mcp 透传（admin）
+  repeated string plugin_owners = 7; // 允许的额外插件 owner 集合（语义同 StartCaptureRequest）
+}
+
+message StartLeaseCaptureResponse {
+  bool ok = 1;
+  string message = 2;
+  string session_id = 3; // 本次抓包会话 id（每次 start 都是新的）
+  ProxyLeaseState lease = 4;
+}
+
+// StopLeaseCaptureRequest 停止指定租约当前的抓包（出口保留，回到 idle）。
+message StopLeaseCaptureRequest {
+  string lease_id = 1;
+  string owner = 2;
+  bool all_owners = 3;
+}
+
+message StopLeaseCaptureResponse {
+  bool ok = 1;
+  string message = 2;
+  string session_id = 3;   // 被停止的会话 id
+  int64 raw_packets = 4;   // 本次会话落盘的原始包数
+  int64 events = 5;        // 解码事件数
+  double duration_sec = 6; // 本次抓包时长
+}
+
+// ============================================================================
+// Probe 管理（gt-mcp 代理调用；探针身份、控制通道与状态全部在 pipeline 侧）。
+// owner/all_owners 语义同 ListPlugins：gt-mcp 从 HTTP auth ctx 透传，
+// pipeline 据此做 creator 轴过滤（探针是个人资源，仅注册者本人可见可用）。
+// ============================================================================
+
+// ProbeInfo 是探针的三维度状态快照（docs/plans/2026-09-05 §5）：
+// connection（在线判定由控制流活性推导）/ capture（状态机）/ data（包时间与计数）。
+message ProbeInfo {
+  string probe_id = 1;
+  string name = 2;                   // 机器名（默认 hostname，可改）
+  string owner = 3;
+  string tenant_id = 4;
+  string capabilities = 5;           // csv: pcap,mobile,plugin_host
+  string version = 6;
+  string hostname = 7;
+  string os = 8;
+  string arch = 9;
+  // 维度一：连接
+  string connection_state = 10;      // online | offline
+  string last_seen_at = 11;          // RFC3339；离线时 UI 显示"上次在线 X 前"
+  // 维度二：抓包
+  string capture_state = 12;         // idle|starting|running|stopped|failed
+  string last_session_id = 13;
+  string status_error = 14;          // failed 时的错误
+  string capture_iface = 15;
+  string capture_ports = 16;         // csv，展示用
+  // 维度三：数据
+  int64 last_packet_unix_ms = 17;    // 0 = 从未抓到帧
+  int64 last_upload_unix_ms = 18;    // 0 = 从未成功推流
+  uint64 packets_captured = 19;
+  uint64 packets_acked = 20;
+  uint64 spool_depth = 21;
+  uint64 dropped = 22;
+  // 归档（本地留存摘要）
+  uint64 archive_bytes = 23;
+  uint32 archive_segments = 24;
+  int64 archive_oldest_unix = 25;
+  int64 archive_newest_unix = 26;
+  // 探针本机可抓包网卡（连接时上报，最后快照；离线后仍展示上次清单）。
+  repeated ProbeNicInfo interfaces = 27;
+  string created_at = 28;
+}
+
+// ProbeNicInfo 是探针的一张可抓包网卡（与 agent 侧 ProbeIface 同构；
+// 独立定义避免 internalipc 依赖 agent proto）。
+message ProbeNicInfo {
+  string name = 1;                   // pcap 设备名（可直接填 ifaces）
+  string friendly = 2;               // 系统友好名（Windows "WLAN" 等）
+  string description = 3;
+  repeated string ips = 4;
+}
+
+message ListProbesRequest {
+  string owner = 1;                  // gt-mcp 透传
+  bool all_owners = 2;               // admin 全量
+}
+message ListProbesResponse { repeated ProbeInfo probes = 1; }
+
+message GetProbeRequest {
+  string probe_id = 1;
+  string owner = 2;
+  bool all_owners = 3;
+}
+message GetProbeResponse { ProbeInfo probe = 1; }
+
+message ProbeStartCaptureRequest {
+  string probe_id = 1;
+  repeated int32 ports = 2;
+  repeated string hosts = 3;
+  string iface = 4;                  // 空 = 探针自动探测默认网卡（旧单卡字段）
+  string plugin = 5;                 // 解码插件绑定（同 StartCaptureRequest.plugin）
+  string project_id = 6;             // 会话归属项目（会话是用户任务，探针不挂项目）
+  string owner = 7;
+  bool all_owners = 8;
+  repeated string plugin_owners = 9;
+  repeated string ifaces = 10;       // 多网卡抓包；非空时优先于 iface
+  string protocol = 11;              // 端口派生协议：tcp/udp/both；空 = tcp
+  // check_rules_json 同 StartCaptureRequest.check_rules_json：项目检查规则的 JSON 列表。
+  repeated string check_rules_json = 12;
+}
+message ProbeStartCaptureResponse {
+  string session_id = 1;
+  // db_path 是新会话 capture.sqlite 的绝对路径（gt-mcp 写本地 metadata.json 用）。
+  string db_path = 2;
+}
+
+message ProbeStopCaptureRequest {
+  string probe_id = 1;
+  string owner = 2;
+  bool all_owners = 3;
+}
+message ProbeStopCaptureResponse { string session_id = 1; } // 被停止的会话；未在抓包为空
+
+message ProbeUpdateFilterRequest {
+  string probe_id = 1;
+  repeated int32 ports = 2;
+  repeated string hosts = 3;
+  string owner = 4;
+  bool all_owners = 5;
+  string protocol = 6;               // 端口派生协议：tcp/udp/both；空 = tcp
+}
+message ProbeUpdateFilterResponse { bool ok = 1; }
+
+message ProbeRetryCaptureRequest {
+  string probe_id = 1;
+  string owner = 2;
+  bool all_owners = 3;
+}
+message ProbeRetryCaptureResponse { bool ok = 1; }
+
+message ProbeRenameRequest {
+  string probe_id = 1;
+  string name = 2;
+  string owner = 3;
+  bool all_owners = 4;
+}
+message ProbeRenameResponse { bool ok = 1; }
+
+message ProbeNotifyRequest {
+  string probe_id = 1;
+  string title = 2;
+  string message = 3;
+  string owner = 4;
+  bool all_owners = 5;
+}
+message ProbeNotifyResponse { bool ok = 1; }
+
+message ProbeRevokeRequest {
+  string probe_id = 1;
+  string owner = 2;
+  bool all_owners = 3;
+}
+message ProbeRevokeResponse { bool ok = 1; }
+
+// ProbeArchiveSegmentMeta 是服务端缓存的归档段摘要（探针心跳/查询时刷新）。
+message ProbeArchiveSegmentMeta {
+  string seg_id = 1;
+  int64 first_unix = 2;
+  int64 last_unix = 3;
+  uint64 packets = 4;
+  uint64 bytes = 5;
+  uint32 link_type = 6;
+}
+
+message ProbeListArchiveRequest {
+  string probe_id = 1;
+  int64 from_unix = 2;
+  int64 to_unix = 3;
+  string owner = 4;
+  bool all_owners = 5;
+  bool refresh = 6;                  // true 时探针在线则先向探针实时查询刷新缓存
+}
+message ProbeListArchiveResponse {
+  repeated ProbeArchiveSegmentMeta segments = 1;
+  bool from_cache = 2;               // true = 探针离线，结果来自缓存（可能过期）
+}
+
+message ProbeImportArchiveRequest {
+  string probe_id = 1;
+  int64 from_unix = 2;
+  int64 to_unix = 3;
+  string project_id = 4;             // 导入产生的新会话归属项目（可选）
+  string owner = 5;
+  bool all_owners = 6;
+}
+message ProbeImportArchiveResponse {
+  string session_id = 1;
+  // db_path 同 ProbeStartCaptureResponse.db_path。
+  string db_path = 2;
+}

@@ -1,0 +1,14 @@
+// 本文件是 go.work 的示例模板，供本地开发使用。
+// 用法：复制为 go.work（已被 .gitignore 忽略），按实际路径调整。
+//
+// 正常情况下（裸机或 Docker）构建**不需要** go.work：根 go.mod 已通过
+//   replace github.com/OwnSecurityGuard/gametrace/sdk => ./sdk
+// 把 SDK 解析到仓库内子模块。go.work 仅在你需要在 SDK 与主模块间跳转调试、
+// 并让 IDE/gopls 把两者当同一 workspace 时使用。
+// 注意：Docker 构建不使用 workspace（.dockerignore 排除了 go.work）。
+go 1.26.8
+
+use (
+	./
+	./sdk
+)

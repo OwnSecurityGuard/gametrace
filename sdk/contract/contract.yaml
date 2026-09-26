@@ -1,0 +1,361 @@
+# GameTrace Decoder Plugin API 契约（SSOT - Single Source of Truth）
+#
+# 本文件是插件与宿主之间线上协议的唯一真源。
+#   - 插件作者：ReadManifest/ValidateManifest 按 manifest_schema 校验 plugin.yaml
+#   - 宿主（gametrace）：加载插件时校验 manifest；MCP 的 plugin.contract / plugin.brief 直接返回本文件派生数据
+#   - 模板生成器：从本文件预填字段
+#
+# 该文件自 gametrace/pkg/plugin/contract/ 迁入 SDK。迁移原因：契约定义与 Agents.md
+# 分处两仓库必然漂移（迁移前 output_contract 仍描述 v1 的 JSON 产出，而 decode_v2
+# 早已改为 payload_msgpack，同一文件自相矛盾）。契约现单向流动：SDK 定义，gametrace 消费。
+
+# === 契约版本 ===
+# 7 — 隧道唯一模式：register 请求收敛为 { manifest }（socket_path / tunnel 删除），
+#     解码通道收敛为插件发起的 Connect 双向流（宿主不回拨），v1 Decode 移除。
+# 6 — schema / state 声明层与 runtime / event 契约层移除，仅保留 semantic 层。
+spec_version: 7
+api_version: gt.decoder/v2
+
+# === 语义契约版本块（§3）===
+# 与线上 RPC 版本（api_version）解耦演进。
+# SDK 现仅承载 Protocol Semantic Rule 一层（插件定义协议语义，平台执行）；
+# runtime / event / schema / state 各层已移除。
+contract:
+  name: gt.plugin
+  version: 1
+  components:
+    semantic: 1   # Protocol Semantic Rule（插件定义协议语义，平台执行）
+
+
+# === RPC 契约 ===
+# PluginRegistry 服务由宿主实现，插件主动注册。
+# 解码通道只有一条：插件注册成功后主动拨出 Connect 双向流，宿主经该流把
+# DecodeRequest 以 TunnelFrame 转发给插件——宿主不回拨插件的任何端点。
+# Decoder 是解码的逻辑接口，v1 的 Decode 已移除，DecodeV2 只经 Connect 暴露。
+rpc:
+  registry_service: PluginRegistry
+  decoder_service: Decoder
+  methods:
+    register:
+      # socket_path 与 tunnel 两个字段已从请求中删除（plugin.proto 保留号 1、3）。
+      # 宿主统一按隧道处理、不再回拨，插件也没有可上报的本地端点。
+      request:  { manifest: bytes }
+      response: { instance_id: string, heartbeat_interval_sec: int32 }
+    heartbeat:
+      request:  { instance_id: string }
+      response: {}
+    deregister:
+      request:  { instance_id: string }
+      response: {}
+    connect:
+      # 插件侧发起，唯一的解码通道。建流时插件在 gRPC metadata 里带 Register
+      # 返回的 instance_id（sdk.TunnelInstanceIDKey），宿主据此精确绑定实例，
+      # 不按到达顺序猜测配对；缺失或不认识即拒绝建流。
+      type: bidi_stream
+      request:  { stream_id: uint32, request: bytes, half_close: bool, reset: StreamReset }
+      response: { stream_id: uint32, response: bytes, end: StreamEnd }
+    decode_v2:
+      type: bidi_stream
+      request:
+        session_id:    string
+        protocol_hint: string
+        payload:       bytes
+        link_type:     int32
+        input_id:      string
+        packet_id:     string
+        flow_id:       string
+        src:           string
+        dst:           string
+        direction:     string
+        timestamp_ns:  int64
+      response:
+        input_id:            string
+        done:                boolean
+        event_type:          string
+        payload_msgpack:     bytes
+        error:               string
+        correlation_key:     string
+        causation_input_id:  string
+
+# === 链路层类型枚举 ===
+# standard 与 gopacket/layers.LinkType（即 libpcap DLT）一致；custom 从 1000 起避免冲突。
+# 数值真源是 SDK 的 event/event.go，本表与之逐项对齐。
+#
+# link_type 是 framing 选择器：它决定 payload 前面有多少字节的封装要剥。
+# 见 payload_framing 段与 rules 段 link-type-selects-framing。
+link_types:
+  standard:
+    0:   Null        # BSD/Npcap 回环，4 字节 AF_* 主机序头
+    1:   Ethernet    # 标准以太网，14 字节头
+    101: Raw         # 无链路层封装，首字节即 IP 头
+    105: IEEE80211
+    108: Loop        # OpenBSD 回环，4 字节 AF_* 网络序头
+    113: LinuxSLL    # Linux cooked capture，16 字节头
+    228: IPv4
+    229: IPv6
+  custom:
+    1000: RawIP         # tun/VPN 输出的裸 IP 包
+    1001: ProxyPayload  # 代理层交付的纯应用层字节
+    1002: TLSPlaintext  # TLS 解密后的明文
+
+# === payload framing（权威声明）===
+# 这一段回答插件作者的第一个问题：DecodeRequest.payload 里到底是什么？
+#
+# 答案取决于抓包来源，由 link_type 指示：
+#   - pcap 类来源（pcap-live / pcap-file）：payload 是**完整链路层帧**，
+#     未做任何剥离。宿主 dispatcher 直接透传 gopacket 的 packet.Data()。
+#   - 代理类来源（ProxyPayload / TLSPlaintext）：payload 才是纯 L7 应用层字节，
+#     没有 IP/TCP 头，五元组由 Metadata 旁路提供。
+#
+# 【历史修正】spec_version 2 早期版本有一条 payload-is-l7(error) 规则，声称
+# "payload 已是 L7，不要再剥头"。该规则与实现事实相反：pcap 路径从未剥过头，
+# 官方 http 插件自身也一直在剥（extractTCPPayload）。按该规则写出的纯 L7
+# 解码器在任何真实 pcap 抓包下都会产出 0 事件。规则已反转为
+# payload-framing-by-link-type，本段是其展开说明。
+payload_framing:
+  default: full_link_layer_frame
+  by_link_type:
+    0:    { strip: "4B AF_* header + IP + transport", yields: l7 }
+    1:    { strip: "14B Ethernet + IP + transport",   yields: l7 }
+    101:  { strip: "IP + transport",                  yields: l7 }
+    108:  { strip: "4B AF_* header + IP + transport", yields: l7 }
+    113:  { strip: "16B SLL + IP + transport",        yields: l7 }
+    228:  { strip: "IPv4 + transport",                yields: l7 }
+    229:  { strip: "IPv6 + transport",                yields: l7 }
+    1000: { strip: "IP + transport",                  yields: l7 }
+    1001: { strip: none, yields: l7 }   # 已是 L7
+    1002: { strip: none, yields: l7 }   # 已是 L7
+  helper: >-
+    不要手写剥头逻辑。SDK 的 framing 包已实现全部 link_type 的剥离与按流 TCP 重组：
+    framing.ExtractL7(payload, link_type) 拿单包 L7 载荷，
+    framing.NewReassembler() 处理跨 TCP 段的消息。
+  notes:
+    - 一条 L7 消息可能跨多个 TCP 段（如 HTTP 头与 body 分段到达），单包解析必然丢数据
+    - 剥头后 L7 长度可能为 0（纯 ACK、握手包），这是正常情况，直接回 done=true
+    - 回环（link_type 0/108）是本机客户端连本机服务端的必然路径，不是边缘场景
+
+# === registry 端点发现顺序（插件侧）===
+registry_discovery:
+  - env:    GT_REGISTRY_ADDR
+  - flag:   --registry
+  - default: ":9091"
+
+# === 心跳协议 ===
+heartbeat:
+  default_interval_sec: 10
+  offline_timeout_sec:   30
+
+# === 产出契约（v2）===
+# 插件通过 DecodeResponseV2.payload_msgpack 返回 MsgPack 编码的 event.Value。
+# 【v1 已废止】早期版本用 JSON 字符串产出、业务字段放 data 子对象、平台语义放
+# _fields 子对象。v2 起一律改为 tagged MsgPack，data/_fields 两个约定均不再存在。
+output_contract:
+  encoding: msgpack
+  root_kind: object
+  builder: event.Value
+  marshal: Value.MarshalMsgpack
+  unmarshal: event.UnmarshalValueMsgpack
+  notes:
+    - 业务字段直接放在 payload 根对象下，不再包一层 data
+    - 禁止用 msgpack.Marshal(map[string]any) 绕过 event.Value 的 tagged 表示
+    - 解码错误通过 DecodeResponseV2.error 返回并置 done=true，不 panic 进程
+
+# === payload 保留字段 ===
+# 下划线开头为宿主保留字段，插件可选产出，宿主消费后不计入业务数据。
+# MCP 的事件适配层（trace_v2_adapter）会在产出给上层前剔除这些键。
+reserved_payload_fields:
+  _meta:
+    type: object
+    description: 宿主平台语义字段，仅放网络事实，不放业务数据
+    fields:
+      direction:
+        type: string
+        enum: [client_to_server, server_to_client, unknown]
+        fallback: inferred_by_5tuple    # 未声明时宿主按五元组自动推断
+        consumed_by: dispatcher.extractDirectionOverride
+      flow_id:
+        type: string
+        description: 覆盖宿主推断的 flow_id；Event.Context.FlowID 优先，其次 _meta.flow_id，最后顶层 flow_id
+        consumed_by: state_change_writer
+      msg_name: { type: string }
+      is_push:  { type: boolean }
+  _state_changes:
+    type: array
+    description: 状态变更声明，宿主投影到 state_changes 表
+    consumed_by: event.ExtractStateChanges
+    items:
+      required: [subject_type, subject_id, op, path]
+      fields:
+        subject_type: { type: string }
+        subject_id:   { type: string }
+        op:           { type: string, enum: [set, delete, merge] }
+        path:         { type: string, description: 实体的逻辑字段标识，宿主基线按键精确匹配存取；不是 GJSON/JSONPath 表达式，不解释通配符与数组下标，点号嵌套只是插件命名约定 }
+        before:       { type: any, optional: true, description: 非权威值——真实的「变更前」由平台基线持有并富化，插件上报值仅作实体/字段首见时的兜底 }
+        after:        { type: any, description: 新值，契约随 op 而定——set 必填且为任意非 null Value；merge 必填且必须是 Object（宿主与基线浅合并，落库记录合并后的完整值而非片段）；delete 不需要（即使携带也被忽略，落库 after 恒为 null） }
+        version:      { type: int }
+        metadata:     { type: any }
+    validation: 宿主逐条 Validate（含 op 与 after 的对应关系），非法项跳过并 warn，不阻断整体写入
+
+# === manifest（plugin.yaml）schema ===
+# 插件通过 Register RPC 传 plugin.yaml 原文，宿主 ParseManifest 后按此 schema 校验。
+manifest_schema:
+  required: [api_version, name, protocol, type]
+  fields:
+    api_version:       { type: string, pattern: "gt\\.decoder/v\\d+" }
+    name:              { type: string, pattern: "^[a-z][a-z0-9-]*$" }   # kebab-case
+    protocol:          { type: string }
+    type:              { type: string, enum: [decoder] }
+    protocol_version:  { type: string, optional: true }
+    transports:        { type: array, items: { type: string, enum: [tcp, udp] }, optional: true, description: 插件声明能解的 L4 传输层，platform dispatcher 据此按 protocol 路由 }
+    hints:             { type: array, items: string, optional: true }
+    semantic_rules:    { type: array, optional: true, description: Protocol Semantic Rule 声明（docs/plugin-semantic-rules.md）；request/response 有宿主按方向补的默认语义，annotate 仅用于覆盖角色或叠加 error 等方向推不出的语义 }
+    event.fields:      { optional: true }
+    event.data.schema.fields: { optional: true }
+    meta:              { optional: true }
+
+# === 规则集（机器可读）===
+# 这些 id 是 plugin.brief / plugin.verify / plugin.explain 三个工具的共享词汇：
+#   brief   按 topic/severity 筛选返回，供 AI 写代码前参考
+#   verify  违规项标注 rule_id
+#   explain 归因结论引用 rule_id，AI 可回查
+# 新增规则必须同时给出 doc_ref，保证人读版本与机读版本同源。
+rules:
+
+  # ---- semantic 层（Protocol Semantic Rule，§10）----
+  # 规则模型：Semantic Rule = Predicate + Effect；GJSON 取值，Predicate 判断，
+  # Effect 产生语义（pair / annotate / name）。规则 ID 由 rule 包持有，
+  # 本段收录原文供 verify/explain 回查。完整文档：docs/plugin-semantic-rules.md。
+  - id: gt.semantic.rule-id-required
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: 每条 semantic rule 必须声明 id
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.rule-id-format
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: rule id 必须是点分小写段（段内 [a-z][a-z0-9_]*），不带版本后缀，与 schema id 段约束同族
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.rule-id-duplicate
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: semantic rule id 不得重复
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.when-required
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: Semantic Rule = Predicate + Effect，when 谓词必填
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.effect-required
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: effect.type 必填
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.effect-unknown
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: effect.type ∈ pair|annotate|name（闭集）
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.op-unknown
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: predicate op 必须在 eq|neq|exists|not_exists|gt|gte|lt|lte|in|not_in|contains|prefix|suffix 闭集内
+    detail: 不引入 Expr、脚本或自定义函数，避免 SDK 演变成新的 DSL
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.op-required
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: predicate 叶子节点必须声明 op
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.path-required
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: predicate 叶子节点必须声明 GJSON path
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.value-required
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: 该 op 必须携带 value 字面量
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.value-array-required
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: op 为 in / not_in 时 value 必须是数组
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.combinator-empty
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: all / any 组合器不得为空
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.combinator-mixed
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: all 与 any 不得混用；组合器节点不得同时携带叶子条件（path/op/value）
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.pair-key-required
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: pair effect 的每个 side 都必须声明 key（该侧配对值的 GJSON path；两侧字段结构可以不同）
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.pair-sides-limit
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: pair effect 的 sides 必须恰好 2 个（每侧一个，各自带 key 与角色判定）
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.name-key-required
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: name effect 必须声明 key（消息名的 GJSON path，从 payload 提取 msg_name）
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.annotate-semantic-required
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: annotate effect 必须声明 semantic
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.annotate-semantic-unknown
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: annotate semantic ∈ request|response|notification|error（error/push 是事件语义属性，不是 Relation）
+    doc_ref: docs/plugin-semantic-rules.md
+
+  - id: gt.semantic.evaluate-failed
+    topic: semantic
+    layer: semantic
+    severity: error
+    statement: 语义规则评估失败（如 payload 无法转 JSON）视为契约违规
+    doc_ref: docs/plugin-semantic-rules.md
+

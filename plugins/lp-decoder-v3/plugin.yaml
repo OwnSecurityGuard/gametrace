@@ -1,0 +1,48 @@
+api_version: gt.decoder/v2
+name: lp-decoder-v3
+protocol: lp
+protocol_version: "1.0"
+type: decoder
+hints:
+  - tcp
+  - port:8998
+  - length-prefixed
+  - json
+capabilities:
+  decode: true
+# 语义规则：发现制——每条都对应抓包中可复核的事实（出处见各条注释），未发现的语义不声明。
+semantic_rules:
+  # 消息名：每帧 JSON 都带 cmd 整数字段（抓包 20/20 帧验证），可稳定提取。
+  - id: lp.name_msg
+    when:
+      - { path: cmd, op: exists }
+    effect: { type: name, key: cmd }
+
+  # 发现「主动推送」：cmd ∈ {2001,2002,2003} 由服务端下发、seq 恒为 0，
+  # 抓包中无前置请求触发（如 2002 物品变更出现在 1006 使用结果之后的独立帧）→ notification。
+  - id: lp.mark_push
+    when:
+      - { path: cmd, op: in, value: [2001, 2002, 2003] }
+    effect: { type: annotate, semantic: notification }
+
+  # 发现「业务错误」：失败响应带 error_code（整型，实测值 3/4/5/6/7/8）+ 中文 error_msg。
+  # 正常响应不含 error_code 字段——运行期事实 F3：path 不存在时 neq 恒 false，不会误标；
+  # F4：字面量 0 为 int，与线上 error_code 同 kind。
+  - id: lp.mark_error
+    when:
+      - { path: error_code, op: neq, value: 0 }
+    effect: { type: annotate, semantic: error }
+
+  # 发现「可靠配对」：请求 cmd ∈ {1001,1003,1005,1007}（C→S），响应 cmd ∈ {1002,1004,1006,1008}（S→C），
+  # 响应回显请求的 seq（抓包 seq=1..16 连接内自增，全部回显一致）。
+  # 两侧谓词互斥（cmd 集合无交集，推送 2xxx 天然被拦截在外）、key=seq 两侧都存在（F8 短路要求）。
+  # F6 前提：配对池按 ConnID 分片，本会话数据来自 pcap、五元组完整；
+  # 若换用不上报 TCP 控制位/五元组的探针源，连接维度退化，seq 复用可能跨连接误配——换数据源时需重新评估。
+  - id: lp.pair_seq
+    when:
+      - { path: seq, op: exists }
+    effect:
+      type: pair
+      sides:
+        - { path: cmd, op: in, value: [1001, 1003, 1005, 1007], key: seq }
+        - { path: cmd, op: in, value: [1002, 1004, 1006, 1008], key: seq }

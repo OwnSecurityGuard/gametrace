@@ -1,0 +1,85 @@
+name: release
+
+# 发布自动化（原 ci.yml 的 release job 独立成文件）。
+#
+# 两类 tag：
+#   v0.x.x      —— 平台发布：全平台二进制矩阵（make release-matrix）+ Release 页面
+#                   （自动生成 changelog）。版本注入走 Makefile 的 VERSION/GIT_COMMIT。
+#   sdk/v0.x.x  —— SDK 子模块发布：Go 模块经【本仓库 tag】解析
+#                   （go get github.com/OwnSecurityGuard/gametrace/sdk@sdk/vX.Y.Z），
+#                   tag 推上去模块即生效；此 job 在放行前跑 SDK 全量测试，
+#                   并补一个带 changelog 的 Release 页作发布记录。
+# 两个版本的发布动线都收敛为"打 tag 即发布"，不再手工。
+on:
+  push:
+    tags:
+      - "v*"
+      - "sdk/v*"
+
+jobs:
+  platform:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # release-matrix 前置依赖 web-build：gt-mcp 产物内嵌前端（需要 node）。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # CGO_ENABLED=0 交叉编译，无需 libpcap-dev（见 Makefile release 矩阵注释）。
+      - name: Build release matrix
+        run: make release-matrix VERSION="${GITHUB_REF_NAME}" GIT_COMMIT="${GITHUB_SHA::7}"
+
+      - name: Package
+        run: |
+          cd bin/release
+          shopt -s nullglob
+          for f in *linux-* *darwin-*; do tar czf "$f.tar.gz" "$f"; done
+          for f in *windows-*; do zip -q "$f.zip" "$f"; done
+          sha256sum * > SHA256SUMS
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            bin/release/*.tar.gz
+            bin/release/*.zip
+            bin/release/SHA256SUMS
+
+  sdk:
+    if: startsWith(github.ref, 'refs/tags/sdk/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sdk/go.mod
+
+      # tag 即发布通道：放行前强制全量测试，坏 SDK 不允许以 tag 形态外泄。
+      - name: SDK build + test
+        run: make sdk-test
+
+      # tag 名 sdk/vX.Y.Z 与 Makefile 里 go.mod 声明的 SDK 版本互相核对，
+      # 防"tag 与模块内版本号脱节"（历史上 sdk-publish 曾打错裸 tag）。
+      - name: Version sanity
+        run: |
+          TAG_VER="${GITHUB_REF_NAME#sdk/}"
+          if ! grep -q "SDK_VERSION ?= ${TAG_VER}" Makefile; then
+            echo "::warning title=SDK version drift::tag=${TAG_VER} 与 Makefile 的 SDK_VERSION 不同步，记得更新文档/默认值"
+          fi
+
+      - name: Create release for SDK tag
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

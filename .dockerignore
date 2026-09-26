@@ -1,0 +1,38 @@
+# 构建上下文瘦身 + 排除本地 workspace 文件：镜像构建不使用 workspace 模式。
+# SDK 是仓库内子模块（sdk/，本地真源），根 go.mod 用
+#   replace github.com/OwnSecurityGuard/gametrace/sdk => ./sdk
+# 消费；go.work/go.work.sum 不在构建上下文，故不会干扰。sdk/ 需保留进上下文
+# 以满足 builder 阶段的 replace 解析与编译。
+.git
+go.work
+go.work.sum
+bin/
+# 远程 agent 预置产物不进构建上下文：镜像内由 builder 阶段现场编译 4 平台
+# 探针（见 Dockerfile），宿主 build/agents 只用于裸机部署补充，避免本地陈旧
+# 二进制混入镜像层。
+build/agents/
+*.exe
+*.dll
+*.so
+*.dylib
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+logs/
+sessions/
+runs/
+plugins/
+docs/plans/
+# web/ 源码需要进构建上下文（Dockerfile webui 阶段 npm ci && npm run build），
+# 只排除依赖与本地产物（阶段内自建）；cmd/gt-mcp/webui/ 的本地构建产物同理
+# 排除——镜像内前端由 webui 阶段产物唯一提供，避免残留陈旧 hash 产物
+# （.gitkeep 保留，保证 go:embed 目录非空）。
+web/node_modules/
+web/dist/
+web/.vite/
+web/*.tsbuildinfo
+cmd/gt-mcp/webui/assets/
+cmd/gt-mcp/webui/index.html
+tmp_*
+.current*
+control.sqlite*

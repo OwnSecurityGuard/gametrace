@@ -1,0 +1,127 @@
+package main
+
+import (
+	"os"
+
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
+	"github.com/OwnSecurityGuard/gametrace/sdk"
+	"github.com/OwnSecurityGuard/gametrace/sdk/event"
+{{- if .FramingAvailable }}
+	"github.com/OwnSecurityGuard/gametrace/sdk/framing"
+{{- end }}
+)
+
+func main() {
+	// 平台统一以隧道模式运行：gt-agent 托管与用户本地自启
+	// 都会注入 GT_TUNNEL=1 / GT_AUTH_TOKEN，插件不起本地端口、宿主不回拨，
+	// 注册/心跳/解码帧共用同一条到 registry 的连接——插件在 NAT / 容器 / 手机
+	// 后面也能直接接入，不需要任何入站端口。
+	// 仅显式传入鉴权 token；GT_TUNNEL 由运行方注入，代码只透传不判断。
+	sdk.RunRegisterLoopWithOptions(dec.decodePacket, sdk.RegisterOptions{
+		AuthToken: os.Getenv("GT_AUTH_TOKEN"),
+	})
+}
+
+{{- if .FramingAvailable }}
+
+// decoder 持有跨 DecodeRequest 存活的状态。Reassembler 必须是
+// 生命周期级单例：内部按 FlowKey（每连接每方向）隔离且并发安全，
+// 每次 decodePacket 新建会导致跨 TCP 段的消息永远拼不回来。
+type decoder struct {
+	reasm *framing.Reassembler
+}
+
+var dec = &decoder{reasm: framing.NewReassembler()}
+
+// decodePacket 是核心解码函数，签名匹配 sdk.DecodeFuncV2。
+// 输入：req.Payload（链路层字节）+ req.LinkType（参考 contract.yaml link_types 剥离）
+// 输出：通过 stream.Send 发送 DecodeResponseV2 结果（MsgPack 编码），最后发送 done=true。
+//
+// 注意：这里不要写 defer recover —— SDK 的 Decoder.DecodeV2 外层已有
+// panic 边界（sdk/decoder.go），panic 会被转成该 input 的 Error+Done:true
+// 响应。插件内吞掉 panic 反而会让 done=true 漏发、错误信息丢失。
+func (d *decoder) decodePacket(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error {
+	// 1) 按 link_type 剥离链路层封装，得到 L7 应用字节。pcap 类源必须走这一步。
+	// 非 IP / 纯 ACK / 握手包：无可解码内容，直接 done 返回（不算错误）。
+	seg, ok := framing.ExtractL7(req.GetPayload(), req.GetLinkType())
+	if !ok || len(seg.Payload) == 0 {
+		return done(stream, req)
+	}
+
+	// 2) TCP 重组：跨分段、乱序、重传的报文在共享 Reassembler 里拼回连续
+	// 字节流（Push 对空 payload 的 SYN/FIN/RST 段也有效，请勿提前过滤）。
+	s := d.reasm.Push(seg)
+	for {
+		buf := s.Bytes()
+		if len(buf) == 0 {
+			break
+		}
+		n := parseOneMessage(buf) // 返回已消费的字节数；0 表示消息不完整，等待下一段
+		if n == 0 {
+			break
+		}
+		s.Consume(n)
+		if err := emit(buf[:n], stream, req); err != nil {
+			return err
+		}
+	}
+	return done(stream, req)
+}
+
+// parseOneMessage 解析一个完整应用层消息，返回消耗的字节数（0 = 不完整）。
+// TODO: 在此实现你的协议解析（如按长度前缀 / 分隔符 / 固定头切分）。
+func parseOneMessage(buf []byte) int { return 0 }
+
+func emit(payload []byte, stream pb.Decoder_DecodeV2Server, req *pb.DecodeRequest) error {
+	payloadVal := event.ValueObject(map[string]event.Value{
+		// TODO: 填写业务字段
+	})
+	data, err := payloadVal.MarshalMsgpack()
+	if err != nil {
+		return err
+	}
+	return stream.Send(&pb.DecodeResponseV2{
+		InputId:        req.GetInputId(),
+		EventType:      "unknown",
+		PayloadMsgpack: data,
+	})
+}
+
+// done 告知 pipeline 该 input_id 已处理完毕。
+func done(stream pb.Decoder_DecodeV2Server, req *pb.DecodeRequest) error {
+	return stream.Send(&pb.DecodeResponseV2{InputId: req.GetInputId(), Done: true})
+}
+
+{{- else }}
+
+// decodePacket 是核心解码函数，签名匹配 sdk.DecodeFuncV2。
+//
+// 注意：这里不要写 defer recover —— SDK 的 Decoder.DecodeV2 外层已有
+// panic 边界（sdk/decoder.go），panic 会被转成该 input 的 Error+Done:true
+// 响应。插件内吞掉 panic 反而会让 done=true 漏发、错误信息丢失。
+//
+// 注意：当前固定引用的 github.com/OwnSecurityGuard/gametrace/sdk 版本
+// 【不包含】framing 包（scaffold_plugin 返回 framing_available=false）。因此这里不提供
+// link_type 剥离与 TCP 重组工具。对 pcap 类源，DecodeRequest.payload 仍是完整链路层帧——
+// 请改用含 framing 的 SDK 版本（framing.ExtractL7 / framing.NewReassembler），
+// 或在此自行实现链路层剥离与字节流重组，再解析业务字段。
+func decodePacket(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error {
+	// TODO: 解析 req.Payload（链路层字节）+ req.LinkType（参考 contract.yaml link_types 剥离）
+	payload := event.ValueObject(map[string]event.Value{
+		// TODO: 填写业务字段
+	})
+	msgpackData, err := payload.MarshalMsgpack()
+	if err != nil {
+		return err
+	}
+	if err := stream.Send(&pb.DecodeResponseV2{
+		InputId:        req.GetInputId(),
+		EventType:      "unknown",
+		PayloadMsgpack: msgpackData,
+	}); err != nil {
+		return err
+	}
+	return stream.Send(&pb.DecodeResponseV2{InputId: req.GetInputId(), Done: true})
+}
+
+{{- end }}

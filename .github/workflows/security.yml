@@ -1,0 +1,35 @@
+name: security
+
+# 安全扫描（开源项目两条最低线的 CI 侧兜底）：
+#   1. secret 扫描（本文件）：贡献者把 .env / token / 私钥提交进来时，
+#      PR 阶段即打回；org 级 push protection 需在 GitHub 设置另行开启。
+#   2. 依赖漏洞：由 Dependabot（.github/dependabot.yml）对 gRPC / sqlite /
+#      protobuf / yaml 等依赖发 CVE 升级 PR；alerts 开关在
+#      Settings → Code security and analysis。
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    # 每周一次全量历史扫描：存量提交里混进密钥也要能被翻出来。
+    - cron: "30 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks 扫的是提交历史，浅克隆会漏。
+          fetch-depth: 0
+      - name: Gitleaks（全历史，报告脱敏）
+        run: |
+          docker run --rm -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks:v8.24.3 \
+            detect --source /repo --redact --exit-code 1 \
+            || {
+              echo "::error title=secret detected::发现疑似密钥/私钥/.env 内容。若是测试夹具用的假值，把它加进 .gitleaks.toml 的 allowlist，别改扫描规则。"
+              exit 1
+            }

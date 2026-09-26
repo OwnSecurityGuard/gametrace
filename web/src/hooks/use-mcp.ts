@@ -1,0 +1,1079 @@
+import { useEffect } from "react";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { mcpClient } from "@/lib/mcp-client";
+import { useAuthToken } from "@/hooks/use-auth";
+import { withTokenParam, notifyAuthError, wasRecentlyUnauthorized } from "@/lib/auth";
+import { toast } from "@/components/ui/toast";
+import type { ListSessionsResult } from "@/types/session";
+import type { ListDecodedDataResult } from "@/types/event";
+import type {
+  QueryStateChangesResult,
+  StateChangeDetailResult,
+  AnchorKind,
+  GroupBy,
+  SortBy,
+} from "@/types/state-change";
+import type { ListRawPacketsResult } from "@/types/raw-packet";
+import type { QueryDecodeErrorsResult } from "@/types/decode-error";
+import type { ListSessionAlertsResult } from "@/types/session-alert";
+import type { DecodeRawPacketsResult } from "@/types/decode";
+import type {
+  ListRegisteredPluginsResult,
+  SetSessionPluginResult,
+  DeregisterPluginResult,
+  StopCaptureResult,
+} from "@/types/registered-plugin";
+import type { TestPluginResult, TestPluginVars } from "@/types/plugin-test";
+import type {
+  SessionStatusResult,
+  DeleteSessionResult,
+} from "@/types/session-extra";
+import type { ListConnectionsResult, GetConnectionDetailResult, ListConnectionStreamsResult, ListConnectionFramesResult } from "@/types/connection";
+import type {
+  ListProxyLeasesResult,
+  CreateProxyLeaseResult,
+  ReleaseProxyLeaseResult,
+  StartLeaseCaptureResult,
+  StopLeaseCaptureResult,
+  CreateProxyLeaseVars,
+  StartLeaseCaptureVars,
+  StopLeaseCaptureVars,
+} from "@/types/proxy";
+import type { GetAgentDownloadOptionsResult } from "@/types/agent";
+import type {
+  ListProbesResult,
+  GetProbeResult,
+  ProbeStartCaptureResult,
+  ProbeStopCaptureResult,
+  ProbeOkResult,
+  ProbeListArchiveResult,
+  ProbeImportArchiveResult,
+} from "@/types/probe";
+import type {
+  ListUsersResult,
+  RevokeUserResult,
+} from "@/types/user";
+import type {
+  ListProjectsResult,
+  ProjectResult,
+  ProjectRole,
+  ProjectPlugin,
+  ProjectRule,
+  GetProjectResult,
+} from "@/types/project";
+import type { ProtocolCatalogResult } from "@/types/protocol-catalog";
+
+/** 查询 session 列表 */
+export function useSessions() {
+  return useQuery({
+    queryKey: ["sessions"],
+    queryFn: () => mcpClient.callTool<ListSessionsResult>("list_all_sessions"),
+    refetchInterval: 10_000, // 每 10s 自动刷新
+  });
+}
+
+/** 查询指定 session 的解码数据 */
+export function useDecodedData(
+  sessionId: string | null,
+  options: {
+    limit?: number;
+    offset?: number;
+    filter?: string;
+    connId?: string | null;
+    /**
+     * 语义标签集合（SDK annotate 结果），服务端按 OR 匹配 meta.semantic。
+     * 词表由各插件决定，因此不固定长度也不固定取值 —— 前端语义多选下拉用这个。
+     */
+    semantics?: string[];
+  },
+) {
+  return useQuery({
+    queryKey: ["decodedData", sessionId, options],
+    queryFn: () =>
+      mcpClient.callTool<ListDecodedDataResult>("list_decoded_data", {
+        session_id: sessionId ?? undefined,
+        limit: options.limit,
+        offset: options.offset,
+        filter: options.filter,
+        conn_id: options.connId ?? undefined,
+        semantics: options.semantics?.length ? options.semantics : undefined,
+      }),
+    enabled: !!sessionId,
+    placeholderData: keepPreviousData, // 翻页/筛选时不闪骨架屏，沿用上一页数据
+    // 抓包是实时写入，需要轮询才能把新解码的事件持续拉出来；
+    // 没有轮询时查询只在 enabled 变 true 时触发一次，之后表格永远停留在那一刻的快照。
+    refetchInterval: sessionId ? 2000 : false,
+  });
+}
+
+/** 一组配对最多拉多少条响应：一问多推的场景够用，又不至于拉穿一页。 */
+const PAIR_GROUP_LIMIT = 50;
+
+/**
+ * 按血缘取「一组配对」（展开协议事件行时的左请求 / 右响应）。
+ *
+ * 事件表默认只在当前页内找配对伙伴，伙伴翻到下一页就静默查不到 —— 行上明明有
+ * 配对角标，展开却退化成一条普通 JSON。这里改用 causation_id 精确问服务端：
+ * pair 规则把响应的 causation_id 指向请求，按请求 id 反查得到的就是整组
+ * （filter 由 lib/pair-group.ts 的 pairGroupFilter 生成）。
+ */
+export function usePairGroup(sessionId: string | null, filter: string) {
+  return useQuery({
+    queryKey: ["pairGroup", sessionId, filter],
+    queryFn: () =>
+      mcpClient.callTool<ListDecodedDataResult>("list_decoded_data", {
+        session_id: sessionId ?? undefined,
+        limit: PAIR_GROUP_LIMIT,
+        offset: 0,
+        filter: filter ?? undefined,
+      }),
+    enabled: !!sessionId && !!filter,
+    placeholderData: keepPreviousData,
+    // 抓包进行中响应会比请求晚到；轮询才能把「请求已展开、响应刚到」的组补齐。
+    refetchInterval: sessionId && filter ? 2000 : false,
+  });
+}
+
+/**
+ * 协议级聚合目录：后端一次扫全量事件再聚合，代价远高于分页查询。
+ * 用途是「这次抓包有哪些协议 / 各自出现过哪些语义标签」，供语义下拉取词表。
+ * 因此轮询要慢（30s）：会话运行中新协议类型出现的频率是分钟级，2s 一轮纯属浪费。
+ */
+export function useProtocolCatalog(sessionId: string | null) {
+  return useQuery({
+    queryKey: ["protocolCatalog", sessionId],
+    queryFn: () =>
+      mcpClient.callTool<ProtocolCatalogResult>("get_protocol_catalog", {
+        session_id: sessionId ?? undefined,
+        limit: 500,
+      }),
+    enabled: !!sessionId,
+    refetchInterval: sessionId ? 30_000 : false,
+  });
+}
+
+/** query_state_changes 的查询参数 */
+export interface StateChangesQueryParams {
+  anchorType?: AnchorKind;
+  anchorId?: string;
+  windowBeforeMs?: number;
+  windowAfterMs?: number;
+  groupBy?: GroupBy;
+  sortBy?: SortBy;
+  desc?: boolean;
+  bucketMs?: number;
+  limit?: number;
+  subjectTypes?: string[];
+  paths?: string[];
+  ops?: string[];
+}
+
+/**
+ * 按锚点 / 时间窗口 / 维度聚合查询状态变更。
+ * 一次查询拿到全部四种分组，三种视图共用同一份数据。
+ */
+export function useStateChanges(
+  sessionId: string | null,
+  params: StateChangesQueryParams = {},
+  options: { refetchInterval?: number | false } = {},
+) {
+  return useQuery({
+    queryKey: ["stateChanges", sessionId, params],
+    queryFn: () =>
+      mcpClient.callTool<QueryStateChangesResult>("query_state_changes", {
+        session_id: sessionId ?? undefined,
+        anchor_type: params.anchorType ?? "",
+        anchor_id: params.anchorId ?? "",
+        window_before_ms: params.windowBeforeMs ?? 0,
+        window_after_ms: params.windowAfterMs ?? 0,
+        group_by: params.groupBy ?? "operation",
+        sort_by: params.sortBy ?? "first_change",
+        desc: params.desc ?? false,
+        bucket_ms: params.bucketMs ?? 0,
+        limit: params.limit ?? 0,
+        subject_types: params.subjectTypes ?? [],
+        paths: params.paths ?? [],
+        ops: params.ops ?? [],
+      }),
+    enabled: !!sessionId,
+    placeholderData: keepPreviousData, // 换锚点/过滤时不闪骨架屏
+    // 抓包实时写入；时间视图依赖新鲜数据观察密度。
+    refetchInterval: options.refetchInterval ?? (sessionId ? 3000 : false),
+  });
+}
+
+/**
+ * 查询解码失败的原因（按归一化错误模板聚合，见后端 pkg/decode/errorcol.go）。
+ *
+ * enabled 由调用方传入：只有确实失败过（decode_errors > 0）才值得查，
+ * 否则每个会话都会多打一次必然为空的查询。
+ */
+export function useDecodeErrors(sessionId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["decodeErrors", sessionId],
+    queryFn: () =>
+      mcpClient.callTool<QueryDecodeErrorsResult>("query_decode_errors", {
+        session_id: sessionId ?? undefined,
+      }),
+    enabled: !!sessionId && enabled,
+    // 会话运行中失败分组也会周期落库，轮询才能持续看到新出现的原因。
+    refetchInterval: sessionId && enabled ? 5000 : false,
+  });
+}
+
+/**
+ * 查询会话内的「命中提醒」（项目检查规则在本会话命中过什么、是哪些数据导致的）。
+ *
+ * alertId 用于单条下钻：后续上下文（after）是「每条命中一次时间窗查询」，列表态
+ * 不带上，展开时才按 alert_id 单独问，避免整页命中各查一次。
+ */
+export function useSessionAlerts(
+  sessionId: string | null,
+  options: { limit?: number; offset?: number; after?: number; running?: boolean } = {},
+) {
+  const after = options.after ?? 0;
+  return useQuery({
+    queryKey: ["sessionAlerts", sessionId, options.limit, options.offset, after],
+    queryFn: () =>
+      mcpClient.callTool<ListSessionAlertsResult>("list_session_alerts", {
+        session_id: sessionId ?? undefined,
+        limit: options.limit,
+        offset: options.offset,
+        after: after > 0 ? after : undefined,
+      }),
+    enabled: !!sessionId,
+    placeholderData: keepPreviousData,
+    // 运行中的会话才会持续产生新命中；停止的会话是静态数据，不必轮询。
+    refetchInterval: sessionId && options.running ? 5000 : false,
+  });
+}
+
+/** 展开某条命中后按 alert_id 单独取「触发后 after 条」。 */
+export function useSessionAlertDetail(
+  sessionId: string | null,
+  alertId: string | null,
+  after: number,
+) {
+  return useQuery({
+    queryKey: ["sessionAlertDetail", sessionId, alertId, after],
+    queryFn: () =>
+      mcpClient.callTool<ListSessionAlertsResult>("list_session_alerts", {
+        session_id: sessionId ?? undefined,
+        alert_id: alertId ?? undefined,
+        after,
+      }),
+    enabled: !!sessionId && !!alertId,
+  });
+}
+
+/** get_state_change_detail 的查询参数（三者至少给一个）。 */
+export interface StateChangeDetailParams {
+  changeId?: string;
+  eventId?: string;
+  entity?: string;
+  path?: string;
+  windowBeforeMs?: number;
+  windowAfterMs?: number;
+}
+
+/** 查询一条变更 / 一条协议消息 / 一个实体的完整协议链与历史。 */
+export function useStateChangeDetail(
+  sessionId: string | null,
+  params: StateChangeDetailParams | null,
+) {
+  return useQuery({
+    queryKey: ["stateChangeDetail", sessionId, params],
+    queryFn: () =>
+      mcpClient.callTool<StateChangeDetailResult>("get_state_change_detail", {
+        session_id: sessionId ?? undefined,
+        change_id: params?.changeId ?? "",
+        event_id: params?.eventId ?? "",
+        entity: params?.entity ?? "",
+        path: params?.path ?? "",
+        window_before_ms: params?.windowBeforeMs ?? 0,
+        window_after_ms: params?.windowAfterMs ?? 0,
+      }),
+    enabled: !!sessionId && !!params,
+    placeholderData: keepPreviousData,
+  });
+}
+
+
+
+/** 查询指定 session 的原始包 */
+export function useRawPackets(
+  sessionId: string | null,
+  options: { limit?: number; offset?: number; protocol?: string; src?: string; dst?: string },
+) {
+  return useQuery({
+    queryKey: ["rawPackets", sessionId, options],
+    queryFn: () =>
+      mcpClient.callTool<ListRawPacketsResult>("list_raw_packets", {
+        session_id: sessionId ?? undefined,
+        limit: options.limit,
+        offset: options.offset,
+        protocol: options.protocol,
+        src: options.src,
+        dst: options.dst,
+      }),
+    enabled: !!sessionId,
+    placeholderData: keepPreviousData, // 翻页时沿用上一页数据，避免骨架屏闪烁
+    refetchInterval: sessionId ? 2000 : false,
+  });
+}
+
+/**
+ * 用插件解码离线会话的原始包。
+ * 成功后失效该 session 的 decodedData 与 rawPackets 缓存，
+ * 调用方应提示用户切换到"协议数据"Tab 查看解码结果。
+ */
+export function useDecodeRawPackets() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: {
+      sessionId: string;
+      plugin: string;
+      protocol?: string;
+      src?: string;
+      dst?: string;
+      limit?: number;
+      clearExisting?: boolean;
+    }) =>
+      mcpClient.callTool<DecodeRawPacketsResult>("decode_raw_packets", {
+        session_id: vars.sessionId,
+        plugin: vars.plugin,
+        protocol: vars.protocol,
+        src: vars.src,
+        dst: vars.dst,
+        limit: vars.limit,
+        clear_existing: vars.clearExisting ?? true,
+      }),
+    onSuccess: (_data, vars) => {
+      // 解码结果写入 decoded_events，需失效该 session 的解码数据缓存
+      void queryClient.invalidateQueries({ queryKey: ["decodedData", vars.sessionId] });
+      // rawPackets 计数虽不变，但 invalidate 以保持一致性
+      void queryClient.invalidateQueries({ queryKey: ["rawPackets", vars.sessionId] });
+    },
+  });
+}
+
+/** 用指定插件对离线会话原始包解码并采样返回（隐私安全：不回传原始包、不落库）。 */
+export function useTestPlugin() {
+  return useMutation({
+    mutationFn: (vars: TestPluginVars) =>
+      mcpClient.callTool<TestPluginResult>("test_plugin", {
+        session_id: vars.sessionId,
+        plugin: vars.plugin,
+        protocol: vars.protocol ?? "",
+        src: vars.src ?? "",
+        dst: vars.dst ?? "",
+        limit: vars.limit ?? 0,
+        sample_limit: vars.sampleLimit ?? 50,
+      }),
+  });
+}
+
+/** 列出已注册（在线/离线）的解码插件，含 instance_id 与心跳，用于热更可视化 */
+export function useRegisteredPlugins() {
+  return useQuery({
+    queryKey: ["registeredPlugins"],
+    queryFn: () => mcpClient.callTool<ListRegisteredPluginsResult>("list_registered_plugins"),
+    refetchInterval: 5_000, // 每 5s 轮询，使热更（instance_id 变化）快速可见
+  });
+}
+
+/**
+ * 运行中热切换某抓包会话绑定的解码插件。
+ * 成功后失效 sessions 与 registeredPlugins 缓存，使侧边栏与插件面板同步。
+ */
+export function useSetSessionPlugin() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { sessionId: string; plugin: string }) =>
+      mcpClient.callTool<SetSessionPluginResult>("set_session_plugin", {
+        session_id: vars.sessionId,
+        plugin: vars.plugin,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      void queryClient.invalidateQueries({ queryKey: ["registeredPlugins"] });
+    },
+  });
+}
+
+/** 强制下线某个注册插件（按 instance_id 或 name），用于崩溃插件清理 */
+export function useDeregisterPlugin() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { instanceId?: string; name?: string }) =>
+      mcpClient.callTool<DeregisterPluginResult>("deregister_plugin", {
+        instance_id: vars.instanceId,
+        name: vars.name,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["registeredPlugins"] });
+    },
+  });
+}
+
+/** 停止指定 session 的抓包 */
+export function useStopCapture() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { sessionId: string }) =>
+      mcpClient.callTool<StopCaptureResult>("stop_capture", {
+        session_id: vars.sessionId,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+}
+
+/**
+ * 订阅后端插件事件 SSE 流（/events/plugins），收到 register/deregister/online/offline
+ * 事件即失效 registeredPlugins 与 sessions 查询，使前端在插件上下线/热更时零延迟刷新。
+ * 5s 轮询保留作断线兜底；EventSource 默认断线自动重连。应在应用顶层挂载一次。
+ */
+export function usePluginEventStream() {
+  const queryClient = useQueryClient();
+  // token 变化时重建连接：EventSource 无法中途补头，也读不到新 token。
+  const token = useAuthToken();
+  useEffect(() => {
+    const es = new EventSource(withTokenParam("/events/plugins"));
+    es.addEventListener("plugin", (e) => {
+      // register_failed：即时 toast（含被拒原因），其余事件维持缓存失效
+      try {
+        const ev = JSON.parse((e as MessageEvent<string>).data) as {
+          type: string;
+          name?: string;
+          error?: string;
+        };
+        if (ev.type === "register_failed") {
+          toast.error(
+            `插件 ${ev.name ?? "未知"} 注册被拒`,
+            ev.error || "平台未记录原因（可能是 manifest / 语义契约校验或隧道 Connect 流被拒）",
+          );
+        }
+      } catch {
+        // 非 JSON 负载：维持原行为（仅失效缓存）
+      }
+      void queryClient.invalidateQueries({ queryKey: ["registeredPlugins"] });
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    });
+    es.onerror = () => {
+      // EventSource 默认会自动重连；此处仅记录，无需手动处理。
+      // 轮询兜底维持面板在重连间隙内的基本可用性。
+      if (es.readyState === EventSource.CLOSED) {
+        // CLOSED 不代表一定是 401（代理 5xx/后端重启同样进入 CLOSED 终态）。
+        // 仅当 mcp-client 最近上报过 401 才置位横幅；token 模式下轮询必然
+        // 在 10s 窗口内产生 401 信号，真实 401 不会漏报。
+        if (wasRecentlyUnauthorized()) {
+          notifyAuthError();
+        } else {
+          slogError("plugin event stream closed (non-401), relying on polling fallback");
+        }
+        return;
+      }
+      slogError("plugin event stream error, relying on polling fallback");
+    };
+    return () => es.close();
+  }, [queryClient, token]);
+}
+
+// ===== 会话增强（状态 / 删除 / 网卡）=====
+
+/** get_session_status：查询指定会话的实时状态（gRPC 优先，失败降级元数据）。 */
+export function useSessionStatus(sessionId: string | null, refetchInterval = 5000) {
+  return useQuery({
+    queryKey: ["sessionStatus", sessionId],
+    queryFn: () =>
+      mcpClient.callTool<SessionStatusResult>("get_session_status", {
+        session_id: sessionId ?? undefined,
+      }),
+    enabled: !!sessionId,
+    refetchInterval,
+  });
+}
+
+/** delete_session：删除一个会话及其数据（破坏性，调用方需二次确认）。 */
+export function useDeleteSession() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { sessionId: string }) =>
+      mcpClient.callTool<DeleteSessionResult>("delete_session", { session_id: vars.sessionId }),
+    onSuccess: (_data, vars) => {
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      void queryClient.invalidateQueries({ queryKey: ["sessionStatus", vars.sessionId] });
+    },
+  });
+}
+
+/** 批量删除多个会话（逐个调用 delete_session，统计失败数）。 */
+export function useDeleteSessions() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (sessionIds: string[]) => {
+      const results = await Promise.allSettled(
+        sessionIds.map((id) =>
+          mcpClient.callTool<DeleteSessionResult>("delete_session", { session_id: id }),
+        ),
+      );
+      const failed = results.filter(
+        (r): r is PromiseRejectedResult => r.status === "rejected",
+      ).length;
+      return { total: sessionIds.length, failed };
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      void queryClient.invalidateQueries({ queryKey: ["sessionStatus"] });
+    },
+  });
+}
+
+// ===== 轻量「项目」模型（名称 + 默认插件 + 默认端口）=====
+
+/** list_projects：列出当前可见项目。 */
+export function useProjects() {
+  return useQuery({
+    queryKey: ["projects"],
+    queryFn: () => mcpClient.callTool<ListProjectsResult>("list_projects"),
+    staleTime: 10_000,
+  });
+}
+
+/** create_project：新建项目。 */
+export function useCreateProject() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { name: string; plugin?: string; port?: number }) =>
+      mcpClient.callTool<ProjectResult>("create_project", {
+        name: vars.name,
+        plugin: vars.plugin ?? "",
+        port: vars.port ?? 0,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
+/** update_project：更新项目。 */
+export function useUpdateProject() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string; name?: string; plugin?: string; port?: number }) =>
+      mcpClient.callTool<ProjectResult>("update_project", {
+        id: vars.id,
+        name: vars.name ?? "",
+        plugin: vars.plugin ?? "",
+        port: vars.port ?? 0,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
+/** delete_project：删除项目。 */
+export function useDeleteProject() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { id: string }) =>
+      mcpClient.callTool<ProjectResult>("delete_project", { id: vars.id }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
+/** get_project：查询单个项目的详情与最近会话。 */
+export function useProject(id?: string) {
+  return useQuery({
+    queryKey: ["project", id],
+    queryFn: () =>
+      id
+        ? mcpClient.callTool<GetProjectResult>("get_project", { id })
+        : Promise.resolve(null),
+    enabled: !!id,
+  });
+}
+
+/** move_session_to_project：把会话移入/移出项目（后端六步鉴权收口）。 */
+export function useMoveSessionToProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { session_id: string; project_id?: string }) =>
+      mcpClient.callTool<{ ok?: boolean }>("move_session_to_project", v),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["sessions"] });
+      void qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
+/** add_project_member：向项目添加成员。pending=true 表示用户名尚未注册（待注册，对方注册同名后生效）。 */
+export function useAddProjectMember(projectId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { user: string; role: ProjectRole }) =>
+      mcpClient.callTool<{ ok?: boolean; pending?: boolean }>("add_project_member", {
+        project_id: projectId, ...v,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["project", projectId] });
+      void qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
+/** remove_project_member：从项目移除成员。 */
+export function useRemoveProjectMember(projectId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { user: string }) =>
+      mcpClient.callTool<{ ok?: boolean }>("remove_project_member", {
+        project_id: projectId, ...v,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project", projectId] }),
+  });
+}
+
+/** set_project_plugins：设置项目的解码插件集合。 */
+export function useSetProjectPlugins(projectId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { plugins: ProjectPlugin[] }) =>
+      mcpClient.callTool<{ ok?: boolean }>("set_project_plugins", {
+        project_id: projectId,
+        plugins: JSON.stringify(v.plugins),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project", projectId] }),
+  });
+}
+
+/** add_project_plugin：增量添加一条项目解码插件（成员可添加自己注册的插件；admin 可添加任意）。 */
+export function useAddProjectPlugin(projectId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { name: string }) =>
+      mcpClient.callTool<{ ok?: boolean; added?: boolean }>("add_project_plugin", {
+        project_id: projectId,
+        name: v.name,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project", projectId] }),
+  });
+}
+
+/** remove_project_plugin：增量移除一条项目解码插件（成员仅能移除自己添加的；admin 可移除任意）。 */
+export function useRemoveProjectPlugin(projectId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { id: string }) =>
+      mcpClient.callTool<{ ok?: boolean }>("remove_project_plugin", {
+        project_id: projectId,
+        id: v.id,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project", projectId] }),
+  });
+}
+
+/** set_project_rules：设置项目的解析规则集合。 */
+export function useSetProjectRules(projectId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { rules: ProjectRule[] }) =>
+      mcpClient.callTool<{ ok?: boolean }>("set_project_rules", {
+        project_id: projectId,
+        rules: JSON.stringify(v.rules),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project", projectId] }),
+  });
+}
+
+// 轻量错误日志（避免引入额外依赖）。
+function slogError(msg: string) {
+  // eslint-disable-next-line no-console
+  console.warn("[plugin-events]", msg);
+}
+
+// ===== 代理抓包连接（Connections 页面）=====
+
+/** list_connections：按 conn_id 聚合返回代理抓包连接列表（最新在前）。 */
+export function useConnections(
+  sessionId: string | null,
+  options: { limit?: number; offset?: number },
+) {
+  return useQuery({
+    queryKey: ["connections", sessionId, options],
+    queryFn: () =>
+      mcpClient.callTool<ListConnectionsResult>("list_connections", {
+        session_id: sessionId ?? undefined,
+        limit: options.limit ?? 100,
+        offset: options.offset ?? 0,
+      }),
+    enabled: !!sessionId,
+    placeholderData: keepPreviousData,
+    refetchInterval: sessionId ? 2000 : false, // 抓包实时写入，轮询保持列表更新
+  });
+}
+
+/** get_connection_detail：查询单个连接的详情（头部 + 统计）。 */
+export function useConnectionDetail(sessionId: string | null, connId: string | null) {
+  return useQuery({
+    queryKey: ["connectionDetail", sessionId, connId],
+    queryFn: () =>
+      mcpClient.callTool<GetConnectionDetailResult>("get_connection_detail", {
+        session_id: sessionId ?? undefined,
+        conn_id: connId!,
+      }),
+    enabled: !!sessionId && !!connId,
+    refetchInterval: sessionId && connId ? 2000 : false,
+  });
+}
+
+/** list_connection_streams：查询连接内的流（Stream View）。 */
+export function useConnectionStreams(
+  sessionId: string | null,
+  connId: string | null,
+  options: { limit?: number; offset?: number },
+) {
+  return useQuery({
+    queryKey: ["connectionStreams", sessionId, connId, options],
+    queryFn: () =>
+      mcpClient.callTool<ListConnectionStreamsResult>("list_connection_streams", {
+        session_id: sessionId ?? undefined,
+        conn_id: connId!,
+        limit: options.limit ?? 200,
+        offset: options.offset ?? 0,
+      }),
+    enabled: !!sessionId && !!connId,
+    placeholderData: keepPreviousData,
+    refetchInterval: sessionId && connId ? 2000 : false,
+  });
+}
+
+/** list_connection_frames：查询连接内的原始帧（Frames / Raw）。
+ * connId 为 null 指「全部连接」——返回整个会话的帧（conn_id 传空串）。 */
+export function useConnectionFrames(
+  sessionId: string | null,
+  connId: string | null,
+  options: { limit?: number; offset?: number },
+) {
+  return useQuery({
+    queryKey: ["connectionFrames", sessionId, connId ?? "", options],
+    queryFn: () =>
+      mcpClient.callTool<ListConnectionFramesResult>("list_connection_frames", {
+        session_id: sessionId ?? undefined,
+        conn_id: connId ?? "",
+        limit: options.limit ?? 100,
+        offset: options.offset ?? 0,
+      }),
+    enabled: !!sessionId,
+    placeholderData: keepPreviousData,
+    refetchInterval: sessionId ? 2000 : false,
+  });
+}
+
+// ===== 远程 Agent 下载 =====
+
+/** get_agent_download_options：返回下载 Agent 页面需要的服务端信息（可达 IP / registry+ingest 端口 / 平台）。 */
+export function useAgentDownloadOptions(opts?: { refetchIntervalSec?: number }) {
+  // 把浏览器看到的 host 传给服务端：NAT/端口映射下的对外地址服务端无从推导，
+  // 只能靠部署方配 GT_PUBLIC_HOST 或调用方告知（回环地址不传，对远端探针无意义）。
+  const host =
+    typeof window !== "undefined" ? window.location.hostname : "";
+  const loopback =
+    !host ||
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]";
+  return useQuery({
+    queryKey: ["agentDownloadOptions", loopback ? "" : host],
+    queryFn: () =>
+      mcpClient.callTool<GetAgentDownloadOptionsResult>(
+        "get_agent_download_options",
+        loopback ? {} : { host },
+      ),
+    staleTime: 30_000, // 地址/平台变化不频繁，缓存 30s
+    // 现场编译进行中时由调用方要求高频轮询（默认不轮询）。
+    refetchInterval: opts?.refetchIntervalSec,
+    refetchIntervalInBackground: !!opts?.refetchIntervalSec,
+  });
+}
+
+// ===== 代理抓包租约（按用户/设备独立会话，多用户互不串流）=====
+
+/** list_proxy_leases：查询当前用户可见的代理抓包租约列表（admin 全可见）。 */
+export function useProxyLeases() {
+  return useQuery({
+    queryKey: ["proxyLeases"],
+    queryFn: () => mcpClient.callTool<ListProxyLeasesResult>("list_proxy_leases"),
+    refetchInterval: 4000, // agent/会话/连接状态实时变化，轮询保持新鲜
+  });
+}
+
+/** create_proxy_lease：创建独立代理抓包租约（独立端口 + 独立 agent + 独立会话）。
+ * 默认自动开抓包；noAutoStart=true 只建租约。 */
+export function useCreateProxyLease() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: CreateProxyLeaseVars) =>
+      mcpClient.callTool<CreateProxyLeaseResult>("create_proxy_lease", {
+        plugin: vars.plugin ?? "",
+        include_hosts: vars.includeHosts ?? [],
+        include_ports: vars.includePorts ?? [],
+        device: vars.device ?? "",
+        project_id: vars.projectId ?? "",
+        no_auto_start: vars.noAutoStart ?? false,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["proxyLeases"] });
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+}
+
+/** release_proxy_lease：释放租约（停会话 + 杀 agent + 回收端口，幂等）。
+ * 注意：与 start/stop_lease_capture 是不同动作，前者删租约（端口归池、QR 失效），
+ * 后者只关/开抓包（租约保留）。误按 release 想再创建会拿到不同端口。 */
+export function useReleaseProxyLease() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (leaseId: string) =>
+      mcpClient.callTool<ReleaseProxyLeaseResult>("release_proxy_lease", { lease_id: leaseId }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["proxyLeases"] });
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+}
+
+/** start_lease_capture：在已有租约上开新一轮抓包（代理端口/QR 不变）。
+ * 返回新的 session_id 与最新 lease 视图；调用方应同时使能 sessions 列表刷新。 */
+export function useStartLeaseCapture() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: StartLeaseCaptureVars) =>
+      mcpClient.callTool<StartLeaseCaptureResult>("start_lease_capture", {
+        lease_id: vars.leaseId,
+        plugin: vars.plugin ?? "",
+        include_hosts: vars.includeHosts ?? [],
+        include_ports: vars.includePorts ?? [],
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["proxyLeases"] });
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+}
+
+/** stop_lease_capture：停掉租约当前的抓包会话回归 idle（租约/agent 保留）。 */
+export function useStopLeaseCapture() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: StopLeaseCaptureVars) =>
+      mcpClient.callTool<StopLeaseCaptureResult>("stop_lease_capture", {
+        lease_id: vars.leaseId,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["proxyLeases"] });
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    },
+  });
+}
+
+// ===== 成员账号管理（users 表）=====
+
+/** list_users：列出注册制用户（仅 global admin；非 admin 调用会抛错，由调用方降级隐藏）。 */
+export function useListUsers() {
+  return useQuery({
+    queryKey: ["users"],
+    queryFn: () => mcpClient.callTool<ListUsersResult>("list_users"),
+    staleTime: 15_000,
+  });
+}
+
+/** revoke_user：撤销注册制用户（删除 users 行，token 即时失效；仅 global admin）。 */
+export function useRevokeUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { owner: string }) =>
+      mcpClient.callTool<RevokeUserResult>("revoke_user", { owner: vars.owner }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["users"] });
+    },
+  });
+}
+
+// ===== 探针管理（v2 探针优化）=====
+
+/** list_probes：列出调用方可见的探针（creator 轴过滤，admin 全量）。 */
+export function useListProbes() {
+  return useQuery({
+    queryKey: ["probes"],
+    queryFn: () => mcpClient.callTool<ListProbesResult>("list_probes"),
+    refetchInterval: 5_000, // 三维度状态（connection/capture/data）轮询刷新
+  });
+}
+
+/** get_probe：单个探针的三维度状态快照。 */
+export function useProbe(probeId: string | null) {
+  return useQuery({
+    queryKey: ["probe", probeId],
+    queryFn: () =>
+      mcpClient.callTool<GetProbeResult>("get_probe", { probe_id: probeId ?? undefined }),
+    enabled: !!probeId,
+  });
+}
+
+/** probe_start_capture：选定探针建会话并下发抓包（Sessions 一级页的"创建抓包"）。 */
+export function useProbeStartCapture() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: {
+      probeId: string;
+      ports?: number[];
+      hosts?: string[];
+      iface?: string;
+      ifaces?: string[];
+      plugin?: string;
+      projectId?: string;
+      protocol?: string; // tcp/udp/both；空 = tcp（端口派生）
+    }) =>
+      mcpClient.callTool<ProbeStartCaptureResult>("probe_start_capture", {
+        probe_id: vars.probeId,
+        ports: vars.ports ?? [],
+        hosts: vars.hosts ?? [],
+        iface: vars.iface ?? "",
+        ifaces: vars.ifaces ?? [],
+        plugin: vars.plugin ?? "",
+        project_id: vars.projectId ?? "",
+        protocol: vars.protocol ?? "",
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      void queryClient.invalidateQueries({ queryKey: ["probes"] });
+    },
+  });
+}
+
+/** probe_stop_capture：停止探针抓包并结束其会话。 */
+export function useProbeStopCapture() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { probeId: string }) =>
+      mcpClient.callTool<ProbeStopCaptureResult>("probe_stop_capture", {
+        probe_id: vars.probeId,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      void queryClient.invalidateQueries({ queryKey: ["probes"] });
+    },
+  });
+}
+
+/** probe_update_filter：热更新探针抓包过滤（不中断抓包）。 */
+export function useProbeUpdateFilter() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { probeId: string; ports?: number[]; hosts?: string[]; protocol?: string }) =>
+      mcpClient.callTool<ProbeOkResult>("probe_update_filter", {
+        probe_id: vars.probeId,
+        ports: vars.ports ?? [],
+        hosts: vars.hosts ?? [],
+        protocol: vars.protocol ?? "",
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["probes"] });
+    },
+  });
+}
+
+/** probe_retry_capture：让 failed 的探针重试上一次 assign。 */
+export function useProbeRetryCapture() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { probeId: string }) =>
+      mcpClient.callTool<ProbeOkResult>("probe_retry_capture", { probe_id: vars.probeId }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["probes"] });
+    },
+  });
+}
+
+/** probe_rename：改探针显示名。 */
+export function useProbeRename() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { probeId: string; name: string }) =>
+      mcpClient.callTool<ProbeOkResult>("probe_rename", {
+        probe_id: vars.probeId,
+        name: vars.name,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["probes"] });
+    },
+  });
+}
+
+/** probe_notify：让探针在目标机器上弹一条系统桌面通知（一次性，探针须在线）。 */
+export function useProbeNotify() {
+  return useMutation({
+    mutationFn: (vars: { probeId: string; title?: string; message: string }) =>
+      mcpClient.callTool<ProbeOkResult>("probe_notify", {
+        probe_id: vars.probeId,
+        title: vars.title ?? "",
+        message: vars.message,
+      }),
+  });
+}
+
+/** probe_revoke：作废探针长期凭证（探针下次启动需重新接入）。 */
+export function useProbeRevoke() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { probeId: string }) =>
+      mcpClient.callTool<ProbeOkResult>("probe_revoke", { probe_id: vars.probeId }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["probes"] });
+    },
+  });
+}
+
+/** probe_list_archive：查询探针本地归档段（refresh=true 时探针在线则实时查询）。 */
+export function useProbeListArchive(
+  probeId: string | null,
+  options: { fromUnix?: number; toUnix?: number; refresh?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["probeArchive", probeId, options],
+    queryFn: () =>
+      mcpClient.callTool<ProbeListArchiveResult>("probe_list_archive", {
+        probe_id: probeId ?? undefined,
+        from_unix: options.fromUnix ?? 0,
+        to_unix: options.toUnix ?? 0,
+        refresh: options.refresh ?? false,
+      }),
+    enabled: !!probeId,
+  });
+}
+
+/** probe_import_archive：把探针本地归档按时间窗回放导入为新会话。 */
+export function useProbeImportArchive() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { probeId: string; fromUnix?: number; toUnix?: number; projectId?: string }) =>
+      mcpClient.callTool<ProbeImportArchiveResult>("probe_import_archive", {
+        probe_id: vars.probeId,
+        from_unix: vars.fromUnix ?? 0,
+        to_unix: vars.toUnix ?? 0,
+        project_id: vars.projectId ?? "",
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      void queryClient.invalidateQueries({ queryKey: ["probes"] });
+    },
+  });
+}

@@ -1,0 +1,134 @@
+export type ProjectRole = "admin" | "member";
+
+export interface ProjectMember {
+  user: string;
+  role: ProjectRole;
+  /** 该用户名是否已有身份（users 表 / env bootstrap）。false = 待注册，对方注册同名后生效。 */
+  registered?: boolean;
+}
+
+export interface ProjectPlugin {
+  id: string;
+  name: string;
+  /** 把该插件加入项目时的设置者身份（插件注册表按 owner 隔离；成员仅能管理自己的条目）。 */
+  owner?: string;
+}
+
+/** 检查规则条件算子闭集（与 sdk/rule.Predicate 的 Op 一致）。 */
+export type RuleOp =
+  | "eq"
+  | "neq"
+  | "exists"
+  | "not_exists"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "in"
+  | "not_in"
+  | "contains"
+  | "prefix"
+  | "suffix";
+
+/**
+ * 结构化条件谓词（GJSON path + 算子 + 字面量；all/any 组合）。
+ * 单叶子与组合器互斥，语义同 sdk/rule.Predicate。
+ */
+export interface RulePredicate {
+  all?: RulePredicate[];
+  any?: RulePredicate[];
+  path?: string;
+  op?: RuleOp;
+  /** 字面量：标量或数组（in/not_in 需数组）。 */
+  value?: unknown;
+}
+
+/**
+ * 项目内一条检查规则：命中解码事件字段时向抓到该数据的探针下发本地告警。
+ *
+ * 向后兼容：历史「关联规则」只有 {id, name}（enabled 缺省 false、when 空），
+ * 会被后端 Active 过滤为静默失活，无需迁移。
+ */
+export interface ProjectRule {
+  id: string;
+  name: string;
+  /** 是否启用；禁用或未填条件的规则不会被求值。 */
+  enabled?: boolean;
+  /** 命中条件（对解码事件 payload+_meta 的 GJSON 视图求值）。 */
+  when?: RulePredicate;
+  /** 桌面通知标题；空则回退 name。 */
+  title?: string;
+  /** 桌面通知正文；空则用默认文案。 */
+  message?: string;
+  /** 同规则·同会话冷却秒数；空/0 用后端默认（30s）。 */
+  cooldown_sec?: number;
+  /** 随通知下发的每方向「触发前最近 N 条」记录数；空/0 用后端默认（3）。 */
+  context_per_direction?: number;
+}
+
+/** 项目一等组织单元：持有 Game/Members/Decoder Plugins/Rules/Sessions。 */
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  description?: string;
+  game?: string;
+  /** 创建者（审计字段，永不变更；不参与鉴权）。 */
+  created_by?: string;
+  /** 当前 Owner（SSOT，全权含删除项目与转移 Owner）。 */
+  owner?: string;
+  /** 归属租户（当前恒为 default）。 */
+  tenant_id?: string;
+  default_plugin?: string;
+  default_port?: number;
+  /** admin/member 成员表（Owner 不在此列，以 owner 字段为准）。 */
+  members?: ProjectMember[];
+  plugins?: ProjectPlugin[];
+  rules?: ProjectRule[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ProjectRecentSession {
+  session_id: string;
+  status: string;
+  started_at: string;
+  events?: number;
+  raw_packets?: number;
+}
+
+export interface ProjectDetail extends ProjectInfo {
+  recent_sessions?: ProjectRecentSession[];
+}
+
+/** list_projects 完整响应 */
+export interface ListProjectsResult {
+  ok?: boolean;
+  projects: ProjectInfo[];
+}
+
+/** get_project 的返回：project 详情 + recent_sessions + capabilities */
+export interface GetProjectResult {
+  ok?: boolean;
+  error?: string;
+  project?: ProjectDetail;
+  recent_sessions?: ProjectRecentSession[];
+  /** 当前调用者被放行的管理动作（authz.Action 列表），前端据此渲染管理入口。 */
+  capabilities?: string[];
+}
+
+/** authz.Action 子集：前端管理入口的渲染依据。 */
+export type ProjectCapability =
+  | "project:update"
+  | "project:delete"
+  | "project:manage_members"
+  | "project:manage_plugins"
+  | "project:manage_rules"
+  | "project:transfer_owner";
+
+/** create/update/delete_project 返回单个 project */
+export interface ProjectResult {
+  ok?: boolean;
+  error?: string;
+  project?: ProjectInfo;
+  id?: string;
+}

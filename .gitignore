@@ -1,0 +1,125 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+
+# SQLite database files
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Logs
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Dependency directories
+vendor/
+
+# Build output
+dist/
+build/
+
+# docker compose 的本地环境文件（含 GT_AUTH_TOKENS 真实密钥，绝不能入库）；
+# 只提交模板 .env.example。
+.env
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Frontend build artifacts (web/ is a real Vite project; only source is tracked)
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+web/.vite/
+
+# go:embed 的目标目录：仓库只跟踪 .gitkeep，产物由 make web-build 生成
+# （历史上有一次误提交，见 commit 21338dd）
+cmd/gt-mcp/webui/assets/
+cmd/gt-mcp/webui/index.html
+cmd/gt-mcp/webui/logo.png
+
+# 本地环境文件备份（含真实 token）
+.env.bak
+
+# IDE
+.trae/
+
+# Runtime state (databases, sessions, run logs)
+sessions/
+runs/
+current.json
+# Runtime-generated address files (written by config.WriteAddrFile into workDir)
+addr.*.json
+
+# AI working memory (tool-internal, not project source)
+.workbuddy/
+
+# Runtime capture artifacts (binaries, recorded packets, reports)
+cap/
+
+# Stray/junk file
+NUL
+
+# 运行时产物（本地生成，不入库）
+bin/
+runs/
+sessions/
+cap/
+current.json
+/workflows/
+
+# Windows 保留名伪文件
+NUL
+
+# 设计比对的本地产出（actual/expected/diff/reports）
+.design-qa/
+
+# Local Go workspace (SDK local dev), do not commit
+go.work
+go.work.sum
+
+# Runtime session state / local test artifacts
+current.*.json
+qc
+
+# 临时调试目录（MCP / 解码排查脚本与样本 dump，非项目源码）
+.tmp_mcp/
+
+# 基准生成物：current.txt 每次重跑覆盖；baseline.txt 是提交进仓库的对比基线
+bench/current.txt
+bench/compare.csv
+
+# Qoder local settings (may contain MCP tokens)
+.qoder/settings.local.json

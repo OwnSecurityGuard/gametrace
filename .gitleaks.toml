@@ -1,0 +1,23 @@
+title = "GameTrace gitleaks config"
+
+# 必须显式继承内置规则集：自定义 .gitleaks.toml 会整体替换默认配置，
+# 不写 [extend] 等于零规则空扫（CI 恒绿的陷阱）。
+[extend]
+useDefault = true
+
+# 只 allowlist 已知测试夹具里的具体假值（逐条精确匹配），不放宽任何扫描规则。
+# 加新条目前先确认它是假的：真密钥必须轮换/撤销后另议，不往这里塞。
+[allowlist]
+description = "test-fixture fake secrets"
+regexes = [
+  # RFC 6455 协议示例里的标准 Sec-WebSocket-Key 样例值（examples/ws-decoder/main_test.go）
+  '''^dGhlIHNhbXBsZSBub25jZQ==$''',
+  # probe_store_test 的假探针 token（含前缀改名前的 gta_ 变体）
+  '''^gt[a-z]*_prb_test\d+$''',
+  # dispatcher_v2_test 的假 CorrelationKey
+  '''^correlation-\d+$''',
+  # 已失效的本地开发 token，仅存在于已删除文件 plugins/godot-ecs/main.go 的历史提交；
+  # 2026-09-25 核实：不在当前 GT_AUTH_TOKENS、不在 control.sqlite users 表，已轮换。
+  '''^gt_1cee1e53d7492c0cb2df60417508a0dbd481aba61335a20e$''',
+  '''^gt[a]?_b8f3ffe5e91fce6b785e8d728d541492359e88027e388c14$''',
+]

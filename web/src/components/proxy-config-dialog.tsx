@@ -1,0 +1,591 @@
+import { useEffect, useState } from "react";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
+import { LeaseQrPanel } from "@/components/proxy-lease-qr";
+import {
+  useProxyLeases,
+  useCreateProxyLease,
+  useReleaseProxyLease,
+  useStartLeaseCapture,
+  useStopLeaseCapture,
+  useRegisteredPlugins,
+} from "@/hooks/use-mcp";
+import type { ProxyLease } from "@/types/proxy";
+import { toast } from "@/components/ui/toast";
+import {
+  ArrowRight,
+  Cable,
+  Check,
+  ChevronDown,
+  PauseCircle,
+  PlayCircle,
+  Plus,
+  Trash2,
+  Wifi,
+  X,
+} from "lucide-react";
+import { Select } from "@/components/ui/select";
+
+interface ProxyConfigDialogProps {
+  open: boolean;
+  onClose: () => void;
+  /** 跳转到指定抓包会话查看代理抓包数据；不传则隐藏"查看会话数据"入口。 */
+  onNavigateToSession?: (sessionId: string) => void;
+}
+
+/** 字节数人类可读格式化（B/KB/MB）。 */
+function formatBytes(n: number): string {
+  if (!n || n <= 0) return "0 B";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
+/** last_data_unix（毫秒）→ 相对时间文案。 */
+function lastDataText(unixMs: number): string {
+  if (!unixMs) return "从未";
+  const sec = Math.max(0, Math.floor((Date.now() - unixMs) / 1000));
+  if (sec < 5) return "刚刚";
+  if (sec < 60) return `${sec} 秒前`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} 分钟前`;
+  return `${Math.floor(min / 60)} 小时前`;
+}
+
+interface CollapseProps {
+  title: string;
+  subtitle?: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}
+
+/** 折叠配置区：筛选等高级项默认收起，减少主流程干扰。 */
+function Collapse({ title, subtitle, defaultOpen = false, children }: CollapseProps) {
+  const [openState, setOpenState] = useState(defaultOpen);
+  return (
+    <div className="rounded-lg border border-border">
+      <button
+        type="button"
+        onClick={() => setOpenState((o) => !o)}
+        aria-expanded={openState}
+        className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${openState ? "rotate-0" : "-rotate-90"}`}
+        />
+        <span className="min-w-0">
+          <span className="block truncate text-sm font-medium">{title}</span>
+          {subtitle && (
+            <span className="block truncate text-xs font-normal text-muted-foreground">{subtitle}</span>
+          )}
+        </span>
+      </button>
+      {openState && <div className="space-y-3 border-t border-border px-3 py-3">{children}</div>}
+    </div>
+  );
+}
+
+interface StepItem {
+  key: string;
+  label: string;
+  desc: string;
+  done: boolean;
+}
+
+/** 四步连接状态步骤条：代理服务 → 抓包会话 → 手机连接 → 数据流入。 */
+function ConnectionSteps({ steps }: { steps: StepItem[] }) {
+  return (
+    <div className="flex items-center">
+      {steps.map((s, i) => (
+        <div key={s.key} className={`flex items-center ${i > 0 ? "flex-1" : ""}`}>
+          {i > 0 && (
+            <div
+              className={`mx-1 h-0.5 flex-1 rounded ${s.done ? "bg-success/60" : "bg-border"}`}
+              aria-hidden
+            />
+          )}
+          <div className="flex min-w-0 flex-col items-center gap-0.5">
+            <div
+              className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                s.done ? "bg-success text-white" : "border-2 border-border bg-background text-muted-foreground"
+              }`}
+              title={`${s.label}：${s.desc}`}
+            >
+              {s.done ? <Check className="h-3.5 w-3.5" /> : i + 1}
+            </div>
+            <span
+              className={`max-w-[64px] truncate text-center text-micro leading-tight ${
+                s.done ? "text-foreground" : "text-muted-foreground"
+              }`}
+            >
+              {s.label}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** 代理抓包租约对话框：按用户/设备创建独立会话，多用户互不串流、互不抢配置。
+ * 租约（agent + 代理端口 + 控制端口）与抓包会话独立：
+ *   - 创建后租约常驻，QR 端口不变；
+ *   - 「开始抓包 / 停止抓包」只动会话（不重启 agent，二维码一直有效）；
+ *   - 「释放租约」才会杀 agent、回收端口、QR 失效（按钮与上述二者严格区分）。 */
+export function ProxyConfigDialog({ open, onClose, onNavigateToSession }: ProxyConfigDialogProps) {
+  const leasesQuery = useProxyLeases();
+  const createLease = useCreateProxyLease();
+  const releaseLease = useReleaseProxyLease();
+  const startCapture = useStartLeaseCapture();
+  const stopCapture = useStopLeaseCapture();
+  const plugins = useRegisteredPlugins();
+  const leases = leasesQuery.data?.leases ?? [];
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [device, setDevice] = useState("");
+  const [plugin, setPlugin] = useState("");
+  const [filterHosts, setFilterHosts] = useState("");
+  const [filterPorts, setFilterPorts] = useState("");
+
+  // 选中租约：优先保持用户选择，失效时回退到第一个。
+  const selected = leases.find((l) => l.lease_id === selectedId) ?? leases[0] ?? null;
+  const pluginOptions = plugins.data?.plugins ?? [];
+
+  // 打开时回到列表视图（创建表单收起）。
+  useEffect(() => {
+    if (!open) return;
+    setCreating(false);
+  }, [open]);
+
+  // 无租约时自动进入创建视图。
+  useEffect(() => {
+    if (!open) return;
+    if (leases.length === 0 && !leasesQuery.isLoading) setCreating(true);
+  }, [open, leases.length, leasesQuery.isLoading]);
+
+  function handleCreate() {
+    createLease.mutate(
+      {
+        plugin: plugin.trim() || undefined,
+        device: device.trim() || undefined,
+        includeHosts: filterHosts.split(",").map((s) => s.trim()).filter(Boolean),
+        includePorts: filterPorts
+          .split(",")
+          .map((s) => Number(s.trim()))
+          .filter((n) => Number.isInteger(n) && n >= 1 && n <= 65535),
+      },
+      {
+        onSuccess: (res) => {
+          const lease = res?.lease;
+          if (lease?.lease_id) setSelectedId(lease.lease_id);
+          setCreating(false);
+          setDevice("");
+          setPlugin("");
+          setFilterHosts("");
+          setFilterPorts("");
+          toast.success("代理租约已创建", lease?.connect_addr ?? "");
+        },
+        onError: (err) => {
+          toast.error("创建失败", err.message);
+        },
+      },
+    );
+  }
+
+  function handleRelease(leaseId: string) {
+    releaseLease.mutate(leaseId, {
+      onSuccess: (res) => {
+        if (selectedId === leaseId) setSelectedId(null);
+        toast.success("租约已释放（agent 已停、端口已收、二维码失效）", res?.message);
+      },
+      onError: (err) => {
+        toast.error("释放失败", err.message);
+      },
+    });
+  }
+
+  /** start_lease_capture：在已有租约上开新一轮抓包。
+   * 代理端口/二维码一切不变——手机那边无需任何动作也能继续推数据。 */
+  function handleStart(leaseId: string) {
+    startCapture.mutate(
+      { leaseId },
+      {
+        onSuccess: (res) => {
+          const sid = res?.session_id ?? "";
+          const q = res?.lease?.session_id ? `（新 session ${sid}）` : "";
+          toast.success("已开始抓包", `代理端口不变，会话数据完整隔离${q}`);
+        },
+        onError: (err) => {
+          toast.error("开始抓包失败", err.message);
+        },
+      },
+    );
+  }
+
+  /** stop_lease_capture：停掉当前抓包回归 idle，租约/agent/二维码保留。
+   * 之后只要再点「开始抓包」就能开新一轮（手机无需重连）。 */
+  function handleStop(leaseId: string) {
+    stopCapture.mutate(
+      { leaseId },
+      {
+        onSuccess: (res) => {
+          const detail = res
+            ? `${res.raw_packets ?? 0} 包 · ${res.events ?? 0} 事件 · ${(res.duration_s ?? 0).toFixed(1)}s`
+            : "";
+          toast.success("已停止抓包（租约保留）", detail);
+        },
+        onError: (err) => {
+          toast.error("停止抓包失败", err.message);
+        },
+      },
+    );
+  }
+
+  // ===== 创建租约表单 =====
+  if (creating) {
+    return (
+      <Dialog
+        open={open}
+        onClose={onClose}
+        icon={<Cable className="h-5 w-5" />}
+        title="新建代理租约"
+        description="为当前用户/设备创建独立代理抓包会话，互不串流、互不抢配置。"
+        className="max-w-xl"
+        footer={
+          <>
+            <Button
+              variant="outline"
+              onClick={() => {
+                // 已有租约时允许返回列表，否则关闭弹窗。
+                if (leases.length > 0) setCreating(false);
+                else onClose();
+              }}
+            >
+              <X className="h-4 w-4" />
+              取消
+            </Button>
+            <Button onClick={handleCreate} disabled={createLease.isPending}>
+              {createLease.isPending ? "创建中…" : (
+                <>
+                  <Plus className="h-4 w-4" />
+                  创建租约
+                </>
+              )}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <div>
+            <label htmlFor="lease-device" className="text-sm font-medium">
+              设备标签
+            </label>
+            <Input
+              id="lease-device"
+              value={device}
+              onChange={(e) => setDevice(e.target.value)}
+              aria-label="设备标签"
+              placeholder="如 alice-phone（可选，便于识别）"
+              className="mt-1.5"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="lease-plugin" className="text-sm font-medium">
+              解码插件
+            </label>
+            <Select
+              id="lease-plugin"
+              size="default" className="mt-1.5 w-full"
+              value={plugin}
+              onChange={(e) => setPlugin(e.target.value)}
+            >
+              <option value="">仅抓原始包（不解码）</option>
+              {pluginOptions.map((p) => (
+                <option key={p.name} value={p.name} disabled={!p.online}>
+                  {p.name}
+                  {!p.online ? "（离线）" : ""}
+                </option>
+              ))}
+            </Select>
+            <p className="mt-1 text-xs text-muted-foreground">
+              租约会话绑定该插件解码流量；分帧/重组由插件自身实现，空为仅抓原始包。
+              离线插件不可选 —— 先在「插件」页面启动后再来选择。
+            </p>
+          </div>
+
+          <Collapse title="连接筛选" subtitle="只抓指定主机/端口的连接，减少无关流量">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label htmlFor="lease-filter-hosts" className="text-sm font-medium">
+                  筛选目标主机（逗号分隔）
+                </label>
+                <Input
+                  id="lease-filter-hosts"
+                  value={filterHosts}
+                  onChange={(e) => setFilterHosts(e.target.value)}
+                  aria-label="筛选目标主机"
+                  placeholder="1.2.3.4, api.game.com"
+                  className="mt-1.5 font-mono"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  仅抓取目标主机在此列表内的连接；留空=不筛选。
+                </p>
+              </div>
+              <div>
+                <label htmlFor="lease-filter-ports" className="text-sm font-medium">
+                  筛选目标端口（逗号分隔）
+                </label>
+                <Input
+                  id="lease-filter-ports"
+                  value={filterPorts}
+                  onChange={(e) => setFilterPorts(e.target.value)}
+                  aria-label="筛选目标端口"
+                  placeholder="443, 8443"
+                  className="mt-1.5 font-mono"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  仅抓取目标端口在此列表内的连接；留空=不筛选。
+                </p>
+              </div>
+            </div>
+          </Collapse>
+
+          {createLease.isError && (
+            <p className="text-xs text-destructive">创建失败：{createLease.error?.message}</p>
+          )}
+        </div>
+      </Dialog>
+    );
+  }
+
+  // ===== 租约列表 + 选中详情 =====
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      icon={<Cable className="h-5 w-5" />}
+      title="移动代理租约"
+      description="每个租约是独立抓包会话，多用户互不串流、互不抢配置。"
+      className="max-w-3xl"
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            <X className="h-4 w-4" />
+            关闭
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        {/* 租约列表 */}
+        <section className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-semibold">我的租约（{leases.length}）</h4>
+            <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => setCreating(true)}>
+              <Plus className="h-3.5 w-3.5" />
+              新建租约
+            </Button>
+          </div>
+
+          {leasesQuery.isLoading && leases.length === 0 ? (
+            <p className="py-6 text-center text-xs text-muted-foreground">加载中…</p>
+          ) : leases.length === 0 ? (
+            <p className="py-6 text-center text-xs text-muted-foreground">暂无租约，点击「新建租约」开始。</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {leases.map((l) => {
+                const active = l.lease_id === selected?.lease_id;
+                return (
+                  <button
+                    key={l.lease_id}
+                    type="button"
+                    onClick={() => setSelectedId(l.lease_id)}
+                    className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors ${
+                      active
+                        ? "border-primary bg-primary/10 text-foreground"
+                        : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:bg-muted/50"
+                    }`}
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${l.capture_running || l.session_running ? "bg-success" : "bg-muted-foreground"}`}
+                    >
+                      <span className="sr-only">{l.capture_running || l.session_running ? "抓包中" : "空闲"}</span>
+                    </span>
+                    <span className="max-w-[160px] truncate">{l.device || l.lease_id}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        {selected ? (
+          <LeaseDetail
+            lease={selected}
+            onNavigateToSession={onNavigateToSession}
+            onStart={handleStart}
+            onStop={handleStop}
+            onRelease={handleRelease}
+          />
+        ) : null}
+      </div>
+    </Dialog>
+  );
+}
+
+interface LeaseDetailProps {
+  lease: ProxyLease;
+  onNavigateToSession?: (sessionId: string) => void;
+  onStart: (leaseId: string) => void;
+  onStop: (leaseId: string) => void;
+  onRelease: (leaseId: string) => void;
+}
+
+function LeaseDetail({ lease, onNavigateToSession, onStart, onStop, onRelease }: LeaseDetailProps) {
+  const agentUp = !!lease.agent_running;
+  // 以 capture_running 为准（agent 是否在推数据）；idle 时 false。
+  const capturing = !!(lease.capture_running ?? lease.session_running);
+  const activeConns = lease.active_conns ?? 0;
+  const totalConns = lease.total_conns ?? 0;
+  const totalBytes = lease.total_bytes ?? 0;
+  const phoneConnected = activeConns > 0;
+  const captureCount = lease.capture_count ?? 0;
+  const lastCaptureAt = lease.last_capture_at_unix ?? 0;
+  const lastCaptureText = lastCaptureAt
+    ? `${Math.max(0, Math.floor((Date.now() / 1000 - lastCaptureAt)))} 秒前开始/停止过抓包`
+    : "从未开始过抓包";
+
+  const steps: StepItem[] = [
+    {
+      key: "agent",
+      label: "代理服务",
+      done: agentUp,
+      desc: agentUp ? `Agent 运行中 · PID ${lease.agent_pid ?? "?"}` : "Agent 未运行",
+    },
+    {
+      key: "session",
+      label: "抓包会话",
+      done: capturing,
+      desc: capturing
+        ? `会话 ${lease.session_id?.slice(-6) ?? ""} 运行中`
+        : `idle（已开 ${captureCount} 次）`,
+    },
+    {
+      key: "phone",
+      label: "手机连接",
+      done: phoneConnected,
+      desc: phoneConnected ? `${activeConns} 路连接活跃` : "等待手机接入",
+    },
+    {
+      key: "data",
+      label: "数据流入",
+      done: totalBytes > 0,
+      desc: totalBytes > 0 ? `已收 ${formatBytes(totalBytes)}` : "暂无数据",
+    },
+  ];
+
+  return (
+    <>
+      {/* 状态卡：步骤条 + 实时活动 + 跳转会话 */}
+      <section className="rounded-xl border border-border bg-muted/30 p-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Wifi className="h-4 w-4 text-muted-foreground" />
+            <h4 className="text-sm font-semibold">{lease.device || "连接状态"}</h4>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* 开始 / 停止 抓包：核心动作，不会影响代理端口，二维码持续有效 */}
+            {agentUp && !capturing && (
+              <Button
+                variant="default"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={() => onStart(lease.lease_id)}
+                title="在已有租约上开新一轮抓包（手机无需重连）"
+              >
+                <PlayCircle className="h-3.5 w-3.5" />
+                开始抓包
+              </Button>
+            )}
+            {agentUp && capturing && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={() => onStop(lease.lease_id)}
+                title="停止当前抓包，回归 idle；代理端口/二维码保留，可再次开始"
+              >
+                <PauseCircle className="h-3.5 w-3.5" />
+                停止抓包
+              </Button>
+            )}
+            {capturing && lease.session_id && onNavigateToSession && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={() => onNavigateToSession(lease.session_id)}
+                title={`跳转到会话 ${lease.session_id}`}
+              >
+                查看会话数据
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            {/* 释放租约：杀掉 agent、回收端口、二维码失效——与上面 start/stop 严格区分 */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => onRelease(lease.lease_id)}
+              title="释放租约（杀 agent、收端口、二维码失效；之后再建会拿新端口）"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              释放租约
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-3">
+          <ConnectionSteps steps={steps} />
+        </div>
+
+        {/* 实时活动明细 */}
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border pt-2.5 text-xs text-muted-foreground">
+          <span className={capturing ? "font-medium text-success" : ""}>
+            当前会话 <span className="font-mono">{lease.session_id ? lease.session_id.slice(-12) : "idle"}</span>
+          </span>
+          <span>
+            累计抓包 <span className="font-mono">{captureCount}</span> 次
+          </span>
+          <span className={phoneConnected ? "font-medium text-success" : ""}>
+            活跃连接 <span className="font-mono">{activeConns}</span>
+          </span>
+          <span>
+            累计连接 <span className="font-mono">{totalConns}</span>
+          </span>
+          <span>
+            累计数据 <span className="font-mono">{formatBytes(totalBytes)}</span>
+          </span>
+          <span>
+            最近数据 <span className="font-mono">{lastDataText(lease.last_data_unix ?? 0)}</span>
+          </span>
+          <span>
+            抓包动作 <span className="font-mono">{lastCaptureText}</span>
+          </span>
+          {!phoneConnected && (
+            <span className="w-full pt-0.5">
+              手机尚未接入：请在下方扫码接入，接入后这里会实时更新。
+            </span>
+          )}
+        </div>
+      </section>
+
+      {/* 手机接入：二维码 / 地址 / 客户端下载。与「开始抓包 → 手机代理」共用同一块，
+          connect_addr 与 singbox_uri 的口径不会在两处漂移。 */}
+      <LeaseQrPanel lease={lease} qrSize={176} />
+    </>
+  );
+}

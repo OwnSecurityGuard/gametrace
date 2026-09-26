@@ -1,0 +1,334 @@
+# Dockerfile（T15）——服务端镜像：gt-pipeline + gt-mcp。
+#
+# 多阶段构建：
+#   webui   : node:20-bookworm-slim 构建 web/ 前端（Vite 产物 dist）；
+#   builder : golang:1.26-bookworm + libpcap-dev，以 cgo（pcap）编译两个服务端二进制；
+#             前端产物先 COPY 进 cmd/gt-mcp/webui/，由 //go:embed 嵌入 gt-mcp；
+#   runtime : debian:bookworm-slim + libpcap0.8（gopacket/pcap 运行时需要的共享库）。
+#
+# Web UI：浏览器直接访问 http://<host>:8781（静态资源免鉴权，API 语义不变）。
+#
+# 远程 Agent 预置二进制：gt-mcp 的 /download/agent 优先下发预置产物（见
+#   cmd/gt-mcp/agent_download.go 的 agentBinDir/availableAgentPlatforms）。
+#   镜像在 builder 阶段直接烧入四份可抓包产物（见 builder 注释）：
+#   - linux/amd64（cgo+pcap，原生编译）
+#   - windows/amd64（gopacket/pcap 在 Windows 是纯 Go，CGO_ENABLED=0 交叉编译，
+#     运行时加载 Npcap 的 wpcap.dll）
+#   - darwin/amd64、darwin/arm64（osxcross + macOS SDK 交叉编译，见 builder 的
+#     BUILD_DARWIN_AGENT 参数；gopacket/pcap 在 darwin 走 cgo，Linux builder 需
+#     osxcross 工具链，SDK 下载/工具链构建失败或被跳过时镜像退化为 linux+windows，
+#     下载页如实标 darwin 不可用）
+# runtime 保留 Go 工具链只有一个用途：现场编译远程探针
+# （cmd/gt-mcp/agent_build.go，配合 gcc/libpcap-dev 与 /src 源码，见 runtime 阶段）。
+# 平台不再编译插件：插件源码与二进制都在用户自己的机器上（scaffold_plugin 只返回
+# 文件内容，落盘/构建/启动全部由用户在本地完成）。
+#
+# pcap 说明：pipeline 仍可在服务端本地开 pcap 源（实时网卡抓包 / pcap 文件源），
+# 因此镜像带 pcap（cgo）编译；agent（gt-agent）推流入口是纯 Go gRPC，服务端
+# 不依赖 agent 端的 pcap。
+#
+# 构建（版本注入与 Makefile 的 -X ldflags 同源，见 pkg/version/version.go）：
+#   docker build --build-arg VERSION=v0.5.0 --build-arg GIT_COMMIT=abc1234 -t gt-server .
+# 境内 apt 默认走腾讯云镜像源（APT_MIRROR）；境外构建覆盖：
+#   docker build --build-arg APT_MIRROR=deb.debian.org .
+#
+# 构建提速（2026-09-15）：除 BuildKit 层缓存（docker-compose.yml 默认启用，
+# COPY . . 内容寻址——源码一变后续编译必重跑）外，本文件内再用缓存挂载兜底
+# 层缓存失效的场景（deps/构建参数变化、no_cache 强制重建）：
+#   - npm 下载缓存 /root/.npm（webui 阶段）
+#   - Go 编译缓存 /root/.cache/go-build（builder 阶段，增量编译）
+#   - osxcross SDK tarball /osxcross-tarballs（免重复下载约 600MB）
+# 缓存挂载由 BuildKit 按构建机持久保存，与层缓存生命周期无关。
+
+# ============================================================================
+# 阶段 0：webui（前端构建）
+# ============================================================================
+# node:20 构建 web/（React 19 + Vite），产物经 builder 阶段 COPY 进
+# cmd/gt-mcp/webui/ 后由 //go:embed 嵌入 gt-mcp——runtime 阶段零新增文件。
+#
+# 基础镜像固定 node:20（而非 22）：2026-09 新用户实测反馈 node:22 镜像下前端
+# 构建易失败、node:20 正常（package-lock 为 npm 10 / node 20 工具链生成，
+# lockfileVersion 3）；Vite 6 官方支持 Node 20，钉 20 消除环境差异。
+#
+# npm registry 默认走 npmmirror（与 GOPROXY 默认 goproxy.cn 的境内网络取向
+# 一致）；境外构建可覆盖：
+#   docker build --build-arg NPM_REGISTRY=https://registry.npmjs.org .
+# 前端「原始数据」视图默认常开（会话详情没有插件时它是唯一的看包入口）。
+# 需要收回暴露面时构建期传 VITE_ENABLE_RAW_DEBUG=0，与后端 GT_MCP_ENABLE_RAW_DEBUG=0 对齐。
+FROM node:20-bookworm-slim AS webui
+
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG VITE_ENABLE_RAW_DEBUG=1
+ENV VITE_ENABLE_RAW_DEBUG=${VITE_ENABLE_RAW_DEBUG}
+
+WORKDIR /src
+
+# 先只拷 package.json/package-lock.json 做 npm ci，充分利用层缓存。
+# npm 重试参数：npmmirror 偶发 ECONNRESET，拉大重试次数与超时避免构建被打断。
+# npm 下载缓存挂载：层缓存失效（deps 变化 / no_cache 构建）时 npm ci 也不必
+# 重新从 registry 拉全部包。缓存挂载独立于层缓存生命周期，no_cache 同样受益。
+COPY web/package.json web/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm config set registry ${NPM_REGISTRY} \
+ && npm config set fetch-retries 5 \
+ && npm config set fetch-retry-mintimeout 20000 \
+ && npm config set fetch-retry-maxtimeout 120000 \
+ && npm ci
+
+COPY web/ ./
+RUN npm run build
+
+# ============================================================================
+# 阶段 1：builder
+# ============================================================================
+FROM golang:1.26-bookworm AS builder
+
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=""
+
+# 模块代理：镜像默认 GOPROXY 是 proxy.golang.org（国内网络直连不通，表现为
+# `dial tcp ...:443: connect: connection refused`）。默认改用 goproxy.cn；
+# 境外环境可覆盖：docker build --build-arg GOPROXY=https://proxy.golang.org,direct
+# GOSUMDB 用 goproxy.cn 提供的校验和数据库镜像，避免 sum.golang.org 同样不可达。
+ARG GOPROXY=https://goproxy.cn,direct
+ARG GOSUMDB=sum.golang.google.cn
+# GOCACHE 显式钉住默认路径：下方 go build 层的 --mount=type=cache 挂到这里。
+# 不显式声明时若基础镜像默认变化，挂载点与实际缓存目录错位——不报错、只静默
+# 失效（构建照常、缓存白挂），显式 ENV 消除该隐患。
+ENV GOPROXY=${GOPROXY} \
+    GOSUMDB=${GOSUMDB} \
+    GOCACHE=/root/.cache/go-build
+
+# apt 换源：bookworm 用 deb822 格式，源在 /etc/apt/sources.list.d/debian.sources。
+# 默认腾讯云镜像（境内网络 deb.debian.org 直连极慢，实测 8MB 的包列表要 4 分钟+）。
+ARG APT_MIRROR=mirrors.tencent.com
+RUN sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources
+
+# pcap 采集层是 cgo 依赖，编译期需要 libpcap 头文件。
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends libpcap-dev \
+	&& rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# 先只拷贝 go.mod/go.sum 与 sdk/go.mod+sdk/go.sum 做 go mod download，充分利用层
+# 缓存。根 go.mod 用 replace github.com/OwnSecurityGuard/gametrace/sdk => ./sdk 消费
+# 仓库内 SDK 子模块，因此 sdk/go.mod 必须在模块解析前在场，否则 replace 解析失败
+# （SDK 源码本体由下方 COPY . . 带入，本阶段只需其 go.mod 解析依赖）。
+COPY go.mod go.sum ./
+COPY sdk/go.mod sdk/go.sum sdk/
+RUN go mod download
+
+# ---- macOS 交叉工具链（osxcross，仅 BUILD_DARWIN_AGENT=1）----
+# 在 Linux builder 上交叉编译 darwin/amd64 + darwin/arm64 的可抓包探针：
+# gopacket/pcap 在 darwin 走 cgo（#cgo darwin LDFLAGS: -lpcap），必须用 darwin 的
+# clang（o64-clang/oa64-clang）与 macOS SDK 里的 libpcap 头文件/链接 stub。
+#   - BUILD_DARWIN_AGENT=0 可整体跳过（探针由 macOS 宿主 `make build-agents`
+#     产出，经 GT_AGENT_BIN_DIR 补充，下载页自动标 darwin 不可用）；
+#   - MACOS_SDK_URL / MACOS_SDK_FILE 可覆盖为内网缓存 / 境内镜像源。
+# 安装失败只 WARN 不中断构建：镜像退化为 linux+windows，darwin 下载页如实标不可用。
+# SDK tarball（约 600MB）下载走 BuildKit 缓存挂载（/osxcross-tarballs，与 git
+# clone 目录分开以免 clone 目标非空失败）：本机第二次起即使层缓存失效
+# （no_cache / apt 输入变化）也不必重新下载，直接复用缓存副本。
+ARG BUILD_DARWIN_AGENT=1
+ARG MACOS_SDK_URL=https://github.com/joseluisq/macosx-sdks/releases/download/11.3/MacOSX11.3.sdk.tar.xz
+ARG MACOS_SDK_FILE=MacOSX11.3.sdk.tar.xz
+RUN --mount=type=cache,target=/osxcross-tarballs \
+    if [ "${BUILD_DARWIN_AGENT}" = "1" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            clang llvm libxml2-dev uuid-dev libssl-dev libbz2-dev zlib1g-dev \
+            libzip-dev liblzma-dev libzstd-dev patch cpio make \
+        && git clone --depth 1 https://github.com/tpoechtrager/osxcross.git /osxcross \
+        && mkdir -p /osxcross/tarballs \
+        && { [ -f "/osxcross-tarballs/${MACOS_SDK_FILE}" ] \
+            || curl -fsSL -o "/osxcross-tarballs/${MACOS_SDK_FILE}" "${MACOS_SDK_URL}"; } \
+        && cp "/osxcross-tarballs/${MACOS_SDK_FILE}" "/osxcross/tarballs/${MACOS_SDK_FILE}" \
+        && cd /osxcross && UNATTENDED=1 ./build.sh \
+        && rm -rf /osxcross/.git /osxcross/tarballs \
+        && echo "==> osxcross ready: $(ls /osxcross/target/bin | tr '\n' ' ')" \
+    || { echo "WARN: osxcross install failed - darwin agents will be skipped"; }; \
+    else \
+        echo "==> BUILD_DARWIN_AGENT=0 - skipping osxcross (darwin agents unavailable in this image)"; \
+    fi
+
+# ---- Linux ARM64 交叉工具链（仅 BUILD_ARM_AGENT=1）----
+# 在 x86_64 builder 上交叉编译 linux/arm64 的可抓包探针（树莓派 4/5、ARM 服务器等）：
+# gopacket/pcap 在 linux 走 cgo，需 aarch64 gcc 与 arm64 的 libpcap 头文件
+# （multiarch 的 libpcap-dev:arm64）；libc6-dev-arm64-cross 是 cgo 链接 libc 所需。
+#   - BUILD_ARM_AGENT=0 可整体跳过（探针由 aarch64 Linux 宿主 `make build-agents`
+#     产出，经 GT_AGENT_BIN_DIR 补充，下载页自动标 linux/arm64 不可用）；
+# 安装失败只 WARN 不中断构建：镜像退化为无 linux/arm64，下载页如实标不可用。
+ARG BUILD_ARM_AGENT=1
+RUN if [ "${BUILD_ARM_AGENT}" = "1" ]; then \
+        dpkg --add-architecture arm64 \
+        && apt-get update \
+        && apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross libpcap-dev:arm64 \
+        && echo "==> aarch64 toolchain ready" \
+    || { echo "WARN: aarch64 toolchain install failed - linux/arm64 agent will be skipped"; }; \
+    else \
+        echo "==> BUILD_ARM_AGENT=0 - skipping aarch64 toolchain (linux/arm64 unavailable in this image)"; \
+    fi
+
+COPY . .
+
+# 前端产物嵌入 gt-mcp（//go:embed cmd/gt-mcp/webui）。.dockerignore 已把
+# 本地 webui 产物挡在上下文外（目录里只有 .gitkeep），node 阶段产物是唯一
+# 来源——镜像内前端永远与本次构建的源码同步，不残留陈旧 hash 产物。
+COPY --from=webui /src/dist ./cmd/gt-mcp/webui/
+
+# Go 构建缓存挂载：层缓存失效（源码 / VERSION 等构建参数变化、no_cache）时
+# 仍走增量编译，只重编受影响的包。注意 GOMODCACHE(/go/pkg/mod) 故意不用缓存
+# 挂载——runtime 阶段要 COPY --from=builder 引用它给插件现场编译，模块缓存
+# 必须留在镜像层里（GOCACHE 则不需要进镜像）。
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 \
+	go build -tags pcap -trimpath \
+	-ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
+	-o /out/gt-pipeline ./cmd/gt-pipeline \
+	&& CGO_ENABLED=1 \
+	go build -tags pcap -trimpath \
+	-ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
+	-o /out/gt-mcp ./cmd/gt-mcp \
+	&& CGO_ENABLED=0 \
+	go build -trimpath \
+	-ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
+	-o /out/gt-singbox-agent ./cmd/gt-singbox-agent
+
+# 远程探针（gt-agent）预置产物：/download/agent 按 /opt/gametrace/agents 目录
+# 扫描平台下发（见 agent_download.go）。命名与 availableAgentPlatforms 对齐：
+#   - gt-agent-linux-amd64：cgo+pcap 原生编译（libpcap-dev 已装）；
+#   - gt-agent-linux-arm64：cgo+pcap aarch64 交叉编译（BUILD_ARM_AGENT=1 时，
+#     gcc-aarch64-linux-gnu + libpcap-dev:arm64），树莓派/ARM 服务器用；
+#   - gt-agent-windows-{amd64,arm64}.exe：gopacket/pcap 在 Windows 纯 Go（运行时
+#     加载 wpcap.dll），CGO_ENABLED=0 交叉编译，无需 mingw/Npcap SDK；
+#   - gt-agent-darwin-{amd64,arm64}：osxcross 交叉编译（BUILD_DARWIN_AGENT=1 时），
+#     运行时用 macOS 系统自带 libpcap。
+# darwin/arm64 交叉编译失败只 WARN 不中断（镜像退化为不带对应平台，下载页如实标不可用）。
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    set -e; \
+    CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+        go build -tags pcap -trimpath \
+        -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
+        -o /out/agents/gt-agent-linux-amd64 ./cmd/gt-agent; \
+    if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then \
+        echo "==> cross-compile linux/arm64 (aarch64)"; \
+        CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
+            go build -tags pcap -trimpath \
+            -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
+            -o /out/agents/gt-agent-linux-arm64 ./cmd/gt-agent \
+            || echo "WARN: linux/arm64 build failed - skipped"; \
+    else \
+        echo "==> no aarch64 gcc - linux/arm64 agent skipped"; \
+    fi; \
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+        go build -tags pcap -trimpath \
+        -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
+        -o /out/agents/gt-agent-windows-amd64.exe ./cmd/gt-agent; \
+    CGO_ENABLED=0 GOOS=windows GOARCH=arm64 \
+        go build -tags pcap -trimpath \
+        -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
+        -o /out/agents/gt-agent-windows-arm64.exe ./cmd/gt-agent; \
+    if [ -x /osxcross/target/bin/o64-clang ]; then \
+        export PATH="/osxcross/target/bin:${PATH}"; \
+        export MACOSX_DEPLOYMENT_TARGET=11.0; \
+        echo "==> cross-compile darwin/amd64 (osxcross)"; \
+        CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 CC=o64-clang \
+            go build -tags pcap -trimpath \
+            -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
+            -o /out/agents/gt-agent-darwin-amd64 ./cmd/gt-agent \
+            || echo "WARN: darwin/amd64 build failed - skipped"; \
+        echo "==> cross-compile darwin/arm64 (osxcross)"; \
+        CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 CC=oa64-clang \
+            go build -tags pcap -trimpath \
+            -ldflags "-s -w -X gametrace/pkg/version.Version=${VERSION} -X gametrace/pkg/version.Commit=${GIT_COMMIT} -X gametrace/pkg/version.BuildTime=${BUILD_TIME}" \
+            -o /out/agents/gt-agent-darwin-arm64 ./cmd/gt-agent \
+            || echo "WARN: darwin/arm64 build failed - skipped"; \
+    else \
+        echo "==> osxcross not installed - darwin agents skipped"; \
+    fi
+
+# ============================================================================
+# 阶段 2：runtime
+# ============================================================================
+FROM debian:bookworm-slim
+
+# slim 镜像默认不带 ca-certificates，但 apt 会尝试 HTTPS 访问镜像源 →
+# TLS 验证失败会连累包列表为空。必须先用默认源（HTTP，deb.debian.org）装
+# ca-certificates，再切到镜像源装其余依赖。
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends ca-certificates \
+	&& rm -rf /var/lib/apt/lists/*
+
+# 同 builder：apt 换源（ARG 不跨阶段，需重新声明）。
+ARG APT_MIRROR=mirrors.tencent.com
+RUN sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources
+
+# libpcap0.8：gopacket/pcap（cgo）的运行时共享库。
+# gcc/libc6-dev/libpcap-dev：「现场编译」远程探针（agent_build.go）走 cgo -tags pcap，
+# 编译期需要 gcc 与 libpcap 头文件——key 保留它们，平台没有预置产物时可现场补齐。
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends libpcap0.8 gcc libc6-dev libpcap-dev \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& useradd --system --create-home --home-dir /data gametrace \
+	&& chown -R gametrace:gametrace /data
+
+COPY --from=builder /out/gt-pipeline /usr/local/bin/gt-pipeline
+COPY --from=builder /out/gt-mcp /usr/local/bin/gt-mcp
+COPY --from=builder /out/gt-singbox-agent /usr/local/bin/gt-singbox-agent
+RUN chmod +x /usr/local/bin/gt-singbox-agent
+
+# 远程探针预置产物（镜像内建，见 builder 阶段）：/download/agent 按此目录扫可用平台
+# （cmd/gt-mcp/agentBinDir 的 GT_AGENT_BIN_DIR 默认指向这里）。
+# linux/amd64、windows/amd64 与 darwin 两架构默认全部烧入（darwin 经 osxcross；
+# BUILD_DARWIN_AGENT=0 或 osxcross 安装/编译失败时缺 darwin → 下载页如实标不可用）。
+COPY --from=builder /out/agents/. /opt/gametrace/agents/
+RUN chown -R gametrace:gametrace /opt/gametrace/agents
+
+# == 远程探针现场编译：runtime 保留 Go 工具链 + 模块缓存（构建缓存落 /data，
+#    gametrace 可写 HOME）。cmd/gt-mcp/agent_build.go 另需 gcc/libpcap-dev（上方 apt）
+#    与仓库源码（下方 COPY /src，agentSrcDir 的 GT_AGENT_SRC_DIR 指向这里）。
+COPY --from=builder /usr/local/go /usr/local/go
+COPY --from=builder /go/pkg/mod /go/pkg/mod
+# 现场编译远程探针的源码根（含 go.mod 与 cmd/gt-agent；只读，编译产物写 GT_AGENT_BIN_DIR）。
+# 顺带携带 skills/（每个 <skills>/<skill>/SKILL.md 一个条目）：gt-mcp 的 get_capabilities
+# 从这里动态扫描 Skill Catalog 暴露给 AI agent（可用 GT_SKILLS_DIR 另指技能目录）。
+COPY --from=builder /src /src
+
+ENV PATH=/usr/local/go/bin:${PATH} \
+	# 本地模块缓存：复用镜像内置缓存，避免插件编译时再访问网络
+	GOPATH=/go \
+	GOMODCACHE=/go/pkg/mod \
+	# Go 构建缓存落数据卷（gametrace 可写 HOME）；GOTOOLCHAIN=local 防止自动下载更高版本 Go
+	GOCACHE=/data/.cache/go-build \
+	GOTOOLCHAIN=local \
+	GOPROXY=https://goproxy.cn,direct \
+	GOSUMDB=sum.golang.google.cn \
+	# 远程 agent 预置产物目录（镜像内建，见下方 COPY）：agentBinDir() 优先读此
+	# 变量，否则回退到 WORKDIR(/data) 下的 ./build/agents。
+	GT_AGENT_BIN_DIR=/opt/gametrace/agents \
+	# 现场编译远程探针的源码根（agent_build.go 的 agentSrcDir 优先读此）。
+	GT_AGENT_SRC_DIR=/src
+
+# 远程 agent 预置产物目录（镜像内建）：gt-mcp 的 GT_AGENT_BIN_DIR 默认指向这里
+# （见 agentBinDir），agent 下载按此目录扫可用平台。需要额外平台（如 darwin）时，
+# 可用 GT_AGENT_BIN_DIR 环境变量另指一个含补充产物的目录。
+
+RUN chown -R gametrace:gametrace /go
+
+# 统一配置（T10）：工作目录落 /data（卷挂载点），所有地址可用 GT_* 环境变量覆盖。
+# WORKDIR 一并设为 /data：任何相对路径（含 flag 默认值 "." / "plugins"）都锚在数据卷上，
+# 不会掉进容器根目录 / 导致非 root 用户写文件失败（unable to open database file）。
+ENV GT_HOME=/data
+WORKDIR /data
+VOLUME ["/data"]
+
+# 9888 CaptureControl | 9091 PluginRegistry | 9092 AgentIngest | 8781 MCP HTTP/SSE + Web UI
+EXPOSE 9888 9091 9092 8781
+
+# 默认跑 pipeline；gt-mcp 用法见 docker-compose.yml（覆盖 entrypoint）。
+# 非 root 运行：useradd --create-home 已建 /data 并归 gametrace 所有（T15 评审修复）。
+USER gametrace
+ENTRYPOINT ["/usr/local/bin/gt-pipeline"]

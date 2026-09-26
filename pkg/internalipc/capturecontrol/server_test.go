@@ -1,0 +1,313 @@
+package capturecontrol
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	pb "gametrace/pkg/internalipc/proto"
+)
+
+// fakeEngine 是测试用 CaptureEngine 桩实现。
+type fakeEngine struct {
+	startResult   StartSessionResult
+	startErr      error
+	startLastReq  StartSessionRequest
+	stopResult    StopSessionResult
+	stopErr       error
+	statusResult  StatusResult
+	statusErr     error
+	listSessions  []SessionSummary
+	listSessErr   error
+	decodeResult  DecodeRawPacketsResult
+	decodeErr     error
+	decodeLastReq DecodeRawPacketsRequest
+
+	verifyResult  VerifyResult
+	verifyErr     error
+	verifyLastReq VerifyRequest
+	sampleResult  SampleBytesResult
+	sampleErr     error
+	sampleLastReq SampleBytesRequest
+
+	// failures 预设 ListRegisterFailures 返回的注册失败记录。
+	failures []RegisterFailure
+}
+
+func (f *fakeEngine) StartSession(ctx context.Context, req StartSessionRequest) (StartSessionResult, error) {
+	f.startLastReq = req
+	return f.startResult, f.startErr
+}
+func (f *fakeEngine) StopSession(ctx context.Context, sessionID string) (StopSessionResult, error) {
+	return f.stopResult, f.stopErr
+}
+func (f *fakeEngine) GetStatus(ctx context.Context, sessionID string) (StatusResult, error) {
+	return f.statusResult, f.statusErr
+}
+func (f *fakeEngine) ListSessions(ctx context.Context) ([]SessionSummary, error) {
+	return f.listSessions, f.listSessErr
+}
+func (f *fakeEngine) DecodeRawPackets(ctx context.Context, req DecodeRawPacketsRequest) (DecodeRawPacketsResult, error) {
+	f.decodeLastReq = req
+	return f.decodeResult, f.decodeErr
+}
+func (f *fakeEngine) TestPlugin(ctx context.Context, req TestPluginRequest) (TestPluginResult, error) {
+	return TestPluginResult{}, nil
+}
+func (f *fakeEngine) Verify(ctx context.Context, req VerifyRequest) (VerifyResult, error) {
+	f.verifyLastReq = req
+	return f.verifyResult, f.verifyErr
+}
+func (f *fakeEngine) SampleBytes(ctx context.Context, req SampleBytesRequest) (SampleBytesResult, error) {
+	f.sampleLastReq = req
+	return f.sampleResult, f.sampleErr
+}
+func (f *fakeEngine) SetSessionPlugin(ctx context.Context, sessionID, plugin string, pluginOwners []string) (string, error) {
+	return plugin, nil
+}
+func (f *fakeEngine) SubscribePlugins(ctx context.Context) (<-chan PluginEvent, error) {
+	return nil, nil
+}
+func (f *fakeEngine) DeregisterPlugin(ctx context.Context, instanceID, name string) (string, error) {
+	return instanceID, nil
+}
+func (f *fakeEngine) ListPlugins(ctx context.Context) ([]PluginSummary, error) {
+	return nil, nil
+}
+func (f *fakeEngine) GetPluginManifest(ctx context.Context, name string) ([]byte, error) {
+	return nil, nil
+}
+func (f *fakeEngine) GetRegistryAddr(ctx context.Context) (string, error) {
+	return ":9091", nil
+}
+
+func (f *fakeEngine) ListRegisterFailures(ctx context.Context) ([]RegisterFailure, error) {
+	return f.failures, nil
+}
+
+func (f *fakeEngine) CreateProxyLease(ctx context.Context, req CreateProxyLeaseRequest) (ProxyLease, error) {
+	return ProxyLease{LeaseID: "lease-1", SessionID: "lease-1"}, nil
+}
+
+func (f *fakeEngine) ListProxyLeases(ctx context.Context) ([]ProxyLease, error) {
+	return nil, nil
+}
+
+func (f *fakeEngine) GetProxyLease(ctx context.Context, leaseID string) (ProxyLease, error) {
+	return ProxyLease{}, nil
+}
+
+func (f *fakeEngine) ReleaseProxyLease(ctx context.Context, leaseID string) (ReleaseProxyLeaseResult, error) {
+	return ReleaseProxyLeaseResult{OK: true}, nil
+}
+
+func (f *fakeEngine) StartLeaseCapture(ctx context.Context, req StartLeaseCaptureRequest) (StartLeaseCaptureResult, error) {
+	return StartLeaseCaptureResult{OK: true, SessionID: "cap-1", Lease: ProxyLease{LeaseID: "lease-1", SessionID: "cap-1"}}, nil
+}
+
+func (f *fakeEngine) StopLeaseCapture(ctx context.Context, leaseID string) (StopLeaseCaptureResult, error) {
+	return StopLeaseCaptureResult{OK: true, SessionID: "cap-1"}, nil
+}
+
+func TestServer_StartCapture(t *testing.T) {
+	engine := &fakeEngine{
+		startResult: StartSessionResult{SessionID: "s1", State: "Running", DBPath: "/tmp/s1.db"},
+	}
+	srv := NewServer(engine)
+	resp, err := srv.StartCapture(context.Background(), &pb.StartCaptureRequest{
+		SessionId: "s1",
+		Plugin:    "tcp",
+		Port:      8080,
+		Source: &pb.StartCaptureRequest_File{
+			File: &pb.PcapFileConfig{Path: "test.pcap"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetSessionId() != "s1" || resp.GetState() != "Running" || resp.GetDbPath() != "/tmp/s1.db" {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+}
+
+func TestServer_StopCapture(t *testing.T) {
+	engine := &fakeEngine{
+		stopResult: StopSessionResult{State: "Closed", RawPackets: 10, Events: 8},
+	}
+	srv := NewServer(engine)
+	resp, err := srv.StopCapture(context.Background(), &pb.StopCaptureRequest{SessionId: "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetState() != "Closed" || resp.GetRawPackets() != 10 || resp.GetEvents() != 8 {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+}
+
+func TestServer_GetCaptureStatus(t *testing.T) {
+	engine := &fakeEngine{
+		statusResult: StatusResult{State: "Running", RawCount: 5, EventCount: 3},
+	}
+	srv := NewServer(engine)
+	resp, err := srv.GetCaptureStatus(context.Background(), &pb.GetCaptureStatusRequest{SessionId: "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetState() != "Running" || resp.GetRawCount() != 5 || resp.GetEventCount() != 3 {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+}
+
+func TestServer_ListCaptureSessions(t *testing.T) {
+	engine := &fakeEngine{
+		listSessions: []SessionSummary{
+			{SessionID: "s1", State: "running", SourceName: "pcap-live", Port: 8080, Plugin: "tcp"},
+			{SessionID: "s2", State: "running", SourceName: "pcap-file", Port: 9090, Plugin: "http"},
+		},
+	}
+	srv := NewServer(engine)
+	resp, err := srv.ListCaptureSessions(context.Background(), &pb.ListCaptureSessionsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.GetSessions()) != 2 {
+		t.Fatalf("got %d sessions, want 2", len(resp.GetSessions()))
+	}
+	first := resp.GetSessions()[0]
+	if first.GetSessionId() != "s1" || first.GetState() != "running" || first.GetPort() != 8080 {
+		t.Errorf("unexpected first session: %+v", first)
+	}
+}
+
+func TestServer_DecodeRawPackets(t *testing.T) {
+	engine := &fakeEngine{
+		decodeResult: DecodeRawPacketsResult{TotalRaw: 100, Decoded: 80, DecodeErrors: 20},
+	}
+	srv := NewServer(engine)
+	resp, err := srv.DecodeRawPackets(context.Background(), &pb.DecodeRawPacketsRequest{
+		SessionId:     "s1",
+		Plugin:        "http",
+		Protocol:      "tcp",
+		Src:           "1.2.3.4",
+		Dst:           "5.6.7.8",
+		Limit:         50,
+		ClearExisting: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetTotalRaw() != 100 || resp.GetDecoded() != 80 || resp.GetDecodeErrors() != 20 {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+	// 验证请求参数被正确转换到 CaptureEngine 调用
+	if engine.decodeLastReq.SessionID != "s1" || engine.decodeLastReq.Plugin != "http" {
+		t.Errorf("unexpected session/plugin: %+v", engine.decodeLastReq)
+	}
+	if engine.decodeLastReq.Protocol != "tcp" || engine.decodeLastReq.Src != "1.2.3.4" || engine.decodeLastReq.Dst != "5.6.7.8" {
+		t.Errorf("unexpected filters: %+v", engine.decodeLastReq)
+	}
+	if engine.decodeLastReq.Limit != 50 || !engine.decodeLastReq.ClearExisting {
+		t.Errorf("unexpected limit/clear_existing: %+v", engine.decodeLastReq)
+	}
+}
+
+// TestServer_StartCaptureMobile 验证 mobile source 配置正确映射到 CaptureEngine。
+func TestServer_StartCaptureMobile(t *testing.T) {
+	engine := &fakeEngine{
+		startResult: StartSessionResult{SessionID: "m1", State: "Running", DBPath: "/tmp/m1.db"},
+	}
+	srv := NewServer(engine)
+	resp, err := srv.StartCapture(context.Background(), &pb.StartCaptureRequest{
+		SessionId: "m1",
+		Plugin:    "game",
+		Source: &pb.StartCaptureRequest_Mobile{
+			Mobile: &pb.MobileSourceConfig{
+				ListenAddr: "127.0.0.1:9090",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetSessionId() != "m1" {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+	m := engine.startLastReq.Mobile
+	if m == nil {
+		t.Fatalf("expected mobile config, got nil")
+	}
+	if m.ListenAddr != "127.0.0.1:9090" {
+		t.Errorf("unexpected mobile config: %+v", m)
+	}
+}
+
+// TestServer_StartCaptureMapsCheckRulesAndOwners 验证 gRPC StartCapture 把
+// check_rules_json 解码进 StartSessionRequest.CheckRules，并（回归）把 plugin_owners
+// 一并透传——曾经此处漏映射 PluginOwners，导致项目共享插件按名解析失败。
+func TestServer_StartCaptureMapsCheckRulesAndOwners(t *testing.T) {
+	engine := &fakeEngine{
+		startResult: StartSessionResult{SessionID: "s1", State: "Running", DBPath: "/tmp/s1.db"},
+	}
+	srv := NewServer(engine)
+	ruleJSON := `{"id":"r1","name":"login","enabled":true,"when":{"path":"type","op":"eq","value":"login"},"context_per_direction":5}`
+	_, err := srv.StartCapture(context.Background(), &pb.StartCaptureRequest{
+		SessionId:      "s1",
+		Plugin:         "tcp",
+		PluginOwners:   []string{"alice", "bob"},
+		CheckRulesJson: []string{ruleJSON, "{bad json"},
+		Source:         &pb.StartCaptureRequest_File{File: &pb.PcapFileConfig{Path: "test.pcap"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// PluginOwners 回归：必须透传。
+	if got := engine.startLastReq.PluginOwners; len(got) != 2 || got[0] != "alice" || got[1] != "bob" {
+		t.Fatalf("PluginOwners not mapped: %v", got)
+	}
+	// CheckRules：好条目解码，坏条目跳过。
+	rules := engine.startLastReq.CheckRules
+	if len(rules) != 1 {
+		t.Fatalf("CheckRules len = %d, want 1 (bad entry skipped)", len(rules))
+	}
+	if rules[0].ID != "r1" || rules[0].ContextPerDirection != 5 {
+		t.Fatalf("decoded rule wrong: %+v", rules[0])
+	}
+	if string(rules[0].When.Path) != "type" || string(rules[0].When.Op) != "eq" {
+		t.Fatalf("rule when not decoded: %+v", rules[0].When)
+	}
+}
+
+// TestServer_StartCaptureNoCheckRulesMeansEmpty 守住零规则时不注入任何规则。
+func TestServer_StartCaptureNoCheckRulesMeansEmpty(t *testing.T) {
+	engine := &fakeEngine{startResult: StartSessionResult{SessionID: "s1"}}
+	srv := NewServer(engine)
+	if _, err := srv.StartCapture(context.Background(), &pb.StartCaptureRequest{
+		SessionId: "s1", Plugin: "tcp",
+		Source: &pb.StartCaptureRequest_File{File: &pb.PcapFileConfig{Path: "x.pcap"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(engine.startLastReq.CheckRules) != 0 {
+		t.Fatalf("expected no check rules, got %+v", engine.startLastReq.CheckRules)
+	}
+}
+
+func TestListPluginsIncludesRegisterFailures(t *testing.T) {
+	ts := time.Now()
+	s := NewServer(&fakeEngine{failures: []RegisterFailure{{
+		Name: "my-plug", Error: "connection refused", Owner: "alice", Timestamp: ts,
+	}}})
+	resp, err := s.ListPlugins(context.Background(), &pb.ListPluginsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := resp.GetRecentFailures()
+	if len(fs) != 1 {
+		t.Fatalf("want 1 recent failure, got %d", len(fs))
+	}
+	if fs[0].GetName() != "my-plug" ||
+		fs[0].GetError() != "connection refused" || fs[0].GetOwner() != "alice" ||
+		fs[0].GetTimestampUnix() != ts.Unix() {
+		t.Errorf("failure mapping mismatch: %+v", fs[0])
+	}
+}

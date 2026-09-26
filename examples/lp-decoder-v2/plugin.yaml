@@ -1,0 +1,38 @@
+api_version: gt.decoder/v2
+name: lp-decoder-v2
+protocol: lp
+protocol_version: "1"
+type: decoder
+transports:
+  - tcp
+hints:
+  - tcp
+  - magic:0x4c
+
+contract:
+  name: gta.plugin
+  version: 1
+
+capabilities:
+  decode: true
+
+semantic_rules:
+  - id: lp.name.cmd
+    when:
+      - path: cmd_name
+        op: exists
+    effect:
+      type: name
+      key: cmd_name
+  - id: lp.annotate.error
+    when:
+      - path: error_code
+        op: gt
+        value: 0
+    effect:
+      type: annotate
+      semantic: error
+
+meta:
+  author: local
+  description: Decoder for the examples/lp length-prefixed template protocol (per-frame width/endianness)

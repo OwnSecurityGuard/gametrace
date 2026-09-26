@@ -1,0 +1,690 @@
+# GameTrace 插件开发指南 (v2)
+
+> 本文档基于 SDK 中的 `contract/contract.yaml`（**SSOT，单一事实来源**）派生，面向插件开发者。
+> 阅读顺序建议：**先看契约 → 再看本指南 → 复用 `framing` 包**。
+> 契约中与剥头/重组相关的规则为 `payload-framing-by-link-type`(error)、`link-type-selects-framing`(error)、`inspect-bytes-first`(error)、`tcp-reassembly-required`(warn)，下文均围绕它们展开。
+
+---
+
+## 1. 概念模型
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        gt-pipeline                          │
+│                                                             │
+│  ┌──────────────┐   Register RPC + Connect 双向流（出站）    │
+│  │  Registry    │ ◄──────────────────────────────────────┐  │
+│  │  Server      │   插件自行拨号 TCP :9091，平台只观察    │  │
+│  │  (TCP :9091) │                                        │  │
+│  └──────────────┘   解码帧复用同一条 Connect 隧道         │  │
+│        ▲            （平台不启动、不回调插件进程）        │  │
+│        │  ◄──────────────────────────────  插件进程 A     │  │
+│        │                                （http 插件）     │  │
+│        │  ◄──────────────────────────────  插件进程 B     │  │
+│        │                                （dhcp 插件）     │  │
+└──────────────────────────────────────────────────────────┘
+```
+
+**关键术语：**
+
+| 术语 | 说明 |
+|------|------|
+| `api_version` | 契约版本，固定为 `gt.decoder/v2` |
+| `protocol` | 协议名称（slug），如 `http`、`dhcp` |
+| `protocol_version` | 协议版本，如 `1` |
+| `type` | 插件类型：`decoder`（数据解码） |
+| `hints` | 协议识别提示，字符串列表 |
+| `event` | 输出事件名，与插件 manifest 的事件/`semantic_rules` 声明对齐 |
+| `registry_addr` | 插件与注册中心通信的端点 |
+
+---
+
+## 2. 三步开发流程
+
+### 步骤 1：创建项目骨架（在你自己的 workspace 里）
+
+MCP 工具 `scaffold_plugin` **只渲染模板内容并返回，不在平台落盘**：平台不保存插件源码，
+源码永远在你的机器上（Agent workspace / 本地仓库）。
+
+```json
+{
+  "name": "my-http",
+  "protocol": "http",
+  "protocol_version": "1",
+  "hints": "tcp,dns"
+}
+```
+
+返回 `{template, files, contents, sdk_version, framing_available}`：把 `contents` 里每个 key
+作为相对路径写进你自己的插件目录，就得到：
+
+```
+<你的插件目录>/
+├── plugin.yaml          # Manifest 配置文件
+├── main.go              # 插件入口
+└── go.mod               # 模块定义（仅 require github.com/OwnSecurityGuard/gametrace/sdk）
+```
+
+`decode.go` / 解析器 / 单测 / `.env` / `.gitignore` 都由你自行补齐。构建也在本机完成
+（`go build`）——**平台不编译、不拉起插件进程**。
+
+### 步骤 2：实现 Decode 函数（这是最容易写错的一步）
+
+插件的核心是 `DecodeFuncV2` 回调（DecodeV2 双向流接口），接收原始字节并通过 stream 回传解码事件：
+
+```go
+package main
+
+import (
+	"github.com/OwnSecurityGuard/gametrace/sdk"
+	"github.com/OwnSecurityGuard/gametrace/sdk/framing"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
+)
+
+// ra 在插件进程内只创建一次，跨所有会话/包复用。
+var ra = framing.NewReassembler()
+
+func decode(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error {
+	// ⚠️ req.GetPayload() 是【完整链路层帧】，不是 L7！
+	//    必须按 link_type 剥头，再按流做 TCP 重组，才能拿到业务字节。
+	seg, ok := framing.ExtractL7(req.GetPayload(), req.GetLinkType())
+	if !ok || len(seg.Payload) == 0 {
+		// 非 IP 流量 / 纯 ACK / 握手 / FIN：无业务数据，直接 done。
+		return stream.Send(&pb.DecodeResponseV2{InputId: req.GetInputId(), Done: true})
+	}
+
+	s := ra.Push(seg)
+	for {
+		raw := s.Bytes()
+		msg, n := parseOneHTTPMessage(raw) // 你的协议解析逻辑
+		if n == 0 {
+			break // 不完整：等下一个 segment
+		}
+		s.Consume(n)
+		if err := emitEvent(stream, req.GetInputId(), msg); err != nil {
+			return err
+		}
+	}
+	return stream.Send(&pb.DecodeResponseV2{InputId: req.GetInputId(), Done: true})
+}
+
+func main() {
+	sdk.RunRegisterLoop(decode)
+}
+```
+
+> **千万不要**把 `req.GetPayload()` 当 HTTP/TCP 报文正文直接解析。pcap 类来源（回环、以太网、RawIP 等）交付的是**带链路层头的完整帧**，直接按 L7 解析会得到 0 事件（详见 §7 排查手册）。只有 `ProxyPayload`(1001) / `TLSPlaintext`(1002) 两种 link_type 才是已剥好的纯 L7。
+
+### 步骤 3：在本机构建并启动，然后告知平台
+
+构建与启动都由你完成（平台不编译、不拉起插件进程）：
+
+```bash
+cd <你的插件目录>
+go build -o my-http-plugin .
+
+# 用 get_registry_addr / get_plugin_env 拿到【对外可达】的 registry 地址与属主 token
+export GT_REGISTRY_ADDR=<get_registry_addr 返回值>
+export GT_TUNNEL=1
+export GT_AUTH_TOKEN=<get_plugin_env 的 notes 里给出的属主 token>
+./my-http-plugin
+# 插件会自动：
+# 1. 读取 plugin.yaml 中的 manifest
+# 2. 按 GT_REGISTRY_ADDR 连接注册中心
+# 3. 注册为 Decoder 插件（拿到 instance_id）
+# 4. 打开 Connect 双向流 + 启动心跳循环
+```
+
+插件跑起来后，用 `connect_plugin(name=...)` 让平台确认它已注册上来：结论只有
+`status=ready|failed`，`failed` 时看 `stage`（断点 `auth|connection|manifest`）+ `reason` + `next`。
+
+---
+
+## 3. plugin.yaml Manifest 详解
+
+### 必填字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `api_version` | string | 固定为 `gt.decoder/v2` |
+| `name` | string | 插件唯一标识，建议格式 `{author}-{protocol}` |
+| `protocol` | string | 协议名称，slug 格式（小写字母/数字/连字符） |
+| `type` | string | 固定为 `decoder` |
+
+### 可选字段
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `protocol_version` | string | `"1"` | 协议版本 |
+| `hints` | string 列表 | 空 | 协议识别提示词列表，如 `["tcp", "dns"]` |
+| `event` | string | 同 `protocol` | 输出事件名 |
+| `meta` | map | 空 | 附加元数据 |
+
+### 示例
+
+```yaml
+api_version: gt.decoder/v2
+name: gt-http
+protocol: http
+protocol_version: "1"
+type: decoder
+hints:
+  - tcp
+  - dns
+event: http
+meta:
+  author: gt-team
+  description: HTTP protocol decoder
+```
+
+### 3.1 语义契约声明（Semantic Contract v1，一层）
+
+> 宿主在**插件注册时**会跑语义声明校验，error 级违规直接拒绝注册。
+> 完整规范见 SDK `docs/plugin-semantic-contract-v1.md`。
+
+manifest 在基础字段之外可声明语义契约。`contract:` 块声明契约版本，语义由 `semantic_rules` 声明：
+
+```yaml
+api_version: gt.decoder/v2
+name: game-decoder
+protocol: game
+type: decoder
+
+contract:
+  name: gta.plugin
+  version: 1
+
+capabilities:
+  decode: true
+
+semantic_rules:
+  - id: game.name_msg
+    when:
+      - path: msg_type
+        op: exists
+    effect:
+      type: name
+      key: msg_type
+```
+
+要点：
+
+| 层 | 声明段 | 作用 | 运行期载体 |
+|----|--------|------|-----------|
+| Semantic | `semantic_rules[]` | name/annotate/pair 规则 | `meta` / `trace`（`correlation_id`+`causation_id`） |
+
+- `event_type` 不得使用保留前缀 `gametrace.`。
+- 规则求值结果注入 `_meta`，宿主按 `_meta.*` 路径消费；事件业务 payload、Meta、Analysis 三段严格分离。
+- **request/response 不需要 annotate 规则**：事件没有角色标签时宿主按方向补标
+  （client_to_server→request、server_to_client→response）；`annotate` 用于覆盖
+  （推送→notification）或追加状态（失败回包→error，与默认角色并存）。
+
+---
+
+## 4. Decode RPC 契约 (v2)
+
+### 通信方式
+
+- **传输层**：Unix Domain Socket（Unix）、Named Pipe（Windows）或 TCP（跨机器）
+- **RPC 框架**：gRPC 双向流（DecodeV2）
+- **端点发现**：`GT_REGISTRY_ADDR` 环境变量 > `--registry=` flag > SDK 默认 `:9091`（与 SDK `ResolveRegistryAddr` 一致；显式设置可避免连到非预期地址）
+
+### DecodeRequest
+
+```protobuf
+message DecodeRequest {
+  string session_id   = 1;  // 会话 ID
+  string protocol_hint = 2; // 协议提示（如 "http"）
+  bytes  payload      = 3;  // 【完整链路层帧】，含 L2/L3/L4 头，未剥头！
+  int32  link_type    = 4;  // DLT，决定如何剥头（见 §5）
+  string input_id     = 5;  // 本次解码输入唯一标识，复用 packet_id
+  string packet_id    = 6;  // 原始抓包 ID
+  string flow_id      = 7;  // 五元组流 ID
+  string src          = 8;  // "ip:port"
+  string dst          = 9;  // "ip:port"
+  string direction    = 10; // 方向（pipeline 推断，可经 _meta.direction 覆盖）
+  int64  timestamp_ns = 11; // 包时间戳（Unix ns）
+}
+```
+
+### DecodeResponseV2
+
+```protobuf
+message DecodeResponseV2 {
+  string input_id           = 1; // 对应 DecodeRequest.input_id
+  bool   done               = 2; // true = 该 input_id 结果已全部发完
+  string event_type         = 3; // 事件类型，done=true 时为空
+  bytes  payload_msgpack    = 5; // MsgPack 编码的 event.Value（纯业务载荷）
+  string error              = 6; // 错误信息（设置后代表解码失败）
+  string correlation_key    = 7; // 业务关联键
+  string causation_input_id = 8; // 指向导致本结果的 input_id
+  bytes  meta_msgpack       = 9; // 可选：MsgPack 编码的 Meta Value（direction/msg_name/role/is_push 等元信息）
+  bytes  analysis_msgpack   = 10;// 可选：MsgPack 编码的 Analysis Value（_state_changes/entity 等分析数据）
+}
+```
+
+### 事件编码约定（v2：Payload ≠ Meta ≠ Analysis，三段分离）
+
+> 这是 v0.8.0 之后最重要的模型约束：**Payload（业务数据）、Meta（元信息）、Analysis（分析数据）从模型层强制分离**，
+> 不要再把平台推导的东西（`_meta`、`_state_changes` 等）塞回业务 payload。前端/MCP/分析全部依赖这个分离。
+
+v2 **不再使用** `data`/`_fields` 顶层 JSON。插件通过 `event.Draft` 构造事件，宿主负责补齐身份（EventID/SessionID/Timestamp 等）：
+
+| 字段 | 含义 | 传输载体 |
+|------|------|----------|
+| `Value` | 纯业务载荷（根必须是 object），如 `{playerId, x, y}` | `payload_msgpack` |
+| `Meta` | 元信息（可选）：`direction`、`msg_name`、`role`、`is_push` 等系统附加字段 | `meta_msgpack`（`IsNull()` 时不传输） |
+| `Analysis` | 分析数据（可选）：`_state_changes`、`entity`、`entity_type`、`entity_id`、`change_count` 等平台投影所需数据 | `analysis_msgpack`（`IsNull()` 时不传输） |
+| `CorrelationKey` | **业务会话/业务操作**关联键 → `Trace.CorrelationID`。**不是连接标识**：连接身份由宿主派生的 `ConnID` 承担，把 `FlowKey.Canonical()` / `flow_id` 塞在这里是误用 | `correlation_key` |
+| `CausationInputID` | 因果输入 id（请求→响应配对）→ `Trace.CausationID` | `causation_input_id` |
+
+```go
+import "github.com/OwnSecurityGuard/gametrace/sdk/event"
+
+draft := event.Draft{
+		Type:  "http.request",
+		Value: event.ValueFromMap(map[string]any{
+			"method": m.Method,
+			"path":   m.Path,
+			"headers": map[string]any{"host": m.Host},
+		}),
+	Meta: event.ValueFromMap(map[string]any{
+		"direction": "client->server",
+		"msg_name":  "Request",
+		"role":      "request",
+	}),
+	// 不填连接标识（flowID / 五元组）——连接身份归宿主派生的 ConnID；
+	// 这里只填业务会话/操作标识（如 battle_id / txn_id），没有就不填。
+}
+resp, err := draft.ToResponse(inputID) // → *pb.DecodeResponseV2
+```
+
+> 旧插件兼容：宿主在收到不含 `meta_msgpack`/`analysis_msgpack` 的旧响应时，会用保留键
+> （`_meta`、`_state_changes`、`entity*`、`change_count` 等）从扁平 payload 自动拆分兜底。
+> 新插件请直接使用三段分离，不要混用两种写法。
+
+**限制**：每次 `DecodeRequest` 至少回传一个 `{input_id, done:true}` 消息；无业务事件时只回传该空结果（不要静默不回传，否则 pipeline 会一直等待）。
+
+---
+
+## 5. 链路层剥头与 TCP 重组（framing 包）
+
+> 这是 v1 指南最大的坑：旧文档说"payload 已是 L7，不要再剥头"。**那是错的**。下面是正确的做法。
+
+### 5.1 为什么需要 framing
+
+对于**每一个 pcap 类来源**，pipeline 交给插件的 `payload` 都是**完整链路层帧**：
+
+```
+DecodeRequest.payload = 链路层头 + IP + TCP/UDP + 应用字节
+```
+
+pipeline 解析 L2/L3/L4 只是为了填充 `link_type`、`src`、`dst`、`protocol_hint` 等上下文字段，**从不削减 payload 本身**。只有两个代理类 link_type —— `ProxyPayload`(1001) 和 `TLSPlaintext`(1002) —— 才是已经剥好的纯 L7。
+
+因此每个解码器在开始解析业务字段前都需要两件与协议无关、且极易写错的事：
+1. **按 `link_type` 剥封装**（链路/网络/传输头）。
+2. **按流做 TCP 重组**，让跨多个报文的应用消息完整可用。
+
+这两件事全部由 SDK 的 `framing` 包代劳，插件**不要**自己手写 `payload[14:]` 之类的偏移。
+
+### 5.2 `framing.ExtractL7` —— 按 link_type 剥头
+
+```go
+seg, ok := framing.ExtractL7(req.GetPayload(), req.GetLinkType())
+// ok == false: 非 IP 流量（ARP/ICMP）、截断帧或无法识别的 link_type。
+//               属正常情况，回 done=true 即可，不要当作错误。
+// ok == true 且 len(seg.Payload) == 0: 纯 ACK / 握手 / FIN，仍 Push 给重组器以维护流状态。
+// seg.Flow / seg.Seq / seg.Flags / seg.IsTCP 由 ExtractL7 一并填好。
+```
+
+各 link_type 的剥头方式（contract.yaml `payload_framing` 段为权威定义）：
+
+| link_type | 值 | 剥头方式 |
+|-----------|----|----------|
+| `Null`（BSD/Npcap 回环） | 0 | 4 字节 AF_* 头（主机字节序；gopacket 自动探测大小端） |
+| `Ethernet` | 1 | 14 字节以太网头 |
+| `Loop`（OpenBSD 回环） | 108 | 4 字节 AF_* 头（网络字节序） |
+| `LinuxSLL` | 113 | 16 字节 cooked 头 |
+| `Raw` / `RawIP` | 101 / 1000 | 无链路头，按首字节版本选 IPv4/IPv6 |
+| `IEEE80211` | 105 | 802.11 头 |
+| `ProxyPayload` | 1001 | 已是 L7，无需剥头 |
+| `TLSPlaintext` | 1002 | 已是 L7，无需剥头 |
+
+> **回环特别说明**：Npcap 在 Windows 上把本机(127.0.0.1)流量走回环接口，交付的帧带着 4 字节 AF_INET 头（主机字节序 `02 00 00 00`）。手写"跳过 4 字节"在 x86 上能跑，但换架构/OpenBSD 回环（`Loop`，大端）就会出错。`framing.ExtractL7` 用 gopacket 统一处理两种字节序，跨平台安全。
+
+### 5.3 `framing.Reassembler` —— 按流 TCP 重组
+
+```go
+var ra = framing.NewReassembler() // 进程级单例，跨会话复用
+
+func decode(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error {
+	seg, ok := framing.ExtractL7(req.GetPayload(), req.GetLinkType())
+	if !ok || len(seg.Payload) == 0 {
+		return stream.Send(&pb.DecodeResponseV2{InputId: req.GetInputId(), Done: true})
+	}
+	s := ra.Push(seg) // 按 seg.Flow 维护 per-direction 重组缓冲
+	for {
+		raw := s.Bytes()              // 当前已重组好的连续字节
+		msg, n := parseOneMessage(raw) // 业务解析：尽量多解一条完整消息
+		if n == 0 {
+			break                    // 不完整，等下一个 segment
+		}
+		s.Consume(n)                  // 推进重组前沿
+		emitEvent(stream, req.GetInputId(), msg)
+	}
+	return stream.Send(&pb.DecodeResponseV2{InputId: req.GetInputId(), Done: true})
+}
+```
+
+`Reassembler` 处理：乱序到达（缓存于 oob 待缺口补齐）、重传去重、序列号回绕（uint32 模运算）、`FIN`/`RST`（FIN 排干后注销该流，RST 立即清空）。UDP 与代理类输入走"透传"路径（每个报文自包含，不拼接）。
+
+并发安全：Push / Bytes / Consume / Forget / Reset 均 goroutine-safe，但**单条流的解析循环必须顺序执行**——在同一 goroutine 上调用 Bytes→解析→Consume→重复，不要并发读写同一流。
+
+---
+
+## 6. 完整示例：HTTP 流式解码器（v2，正确姿势）
+
+```go
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"net/http"
+
+	"github.com/OwnSecurityGuard/gametrace/sdk"
+	"github.com/OwnSecurityGuard/gametrace/sdk/event"
+	"github.com/OwnSecurityGuard/gametrace/sdk/framing"
+	pb "github.com/OwnSecurityGuard/gametrace/sdk/proto"
+)
+
+var ra = framing.NewReassembler()
+
+func decode(req *pb.DecodeRequest, stream pb.Decoder_DecodeV2Server) error {
+	seg, ok := framing.ExtractL7(req.GetPayload(), req.GetLinkType())
+	if !ok || len(seg.Payload) == 0 {
+		return stream.Send(&pb.DecodeResponseV2{InputId: req.GetInputId(), Done: true})
+	}
+	s := ra.Push(seg)
+	for {
+		raw := s.Bytes()
+		if len(raw) == 0 {
+			break
+		}
+		// 尝试从 TCP 字节流中解析出一条完整 HTTP 消息。
+		msg, n := parseHTTP(raw)
+		if n == 0 {
+			break // 头部/body 还不完整，等下一 segment
+		}
+		s.Consume(n)
+		if err := emitHTTP(stream, req.GetInputId(), msg); err != nil {
+			return err
+		}
+	}
+	return stream.Send(&pb.DecodeResponseV2{InputId: req.GetInputId(), Done: true})
+}
+
+func parseHTTP(raw []byte) (*http.Request, int) {
+	r := bufio.NewReader(bytes.NewReader(raw))
+	req, err := http.ReadRequest(r)
+	if err != nil {
+		return nil, 0 // 不完整
+	}
+	consumed := len(raw) - r.Buffered()
+	return req, consumed
+}
+
+func emitHTTP(stream pb.Decoder_DecodeV2Server, inputID string, r *http.Request) error {
+	draft := event.Draft{
+		Type:  "http.request",
+		Value: event.ValueFromMap(map[string]any{
+			"method": r.Method,
+			"path":   r.URL.Path,
+			"host":   r.Host,
+		}),
+		// 元信息与业务 payload 分离，前端独立展示，不混入业务数据。
+		Meta: event.ValueFromMap(map[string]any{
+			"direction": "client->server",
+			"msg_name":  "Request",
+			"role":      "request",
+			"is_push":   false,
+		}),
+	}
+	resp, err := draft.ToResponse(inputID)
+	if err != nil {
+		return err
+	}
+	return stream.Send(resp)
+}
+
+func main() {
+	sdk.RunRegisterLoop(decode)
+}
+```
+
+---
+
+## 7. 0 事件排查手册（当你解析出 0 个事件时）
+
+0 事件几乎总是同一个根因：**把完整帧当成了 L7**。按以下顺序排查，不要先怀疑自己的协议解析。
+
+1. **先 `sample_bytes_plugin` 看首字节。** 这是契约 `inspect-bytes-first`(error) 要求的首要动作——在任何剥头假设之前，先确认线上到底交付了什么。
+   - 首字节为 `0x45`/`0x46`…（IPv4 版本号 4）：链路头已被剥，是 RawIP 类来源。
+   - 首字节 `0x02 0x00 0x00 0x00`（回环 AF_INET）：带 4 字节回环头的完整帧。
+   - 首字节 `0x45` 但来自以太网：其实前面还应有 14 字节以太头（说明链路头没剥）。
+2. **确认是否用了 `framing.ExtractL7`。** 任何 pcap 来源都必须先 `ExtractL7`；不要手写 `payload[14:]`。只有 `ProxyPayload`/`TLSPlaintext` 才无需剥头。
+3. **TCP 类协议必须接 `Reassembler`。** 典型症状：HTTP body 恒为空、只解到第一条不完整消息、或 `Bytes()` 始终为空（乱序/缺口）。这是 `tcp-reassembly-required`(warn) 直接对应的坑。
+4. **回环流量**最容易踩：127.0.0.1 通信在 Npcap 上走回环接口，帧带 4 字节头。纯 L7 解码器会逐字节错位，整条流解析失败 → 0 事件。
+5. **`test_plugin` / `verify_plugin`** 会把离线会话的原始包喂给你的解码器：`test_plugin` 先告诉你解出了什么（`decoded` / `decode_errors` / `sample_events`），`verify_plugin` 再对照 contract.yaml 规则（含 `payload-framing-by-link-type`/`link-type-selects-framing`）给出 `pass|warn|fail` 判定与证据。0 事件时优先跑这两个。注意两者都是**隔离回放、不落库**（不写 events 表）。
+6. **`explain_plugin`** 对 0 事件给出归因与修复建议（已修正：不再误导"payload 已是 L7"）。
+
+> 踩坑实录：曾有人坚信"payload 已是 L7"（这条经证伪的旧规则原叫 `payload-is-l7`，现行 SSOT 规则为 `payload-framing-by-link-type`(error)：必须按 link_type 剥头），写出纯 L7 解码器，回环帧导致 0 事件，转而用 Python 手剥字节定位，再补 TCP 重组——耗费大量调试 token。正确做法是开发前先读契约，0 事件先 `sample_bytes_plugin`，回环解码器直接内置 `ExtractL7` + `Reassembler`。
+
+---
+
+## 8. 离线 pcap 回放循环（不抓包也能开发/验证）
+
+无需真实网卡，用 `start_capture(pcap_file=..., plugin=...)` 把离线 pcap 灌入 pipeline。这是一个**真实的 capture session**（包落库、带 plugin 时解码落库），所以能直接用 `list_decoded_data` 查真实事件；而 `test_plugin` / `verify_plugin` 是**隔离回放，不写 events 表**。推荐开发闭环：
+
+```
+1. 准备一份真实抓包帧（含链路层头），覆盖回环与以太网两种 link_type。
+2. MCP: start_capture(pcap_file="fixtures/http_loop.pcap", plugin="my-http")  # 离线回放 + 解码落库
+3. MCP: list_decoded_data(session_id=...)                    # 真实落库结果：业务事件 / 消息名 / 配对
+4. MCP: test_plugin(session_id=..., plugin="my-http")        # 不落库：看 decoded / 错误 / sample_events
+5. MCP: verify_plugin(session_id=..., plugin="my-http")      # 不落库：分层结论 applicability / checks / verdict
+6. 看 quality.input.candidate 是多少（分母是它，不是整窗口）+ unknown 比例 / 0 事件 / 重组缺口提示，回到代码修 framing。
+   若 verdict=not_applicable（candidate=0，quality 为 null），说明这个会话没带该插件的流量——换个会话重跑，别改插件。
+7. 反复 2-6，直到 verify 通过、list_decoded_data 能看到业务事件。
+```
+
+> `list_decoded_data` 能看到事件是因为 **start_capture 那个 session 真实解码落库**，不是因为跑过 `verify_plugin`——后者只读回放，不产生事件。第 2 步漏掉 `plugin=` 会导致整条链路没有解码事件（`start_capture` 的 plugin 是可选的，不传就只存原始包）。
+
+要点：
+- fixture 必须**保留链路层头**（契约 `real-fixture-required`）。用 `tcpdump -w` / Wireshark 导出的原始帧即可，不要用已"Follow TCP Stream"导出的纯文本（那已经是 L7，掩盖了剥头问题）。
+- `sample_bytes_plugin` 有上限（默认 20 包 / 64 字节），仅用于"看首字节"，不足以替代完整回放。
+
+---
+
+## 9. 注册与生命周期
+
+### 插件启动流程
+
+平台**统一以隧道模式运行插件**（gt-agent 托管，或你自己在本机启动插件时注入
+`GT_TUNNEL=1`）：插件不监听本地 Decode 端口，注册后在同一条 gRPC 连接上开 `Connect` 双向流，
+解码请求经隧道帧往返，宿主**不回拨**插件。
+
+```
+1. 读取当前目录 plugin.yaml → manifest bytes
+2. 端点发现：GT_REGISTRY_ADDR > --registry= > 默认 :9091
+3. 建立 gRPC 连接到 RegistryServer
+4. 调用 Register RPC（携带 manifest；平台只有隧道一条注册路径）
+5. 注册成功 → 拿到 instance_id
+6. 打开 Connect 流，把 instance_id 放进 metadata → 宿主据此精确绑定该实例
+   （缺 instance_id 或实例未知：宿主直接拒绝建流）
+7. 心跳循环与隧道服务并发运行；隧道断 / 心跳失联任一发生 → 退避重连（1s..30s）
+8. Pipeline 经隧道发 Decode 帧 → 插件处理 → 回帧
+9. 插件异常退出 → 心跳超时或流断 → Registry 自动清理
+```
+
+隧道期间心跳**照发**：TCP 半开时流的 `Recv` 不会报错，心跳是唯一的应用层存活探测。宿主侧
+同样按心跳超时判隧道实例离线，且已死隧道实例的心跳会被拒绝（不会被残留心跳"复活"）。SDK 与
+宿主两端都开了 gRPC keepalive，在传输层兜底探测半开连接。
+
+一条隧道复用多个逻辑流（`stream_id`）；某条流卡住时**只 abort 那一条**，不阻塞整条隧道。
+
+### 环境变量
+
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `GT_REGISTRY_ADDR` | 注册中心地址（env > `--registry=` > 默认 `:9091`；显式设置可避免连到非预期地址） | 见下方说明 |
+| `GT_TUNNEL` | 非空即隧道模式。由**运行方**注入，插件代码只透传不判断 | `1` |
+| `GT_AUTH_TOKEN` | 注册鉴权 Bearer token（`GT_AUTH_TOKENS` 非空时必填；agent 托管下平台自动注入） | `gt_tok_xxx` |
+
+> **隧道插件排障**：注册成功但一直不在线，基本只有两种原因——Connect 没建起来（用旧 SDK
+> 编译，缺 `instance_id`，宿主拒流），或心跳/隧道断连。此时**不要**去排查解码器监听地址：
+> 平台只有隧道一条路径，插件不监听任何端口，解码帧与注册/心跳共用同一条连接。
+
+> **`GT_REGISTRY_ADDR` 的真实取值**：默认 TCP `host:9091`（registry 监听地址），实际值以 MCP 工具
+> `get_registry_addr` / `get_plugin_env` 返回为准，插件不再使用命名管道或 Unix socket 注册。
+>
+> 插件进程运行时的工作目录需包含 `plugin.yaml`。
+
+### 跨机器部署（进程不在同一台机器）
+
+三个进程（gt-pipeline / 插件 / gt-mcp）**不要求共享 workDir**，全部通过显式网络地址互联：
+
+- **插件 → registry（注册 / 心跳 / 隧道帧）**：`GT_REGISTRY_ADDR=host:port`（pipeline 用 `-registry-addr :9091` 监听 TCP）。**这是唯一必需的地址**——解码流量也走这条连接，插件不需要任何可入站端口，因此 NAT / 防火墙 / 容器后面都能直接接入。
+- **gt-mcp → pipeline（控制面）**：gt-pipeline 用 `-control-addr :9888` 监听 TCP，gt-mcp 用 `-pipeline-addr host:port` 连接。
+
+地址支持形式：`host:port`（TCP）、`unix:/path`、`npipe:\\.\pipe\name`、裸路径（按 Unix socket 处理）。
+
+### 退出处理
+
+- **正常退出**：插件进程 exit → 隧道流断 / 连续 30s 无心跳（心跳间隔 10s）→ 自动注销
+- **异常退出**：同理，无需手动 deregister；进程被 kill -9 时由心跳超时与 gRPC keepalive 兜底发现
+- **优雅关闭**：建议捕获 SIGTERM，停止接收新包后退出
+
+---
+
+## 10. 最佳实践
+
+### 10.1 始终 defer recover
+
+`DecodeFuncV2` 外层已由 SDK 的 `DecodeV2` 捕获 panic 并回传 `{error, done:true}`，但业务解析内部仍建议自保：
+
+```go
+func parseOneMessage(raw []byte) (msg any, n int) {
+	defer func() {
+		if r := recover(); r != nil {
+			// 单个 malformed 包不应导致整个插件崩溃
+			msg, n = nil, 0
+		}
+	}()
+	// 你的解析逻辑
+}
+```
+
+### 10.2 不要关闭 pipeline 的流
+
+```go
+// ❌ 错误：不要主动关闭 gRPC 流
+stream.CloseSend()  // 禁止！
+
+// ✅ 正确：只发结果，由 pipeline 控制流生命周期
+```
+
+### 10.3 用 framing 而非手写偏移
+
+```go
+// ❌ 错误：假设永远是以太网 + 假设已剥头
+body := req.Payload[14:]
+
+// ✅ 正确：按 link_type 剥头 + 重组
+seg, ok := framing.ExtractL7(req.GetPayload(), req.GetLinkType())
+if !ok || len(seg.Payload) == 0 {
+	return stream.Send(&pb.DecodeResponseV2{InputId: req.GetInputId(), Done: true})
+}
+```
+
+### 10.4 事件编码用 event.Draft + MsgPack（三段分离）
+
+```go
+import "github.com/OwnSecurityGuard/gametrace/sdk/event"
+
+draft := event.Draft{
+		Type:  "game.login",
+		Value: event.ValueFromMap(map[string]any{"uid": 12345}),
+	// 元信息独立上报：direction / msg_name / role / is_push 等
+	Meta: event.ValueFromMap(map[string]any{
+		"direction": req.GetDirection(),
+		"msg_name":  "Login",
+		"role":      "request",
+	}),
+	// 状态变更投影走 Analysis（可选）：
+	Analysis: event.ValueFromMap(map[string]any{
+		"_state_changes": []any{map[string]any{
+			"subject_type": "player",
+			"subject_id":   "12345",
+			"op":           "set",
+			"path":         "online",
+			"after":        true,
+		}},
+	}),
+	// 业务会话标识（如 op_id / battle_id）；不是 req.GetFlowId() 那种连接标识。
+	CorrelationKey: businessOpID,
+}
+resp, err := draft.ToResponse(req.GetInputId())
+if err != nil {
+	return err
+}
+stream.Send(resp)
+```
+
+### 10.5 复用 SDK 提供的工具
+
+```go
+import "github.com/OwnSecurityGuard/gametrace/sdk"
+
+// 读取 manifest（自动校验）
+manifestBytes, err := sdk.ReadManifest()
+
+// 解析 registry 地址（env > flag > 默认 :9091）
+addr := sdk.ResolveRegistryAddr()
+```
+
+---
+
+## 11. MCP 工具参考
+
+通过 gt-mcp 可调用以下工具（开发/验证插件时高频使用）：
+
+| 工具 | 功能 |
+|------|------|
+| `get_plugin_contract` | 获取 SDK `contract/contract.yaml` 全文（**SSOT**，写/审插件代码前必读） |
+| `get_plugin_dev_guide` | 获取本开发指南 |
+| `scaffold_plugin` | 渲染最小插件骨架并**返回文件内容**（`go.mod` / `main.go` / `plugin.yaml` 三个文件），**不写任何文件**：源码落在你自己的 workspace。decode.go / 解析器 / 测试 / `.env` / `.gitignore` 由你补齐，构建与启动也都在本机 |
+| `sample_bytes_plugin` | **看首个包的字节**，确认 link_type 与帧结构（0 事件排查第一步）。有硬上限（≤20 包 / 每包 ≤64 字节），只能形成假设，不是帧结构已确认的证据 |
+| `test_plugin` | 离线回放解码并采样：`decoded` / `decode_errors` / `type_histogram` / `sample_events`——回答"到底解出了什么"。**不落库** |
+| `verify_plugin` | 离线回放 + 契约校验，给出 `pass\|warn\|fail` 判定与证据。**不落库**，不是"事件已写库"的信号 |
+| `list_connection_frames` | 查询连接内的原始帧（需 `conn_id`），用于看**连接级/重组后**的事实，补 `sample_bytes_plugin` 只看首 64 字节的不足 |
+| `explain_plugin` | 对解码结果（含 0 事件）做归因与修复建议 |
+| `connect_plugin` | 告诉平台「我的插件已经启动，请连接它」：平台不 exec、不注入，只按 `GT_REGISTRY_ADDR` / `get_registry_addr` 的地址轮询 registry 接入状态，返回 `status=ready\|failed`（failed 时带 `stage`/`reason`/`next`） |
+| `status_plugin` | 两个视角：`runtime`（registry：`offline\|registered\|active`）与 `validation`（该插件实例是否通过过 `verify_plugin`，证据在平台数据库）。平台**没有制品/二进制视角** |
+| `get_registry_addr` / `get_plugin_env` | 取插件应连接的**对外** registry 地址与属主 token：插件在你机器上运行，这些环境变量由你自己提供，平台不代注入 |
+| `list_registered_plugins` | 列出已注册（运行中/离线）插件。平台不扫描磁盘、不持有插件目录，因此**没有 `artifact` / 源目录 / 构建产物字段** |
+| `get_plugin_manifest` | 获取插件 manifest |
+| `deregister_plugin` | 注销插件 |
+| `set_session_plugin` | 运行时热切换会话绑定的解码插件（无需停抓） |
+| `start_capture` / `stop_capture` | 启动/停止抓包（`pcap_file=` 可离线回放） |
+| `list_decoded_data` | 查询已解码事件 |
+
+---
+
+> 约定速记：
+> - **payload 是完整帧**，先 `ExtractL7` 再 `Reassembler`。
+> - 只有 `ProxyPayload`(1001) / `TLSPlaintext`(1002) 是纯 L7。
+> - 0 事件先 `sample_bytes_plugin`，再 `test_plugin`（看解出了什么），最后 `verify_plugin`（看整体质量）。
+> - `test_plugin` / `verify_plugin` 都是离线隔离回放、**不写 events 表**；要看真实落库事件必须走
+>   `start_capture(plugin=...)` 的真实 session 或 `decode_raw_packets`（需 `-enable-raw-debug`）。
+> - v2 事件用 `event.Draft` + MsgPack，**Payload ≠ Meta ≠ Analysis 三段分离**：业务字段进 `Value`，
+>   元信息（direction/msg_name/role/is_push）进 `Meta`，状态变更/实体投影进 `Analysis`，不要混写。

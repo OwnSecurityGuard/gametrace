@@ -1,0 +1,27 @@
+/** list_decoded_data 返回的单个事件 */
+export interface DecodedEvent {
+  id: string;
+  timestamp: string;
+  session_id: string;
+  protocol: string;
+  raw_len: number;
+  /** pair 语义规则写入的配对键：同一组请求/响应共享同一个值（未配对时为空）。 */
+  correlation_id?: string;
+  /** 响应侧特有：指向触发它的请求事件 id。 */
+  causation_id?: string;
+  data: Record<string, unknown>;
+  /** v0.8.0：纯业务 payload（不含 _meta 与分析键）之上的元信息（direction/msg_name/role/is_push）。 */
+  meta?: Record<string, unknown>;
+  /** v0.8.0：分析数据（_state_changes/entity/entity_type/entity_id/change_count）。 */
+  analysis?: Record<string, unknown>;
+  /** 代理抓包特有：捕获上下文（Captured By / Connection / Stream / Source）。 */
+  capture?: import("./connection").CaptureContext;
+}
+
+/** list_decoded_data 完整响应 */
+export interface ListDecodedDataResult {
+  ok: boolean;
+  total_matched: number;
+  count: number;
+  events: DecodedEvent[];
+}

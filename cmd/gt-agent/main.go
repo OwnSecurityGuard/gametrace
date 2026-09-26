@@ -1,0 +1,309 @@
+// gt-agent 是成员机上的常驻探针（v2 探针优化，docs/plans/2026-09-05）：
+//
+//  1. 抓包推流：本机网卡抓包（需 -tags pcap 编译），经 spool 落盘后推送到
+//     gt-pipeline 的 AgentIngest server（默认 :9092），归档模式下按留存策略
+//     在本机长期保留（Ack 不删段），支持按时间窗回放导入平台；
+//  2. 控制面：本地回环 HTTP（127.0.0.1:19500，给坐在机器前的人/脚本）+
+//     远端 AgentControl 双向流（desired-state 对齐，平台页面直接操控）；
+//  3. 托管本地插件：发现本机插件进程并以隧道模式拉起。
+//
+// 身份与回连存 probe.json（首启引导：命令行 flag / 固化配置）；
+// 抓包参数是会话级配置，由平台指派或本地控制面临时给定，不落 probe.json。
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"gametrace/pkg/version"
+)
+
+// embeddedAgentConfig 是下载形态 agent 经由 go:embed 烧进二进制的固化配置。
+// 其中 Server 取其 registry 端口（host:9091），ingest 由 deriveAddrs 自动取 port+1。
+// Iface 通常为空——目标机器网卡名无法预知，运行时自动探测默认网卡。
+type embeddedAgentConfig struct {
+	Server       string   `json:"server,omitempty"`        // 回连服务端 host:port（port 为 registry 端口）
+	RegistryAddr string   `json:"registry_addr,omitempty"` // 可选：显式覆盖 registry 地址
+	IngestAddr   string   `json:"ingest_addr,omitempty"`   // 可选：显式覆盖 ingest 推流地址
+	Token        string   `json:"token,omitempty"`         // 团队 token（gt_xxx）；空为匿名
+	SessionID    string   `json:"session,omitempty"`       // 目标抓包会话 id（服务端接收端关联）
+	Iface        string   `json:"iface,omitempty"`         // 预留：抓包网卡名（默认自动探测）
+	BPF          string   `json:"bpf,omitempty"`           // BPF 过滤表达式（端口已换算）
+	PluginDir    string   `json:"plugin_dir,omitempty"`    // 本地插件发现根目录
+	SpoolDir     string   `json:"spool_dir,omitempty"`     // 上行链路磁盘缓冲目录（断电续传）；空=自动取用户缓存目录
+	BindPlugins  []string `json:"plugin_names,omitempty"`  // 仅托管这些名字的本地插件（空=托管全部）
+}
+
+// supplied 把固化配置（下载产物）转成「本次下发的身份与回连」。
+func (e embeddedAgentConfig) supplied() suppliedConfig {
+	return suppliedConfig{token: e.Token, server: e.Server,
+		registry: e.RegistryAddr, ingest: e.IngestAddr}
+}
+
+func main() {
+	var (
+		server        string
+		registryAddr  string
+		ingestAddr    string
+		token         string
+		sessionID     string
+		iface         string
+		bpf           string
+		pluginDir     string
+		batchSize     int
+		batchInterval time.Duration
+		spoolDir      string
+		snapLen       int
+		promisc       bool
+	)
+	fs := flag.NewFlagSet("gt-agent", flag.ExitOnError)
+	fs.StringVar(&server, "server", "", "pipeline 服务端基址 host 或 host:port（port 为 registry 端口，ingest 自动取 port+1）")
+	fs.StringVar(&registryAddr, "registry-addr", "", "插件注册地址覆盖（默认由 --server 推导，如 host:9091）")
+	fs.StringVar(&ingestAddr, "ingest-addr", "", "AgentIngest 推流地址覆盖（默认由 --server 推导，如 host:9092）")
+	fs.StringVar(&token, "token", "", "团队 token（gt_xxx）；留空为匿名模式（服务端 owner=local）")
+	fs.StringVar(&sessionID, "session", "", "目标抓包会话 id；留空则抓包由控制面/平台指令启动")
+	fs.StringVar(&iface, "iface", "", "抓包网卡名；--session 留空时忽略")
+	fs.StringVar(&bpf, "filter", "", "BPF 过滤表达式（控制上行带宽）")
+	fs.StringVar(&pluginDir, "plugin-dir", "plugins", "本地插件发现根目录")
+	fs.IntVar(&batchSize, "batch-size", 128, "推流批大小（包数阈值）")
+	fs.DurationVar(&batchInterval, "batch-interval", 200*time.Millisecond, "推流批时间阈值（低流量兜底刷批间隔）")
+	fs.StringVar(&spoolDir, "spool-dir", "", "上行链路磁盘缓冲目录根（断电续传+留存）；留空默认取探针当前目录下 spool/")
+	fs.IntVar(&snapLen, "snaplen", 262144, "pcap snaplen")
+	fs.BoolVar(&promisc, "promisc", true, "混杂模式")
+	showVersion := fs.Bool("version", false, "print version and exit")
+	_ = fs.Parse(os.Args[1:])
+	if *showVersion {
+		fmt.Println("gt-agent " + version.String())
+		return
+	}
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	// ---- 身份与回连的装配（优先级：flag > probe.json > 固化配置）----
+	// 归档留存默认开启（loadAgentConfig 已处理：archive.enabled 未给出即视为开），
+	// 保证抓包数据落盘留存，除非配置显式关闭。
+	cfg, _ := loadAgentConfig()
+
+	// 固化配置（-tags embedded 下载形态）或 sidecar config.embedded.json：
+	// 仅当更高优先级来源没有给值时作为默认值。
+	embedded, hasEmbedded := loadEmbeddedConfig()
+	if !hasEmbedded {
+		if sc, ok := loadSidecarConfig(); ok {
+			embedded, hasEmbedded = sc, true
+		}
+	}
+
+	// 启动码已移除：探针身份与回连一律来自命令行 flag / probe.json / 固化配置
+	// （下载产物）。无 server/token 且无固化配置时走本地单机模式，不自动回连。
+
+	// 命令行 flag 非空时覆盖 probe.json 并写回（首启引导一次性生效；
+	// 此后一切改参走本地控制面 / 远端指令，不再需要命令行）。
+	// 身份或服务端被 flag 换掉时同样作废旧凭证（见 suppliedConfig.adopt）。
+	dirty := false
+	if (suppliedConfig{token: token, server: server,
+		registry: registryAddr, ingest: ingestAddr}).adopt(cfg, "command-line flag") {
+		dirty = true
+	}
+	// 固化配置仍是最初的兜底（仅当 cfg 仍为空）。
+	if hasEmbedded && embedded != nil {
+		if cfg.Server == "" {
+			cfg.Server = embedded.Server
+			dirty = true
+		}
+		if cfg.UserToken == "" {
+			cfg.UserToken = embedded.Token
+			dirty = true
+		}
+		if cfg.RegistryAddr == "" {
+			cfg.RegistryAddr = embedded.RegistryAddr
+			dirty = true
+		}
+		if cfg.IngestAddr == "" {
+			cfg.IngestAddr = embedded.IngestAddr
+			dirty = true
+		}
+		if pluginDir == "plugins" && embedded.PluginDir != "" {
+			pluginDir = embedded.PluginDir
+		}
+		if spoolDir == "" {
+			spoolDir = embedded.SpoolDir
+		}
+		// 下载产物带来的身份/回连优先于 probe.json 里上次留下的：重下一次探针
+		// 不会删 probe.json，沿用旧值会让新用户下的探针仍归上一任 owner。
+		if embedded.supplied().adopt(cfg, "embedded config") {
+			dirty = true
+		}
+	}
+	if dirty {
+		if err := saveAgentConfig(cfg); err != nil {
+			slog.Warn("save probe.json failed (continuing with in-memory config)", "error", err)
+		}
+	}
+
+	// 参数校验：非法值 fail-fast，避免静默错误行为。
+	if batchSize <= 0 {
+		slog.Error("--batch-size must be positive", "value", batchSize)
+		os.Exit(1)
+	}
+	if batchInterval <= 0 {
+		slog.Error("--batch-interval must be positive", "value", batchInterval)
+		os.Exit(1)
+	}
+	if snapLen <= 0 {
+		slog.Error("--snaplen must be positive", "value", snapLen)
+		os.Exit(1)
+	}
+
+	if spoolDir == "" {
+		spoolDir = spoolBase()
+	}
+	spoolDir = filepath.Clean(spoolDir)
+	spoolBaseCustom = spoolDir
+
+	// 无任何回连目标：本地单机模式（本地控制面可用，插件托管与远端控制不启用）。
+	localOnly := cfg.Server == "" && cfg.RegistryAddr == "" && cfg.IngestAddr == ""
+	var registry, ingest string
+	var err error
+	if !localOnly {
+		var derr error
+		if registry, ingest, derr = deriveAddrs(cfg.Server, cfg.RegistryAddr, cfg.IngestAddr); derr != nil {
+			slog.Error("address configuration error", "error", derr)
+			os.Exit(1)
+		}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, osKillSignal)
+	defer stop()
+
+	slog.Info("gt-agent starting",
+		"registry", registry, "ingest", ingest,
+		"user_token_set", cfg.UserToken != "", "probe_id", cfg.ProbeID,
+		"session", sessionID, "iface", iface,
+		"plugin_dir", pluginDir, "spool", spoolDir,
+		"archive", cfg.Archive.Enabled, "batch_size", batchSize,
+	)
+
+	var wg sync.WaitGroup
+
+	// 1) 抓包状态机 + 归档器（无论是否立即抓包都常驻，等控制面/平台指令）。
+	runner := newCaptureRunner()
+	runner.batchSize = batchSize
+	runner.batchInterval = batchInterval
+	runner.setRetention(retentionFrom(cfg))
+
+	arch := newArchiver(runner, cfg)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		arch.Run(ctx)
+	}()
+
+	// 本地告警存储：落在 spool 下（与抓包上行缓冲同根），本地控制面（详情页渲染）
+	// 与远端控制通道（收到告警入存）共享同一实例；告警记录 <spool>/alerts/<id>.json、
+	// 诊断日志 <spool>/alerts.log。
+	alerts := newAlertStore(filepath.Join(spoolBase(), "alerts"))
+
+	// 2) 本地控制面（回环 HTTP；坐在这台机器前的人/脚本用）。
+	lc := newLocalControl(runner, cfg, ingest, alerts)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := lc.Serve(ctx, "127.0.0.1:19500"); err != nil {
+			slog.Warn("local control stopped", "error", err)
+		}
+	}()
+
+	// 3) 插件托管（无需抓包即可工作）。固化配置模式下仅托管白名单内的插件。
+	// localOnly 时没有 registry 可注册，跳过。
+	var bind []string
+	if hasEmbedded && embedded != nil {
+		bind = embedded.BindPlugins
+	}
+	if !localOnly {
+		sup := &pluginSupervisor{dir: pluginDir, registryAddr: registry, token: cfg.UserToken, bind: bind}
+		sup.run(ctx, &wg)
+		slog.Info("plugin supervisor configured", "bind_plugins", bind)
+	}
+
+	// 4) 探针注册 + 远端控制通道。匿名（无凭证也注册不了）时跳过：
+	// 本地控制面照常可用，等带 token 重启后再接入平台。
+	registered := false
+	if !localOnly {
+		registered, err = ensureRegistered(ctx, cfg, ingest)
+		if err != nil {
+			slog.Warn("probe registration failed; remote control disabled for now", "error", err)
+			registered = false
+		}
+	}
+	if registered {
+		ca := NewControlAgent(ingest, cfg.ProbeID, cfg.ProbeToken, runner, cfg, arch)
+		ca.onCfgSaved = arch.applyRetention // archive_* 配置变更立即生效
+		ca.EnableAlerts(alerts)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ca.Run(ctx)
+		}()
+	} else {
+		slog.Info("probe not registered (anonymous local mode): remote control disabled")
+	}
+
+	// 5) 命令行直启抓包（向后兼容一次性脚本用法；正常运行由控制面/平台启动）。
+	// 固化模式的 session/iface/bpf 也走这里（下载形态免参数开机即抓）。
+	if sessionID == "" && hasEmbedded && embedded != nil {
+		sessionID = embedded.SessionID
+		if iface == "" {
+			iface = embedded.Iface
+		}
+		if bpf == "" {
+			bpf = embedded.BPF
+		}
+	}
+	// 网卡未指定时不在这里解析：runner.Start 会按出口 IP 自动选卡，
+	// 选不到也只是本次抓包进 failed，探针进程照常常驻等平台重发指令。
+	if sessionID != "" {
+		pushToken := cfg.UserToken
+		if registered {
+			pushToken = cfg.ProbeToken
+		}
+		if err := runner.Start(CaptureParams{
+			SessionID: sessionID, Iface: iface, BPF: bpf,
+			SnapLen: int32(snapLen), Promisc: promisc,
+		}, ingest, pushToken); err != nil {
+			slog.Error("initial capture failed to start (probe stays up; start via local control or platform)", "error", err)
+		}
+	}
+
+	<-ctx.Done()
+	slog.Info("gt-agent shutting down")
+	// 等待归档器、本地控制面、插件监督与控制通道 goroutine 收尾，
+	// 上限略大于 ackTimeout，超时则放弃等待直接退出。
+	joined := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(joined)
+	}()
+	select {
+	case <-joined:
+	case <-time.After(2 * ackTimeout):
+		slog.Warn("shutdown timeout: some goroutines did not stop in time")
+	}
+	// 收尾刷盘并释放 spool 句柄；磁盘上的数据保留（未确认续传 / 归档留存）。
+	if err := runner.Close(); err != nil {
+		slog.Warn("close capture spool", "error", err)
+	}
+	slog.Info("gt-agent stopped")
+}
+
+// defaultSpoolDir 返回某会话的 spool 目录（spoolBase 下按会话隔离，
+// 归档扫描与断电续传共用同一目录布局）。
+func defaultSpoolDir(sessionID string) string {
+	return filepath.Join(spoolBase(), sessionID)
+}

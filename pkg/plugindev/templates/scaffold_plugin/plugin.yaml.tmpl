@@ -1,0 +1,18 @@
+api_version: gt.decoder/v2
+name: {{.Name}}
+protocol: {{.Protocol}}
+type: decoder
+{{- if .ProtocolVersion }}
+protocol_version: {{.ProtocolVersion}}
+{{- end }}
+{{- if .Hints }}
+hints:
+{{- range .Hints }}
+  - {{.}}
+{{- end }}
+{{- end }}
+# semantic_rules 是接入平台语义能力的入口（effect 闭集：name / annotate / pair），属可选增强：
+# request/response 由宿主按 direction 自动打标，无需规则；annotate/pair/_state_changes 只在
+# 协议真实存在该语义时才声明——有证据才写（注释写明出处），没发现就留空，属合法结果。
+# 能稳定提取消息名时先补一条 name 规则。详见 decoder-plugin-guide §5.3。
+# TODO: 填写本协议有证据支撑的语义规则（无可发现语义时删除本行即可）

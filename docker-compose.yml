@@ -1,0 +1,196 @@
+# docker-compose.yml（T15）——团队服务端：gt-pipeline + gt-mcp + postgres。
+#
+# 存储模式说明（postgres 模式，2026-09-05 起）：
+#   - control 元数据（sessions/probes 等）与事件数据统一存 PG（gt-pgdata 卷），
+#     pipeline 与 mcp 通过 GT_DB_DRIVER=postgres + GT_DB_DSN 访问同一库；
+#   - gt-data 共享卷仍保留，承载非数据库文件：plugins 目录、会话本地
+#     metadata.json、projects/users 等组织表的 control-aux.sqlite（PG 模式下
+#     有意不进 PG，见 cmd/gt-mcp/main.go）；
+#   - SQLite 模式（原默认）回滚方式：删掉 GT_DB_DRIVER/GT_DB_DSN 两个环境
+#     变量与 postgres 服务即可，两套模式的配置入口是同一对 env（pkg/config）。
+# 镜像策略：image + build 双声明，默认走 BuildKit 层缓存构建（2026-09-15 起）：
+#   - pipeline 带 `pull_policy: build`：不管本地有没有 gt-server:$GT_VERSION 镜像，
+#     一律走 build 段构建，绝不复用/拉取已有镜像。BuildKit 层缓存按内容寻址：
+#     `COPY . .` 在任何源码文件变化后失效，后续编译层必然重跑——不存在
+#     "改了代码还在跑旧镜像"；而 npm ci / go mod download / osxcross 工具链等
+#     重步骤只在各自输入（package-lock / go.sum / apt 包）变化时才重跑。
+#     首次构建最慢（含 darwin 交叉工具链），之后日常 up 大幅加速。
+#   - 构建段 `no_cache` 默认 false（原 true，新用户反馈构建太慢改为默认缓存）。
+#     怀疑缓存异常 / 要完全干净重建：
+#     `GT_BUILD_NO_CACHE=true docker compose up -d`（Dockerfile 内的 BuildKit
+#     缓存挂载不受 no_cache 影响，npm/Go 增量缓存依然生效）。
+#   - 构建段 `pull` 默认 false（原 true）：不再每次构建都访问 Docker Hub 检查
+#     基础镜像——境内网络下慢且易失败；需要刷新基础镜像：
+#     `GT_BUILD_PULL=true docker compose up -d`。
+#   - **只由 pipeline 承担构建**：mcp 复用同一镜像（同 tag + `pull_policy: never`，
+#     不声明 build）。若两个服务各自声明 build 且指向同一镜像名，buildx 第二次
+#     导出同名 tag 会报 `image "gt-server:dev": already exists`（docker/buildx#3576），
+#     `docker compose up -d` 必然失败——这正是之前"每次首次构建必现"的报错。
+#     因此单独构建请用 `docker compose build pipeline`；单独 `up mcp` 且本地无镜像
+#     时需先 `up pipeline` 或手动 `docker build -t gt-server:dev .`。
+# 因此 `docker compose up -d` 等价于按需增量构建并部署（源码变了必重编，没变则
+# 秒级复用缓存）；要连带强制重建容器（镜像 ID 恰好没变时）补一个 --force-recreate：
+#   docker compose up -d --force-recreate
+# 避免"以为改了代码却还在跑老版本"的完整用法（构建+部署+核验运行版本）：
+#   make deploy        # 推荐：一键做上面全流程，结尾打印各服务 -version 供核对
+# 两个服务共用同一构建定义（x-build 锚点）。
+#
+# 端口策略：容器内端口拓扑不变（9888/9091/9092/8781）；宿主侧映射端口默认
+# 用 1xxxx 偏移值——本机 GameTrace 链路（pipeline 12924 / mcp 11056）已占用
+# 9888/9091/9092/8781，避免冲突。PG 不映射宿主端口（宿主机 5432 已被占用，
+# 且 PG 只需在 compose 网络内可访问）。
+#
+# 用法：
+#   cp .env.example .env   # 至少设置 GT_AUTH_TOKENS
+#   docker compose up -d
+#
+# 配置（T10 统一配置）：容器内 GT_HOME=/data，各监听地址用 GT_* 环境变量覆盖
+# （与 pkg/config/app.go 对齐）；端口映射用 .env 里的 GT_*_PORT 变量调整。
+
+# 共享构建定义：pipeline 与 mcp 使用同一镜像（gt-server:$GT_VERSION）。
+x-build: &server-build
+  context: .
+  dockerfile: Dockerfile
+  # 层缓存构建（默认 false=启用缓存）：源码变化必然重编（COPY . . 内容寻址），
+  # 未变化的重步骤（npm ci / go mod download / osxcross）直接复用缓存。
+  # 完全干净重建：GT_BUILD_NO_CACHE=true docker compose up -d
+  no_cache: ${GT_BUILD_NO_CACHE:-false}
+  # 不主动检查基础镜像更新（默认 false）：省去每次构建访问 Docker Hub。
+  # 要刷新基础镜像：GT_BUILD_PULL=true docker compose up -d
+  pull: ${GT_BUILD_PULL:-false}
+  # 探针平台编译开关：默认 1——
+  #   GT_BUILD_DARWIN_AGENT：osxcross 交叉编译 darwin/amd64 + darwin/arm64（见 Dockerfile；
+  #     SDK 下载/编译失败会自动退化为无 darwin 并 WARN）；
+  #   GT_BUILD_ARM_AGENT：aarch64 交叉编译 linux/arm64（gcc-aarch64-linux-gnu +
+  #     libpcap-dev:arm64；失败自动退化为无 linux/arm64 并 WARN）。
+  # 网络受限环境可设 0 跳过，缺失平台由对应宿主 make build-agents 补充。
+  #
+  # 版本戳：把宿主 git 的版本埋进镜像二进制（-version 输出），避免"看不出跑的是
+  # 不是新版本"。不设时退回 Dockerfile 默认 dev/unknown（BuildTime 为空则不展示）。
+  # 推荐用 `make deploy` 一键构建+部署+核验（自动填这三个变量）；手动等价命令：
+  #   $env:GT_VERSION=(git describe --tags --always --dirty); `
+  #   $env:GT_GIT_COMMIT=(git rev-parse --short HEAD); `
+  #   $env:GT_BUILD_TIME=(Get-Date -AsUtc -Format o); `
+  #   docker compose up -d --build --force-recreate
+  args:
+    BUILD_DARWIN_AGENT: ${GT_BUILD_DARWIN_AGENT:-1}
+    BUILD_ARM_AGENT: ${GT_BUILD_ARM_AGENT:-1}
+    VERSION: ${GT_VERSION:-dev}
+    GIT_COMMIT: ${GT_GIT_COMMIT:-unknown}
+    BUILD_TIME: ${GT_BUILD_TIME:-}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${GT_PG_USER:-gametrace}
+      POSTGRES_PASSWORD: ${GT_PG_PASSWORD:-gt_dev_pass}
+      POSTGRES_DB: ${GT_PG_DB:-gametrace}
+    volumes:
+      - gt-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  pipeline:
+    image: gt-server:${GT_VERSION:-dev}
+    build: *server-build
+    # 强制走构建而非复用/拉取已有镜像（见文件头"镜像策略"）。
+    pull_policy: build
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GT_HOME: /data
+      # 鉴权 token 表（必填）：格式 owner=token，逗号分隔，
+      # 例如 alice=gt_tok_aaa:admin,bob=gt_tok_bbb（:admin 后缀授予管理员权限）。
+      # 裸 token 不带 owner 会被 ParseTokens 拒绝、容器起不来，见 .env.example。
+      GT_AUTH_TOKENS: ${GT_AUTH_TOKENS:?GT_AUTH_TOKENS is required (see .env.example)}
+      # 监听地址：端口映射前保持容器内默认即可；一般无需覆盖
+      GT_CONTROL_ADDR: ${GT_CONTROL_ADDR:-:9888}
+      GT_REGISTRY_ADDR: ${GT_REGISTRY_ADDR:-:9091}
+      GT_AGENT_INGEST_ADDR: ${GT_AGENT_INGEST_ADDR:-:9092}
+      # 存储后端：postgres 模式（DSN 指向 compose 网络内的 postgres 服务）
+      GT_DB_DRIVER: postgres
+      GT_DB_DSN: postgres://${GT_PG_USER:-gametrace}:${GT_PG_PASSWORD:-gt_dev_pass}@postgres:5432/${GT_PG_DB:-gametrace}?sslmode=disable
+    ports:
+      # CaptureControl gRPC：唯一合法客户端是 compose 网络内的 gt-mcp（owner 字段
+      # 在该端口上可被直连者伪造，见 cmd/gt-pipeline/main.go 信任边界注释），
+      # 因此默认只回环映射；确需从宿主机外访问再改。
+      - "127.0.0.1:${GT_CONTROL_PORT:-19888}:9888"
+      - "${GT_REGISTRY_PORT:-19091}:9091"   # PluginRegistry gRPC（插件注册）
+      - "${GT_AGENT_INGEST_PORT:-19092}:9092" # AgentIngest gRPC（gt-agent 推流）
+      - "${GT_PROXY_PORTS:-12100-12199}:12100-12199" # 代理抓包手机 CONNECT 端口段（gt-singbox-agent 绑 0.0.0.0 全接口）
+    command: ["-agent-bin=/usr/local/bin/gt-singbox-agent"]
+    volumes:
+      - gt-data:/data
+
+  mcp:
+    image: gt-server:${GT_VERSION:-dev}
+    # 不声明 build：镜像由 pipeline 服务的 `pull_policy: build` 在本次 up 中构建，
+    # 这里复用本地镜像。若两个服务各自声明 build 且指向同一镜像名，buildx 第二次
+    # 导出同名 tag 会报 `image "gt-server:dev": already exists`（docker/buildx#3576）。
+    pull_policy: never
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pipeline:
+        condition: service_started
+    entrypoint: ["/usr/local/bin/gt-mcp"]
+    command: []
+    environment:
+      GT_HOME: /data
+      GT_AUTH_TOKENS: ${GT_AUTH_TOKENS:?GT_AUTH_TOKENS is required (see .env.example)}
+      # 连接 pipeline 的 CaptureControl：compose 网络内用服务名
+      GT_CONTROL_ADDR: pipeline:9888
+      # MCP HTTP/SSE 监听地址
+      GT_MCP_ADDR: ${GT_MCP_ADDR:-:8781}
+      # registry 地址：插件 / 探针跑在用户自己的机器上，由它们主动连上来注册。
+      # 这里是 compose 网络内的地址（供容器内组件自查/转发使用），
+      # 注意与下面的 GT_PUBLIC_REGISTRY_PORT 区分：那是给容器外的探针/插件看的宿主
+      # 发布端口（19091），也是 connect_plugin 返回给用户的注册地址来源。
+      GT_REGISTRY_ADDR: ${GT_INTERNAL_REGISTRY_ADDR:-pipeline:9091}
+      # CORS 允许的 Origin（逗号分隔）；留空不返回 CORS 头（同源用法不受影响）
+      GT_MCP_ALLOWED_ORIGINS: ${GT_MCP_ALLOWED_ORIGINS:-}
+      # 对外通告地址（远端探针 / MCP / AI 回连用）：Docker / NAT / 公网部署下容器内
+      # 地址不可达，必须显式通告。以下四个对外地址均为必填 —— 缺失/为空时
+      # `docker compose up` 直接失败（${VAR:?…} 语法），避免服务以不可达地址静默上线。
+      GT_PUBLIC_HOST: "${GT_PUBLIC_HOST:?GT_PUBLIC_HOST is required - 对外通告地址，填公网域名或宿主机在远端可达的 IP}"
+      GT_PUBLIC_REGISTRY_PORT: "${GT_PUBLIC_REGISTRY_PORT:?GT_PUBLIC_REGISTRY_PORT is required - 对外通告的 registry 宿主端口（如 19091）}"
+      GT_PUBLIC_INGEST_PORT: "${GT_PUBLIC_INGEST_PORT:?GT_PUBLIC_INGEST_PORT is required - 对外通告的 ingest 宿主端口（如 19092）}"
+      # 代理抓包手机连接地址（二维码里手机填的 HTTP CONNECT 代理地址 host 部分）：
+      # 容器内 lanIP() 启发式会拿到 docker bridge 的 172.x / Hyper-V 等不可达网段，
+      # 必须显式填宿主机在手机所在 LAN 内的可达 IPv4（例如 192.168.1.10），否则手机扫码连不上。
+      GT_LAN_IP: "${GT_LAN_IP:?GT_LAN_IP is required - 手机扫码用，填宿主机在手机所在 LAN 内的可达 IPv4（与 GT_PUBLIC_HOST 同网段时可直接用同值）}"
+      # 对外端口映射声明：二维码（profile URL 的端口、sing-box 的 server_port）
+      # 一律写宿主端口——手机够不到容器内端口，写容器端口=写不可达地址。
+      #   GT_PUBLIC_MCP_PORT：本服务 HTTP 的宿主发布端口，必须与下面 ports 里的
+      #     GT_MCP_PORT 一致（默认已自动取同值，一般不用改）。
+      #   GT_PROXY_PORT_OFFSET：代理 CONNECT 端口段的宿主偏移 =
+      #     GT_PROXY_PORTS 起始端口 - 12100（容器内段起始）。
+      #     恒等映射（GT_PROXY_PORTS=12100-12199，默认）时为 0，无需设置；
+      #     非恒等映射（如 GT_PROXY_PORTS=22100-22199）时必须设为 10000，
+      #     否则手机扫码导入的 sing-box 配置里端口是容器内的 12100，连不上。
+      GT_PUBLIC_MCP_PORT: "${GT_MCP_PORT:-18781}"
+      GT_PROXY_PORT_OFFSET: "${GT_PROXY_PORT_OFFSET:-0}"
+      # 存储后端：与 pipeline 保持一致（同一 PG 库）
+      GT_DB_DRIVER: postgres
+      GT_DB_DSN: postgres://${GT_PG_USER:-gametrace}:${GT_PG_PASSWORD:-gt_dev_pass}@postgres:5432/${GT_PG_DB:-gametrace}?sslmode=disable
+    ports:
+      - "${GT_MCP_PORT:-18781}:8781" # MCP HTTP/SSE + Web UI（浏览器访问 http://<host>:18781）
+    volumes:
+      - gt-data:/data
+      # 远程 agent 预置产物已由镜像内建（Dockerfile builder 编译 linux/windows/darwin
+      # 三平台 × amd64/arm64 双架构共 6 份可抓包探针，其中 linux/arm64 受
+      # BUILD_ARM_AGENT 控制；darwin 经 osxcross，可用 GT_BUILD_DARWIN_AGENT=0
+      # 关闭），无需宿主 `make build-agents` + 挂载。仍需补充平台时，可在宿主机
+      # 放一份产物并用 GT_AGENT_BIN_DIR 环境变量指过去。
+
+volumes:
+  gt-data:
+  gt-pgdata:

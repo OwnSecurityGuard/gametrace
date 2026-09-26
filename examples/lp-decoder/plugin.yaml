@@ -1,0 +1,132 @@
+# lp-decoder —— 长度前缀定界（LPF）模板解码插件清单与语义契约声明
+#
+# 解码 examples/lp 的 client<->server 流量：帧头(magic/version/param/reserved) +
+# 变长长度字段(1/2/4 字节，大/小端逐帧可选) + JSON 载荷。payload 信封
+#   {"cmd":<message id>,"seq":<correlation>,"error_code":<error>,"error_msg":<提示>,"data":{...}}
+# 语义字段与 examples/lp 的 client/server 信封约定保持一致，
+# 覆盖 message id / request-response role / seq correlation / push rule / error 五类格式。
+#
+# ⚠️ 模板定位：本样例演示"长度前缀定界"这一种流切包技术，帧头格式是发明的，
+# 不是任何真实游戏协议。真实项目的长度字段宽度、端序、魔数、校验都不同——
+# 照抄前必须先用 sample_bytes_plugin 确认真实字节流，再定义自己的帧格式。
+# 与配套示例的差异点（便于对照"哪些是模板共有的、哪些是各项目独有的"）：
+#   - http-decoder：解析 HTTP 方法行/状态行切包，长度由 Content-Length/帧结构给出
+#   - ws-decoder：  解析 RFC 6455 帧（定长头 + 扩展长度），方向取自 MASK 位
+#   - lp-decoder：  长度字段宽度/端序逐帧变化，方向由 cmd 身份推导（见下方说明）
+#
+# 消息号段（与 examples/lp/internal/lp 的消息表同源）：
+#   1000~1999 请求/响应成对：请求取奇数（1001 登录 / 1003 查背包 / 1005 使用道具 /
+#              1007 采集资源），响应号 = 请求号 + 1，回显同一 seq 完成配对；
+#              校验失败时服务端仍回响应号，但带上 error_code + error_msg 提示
+#   2000~2999 服务端主动推送（玩家档案 2001 / 道具数量 2002 / 资源数量 2003），seq 恒为 0
+#   9000~9999 信封级错误回包（9001）：payload 不是合法 JSON、cmd 未定义时无法映射到
+#              业务响应号；payload 不可解析时连 seq 也拿不到，此时 seq 仍为 0
+#
+# 协议语义通过 semantic_rules 声明（插件定义语义、平台执行）：
+#   - lp.pair_request_response：请求/响应按 seq 回显配对
+#   - lp.mark_request / lp.mark_response：按解码器写入的角色标注 request / response
+#     （号段奇偶只能由解码器判定，规则读 _meta.role；错误回包会同时带 response + error）
+#   - lp.mark_push：cmd 落在 2000~2999 推送号段的消息标注为 notification
+#     （不再用 seq==0 判推送——9001 的 seq 也可能是 0，那是"拿不到 seq"而非推送）
+#   - lp.mark_error：error_code!=0 标注为 error
+#   - 消息名不声明 name 效果：payload 只有数值 cmd，符号名来自解码器的
+#     cmd→名称映射表，故 msg_name 仍由 Meta 通道给出（对照 ws-decoder）。
+#
+# 状态投影（Analysis 通道的 _state_changes，不是 semantic_rules 的职责）：
+#   解码器按流记住最近解到的取值，把服务端消息体里的可变字段投影成前后值——
+#   道具数量（lp_item:<id>.count）、金币/钻石与等级/经验/在线（lp_player:<pid>.*），
+#   外加流内请求/响应计数。约定三条：只有服务端→客户端且 error_code==0 的消息改状态
+#   （被拒绝的请求不产生变更）；首次观测只有 after（基线早于抓包起点）；与最近值同数
+#   不重复产出（响应里的 remain 与紧随其后的数量推送携带同一数值时只算一次）。
+
+api_version: gt.decoder/v2
+name: lp-decoder
+protocol: length-prefixed
+protocol_version: "1"
+type: decoder
+transports:
+  - tcp
+hints:
+  - length-prefixed
+  - json
+  - tcp
+  - port:8998
+capabilities:
+  decode: true
+contract:
+  name: gt.plugin
+  version: 1
+semantic_rules:
+  # 请求/响应配对：服务端回显请求的 seq，两侧键都取自 payload 的 seq。
+  # seq==0 是推送或"seq 不可知"的错误回包，由 when 拦截不参与配对。方向角色走
+  # _meta.direction：模板协议的方向由 cmd 号段+奇偶推导（奇数请求号 / 其余响应侧），
+  # 解码器把推导结果写入 Meta 通道，规则只读。
+  - id: lp.pair_request_response
+    when:
+      - { path: seq, op: neq, value: 0 }
+    effect:
+      type: pair
+      sides:
+        - { path: _meta.direction, op: eq, value: client_to_server, key: seq }
+        - { path: _meta.direction, op: eq, value: server_to_client, key: seq }
+  # 请求/响应语义：号段奇偶（1000~1999 的奇数号 = 请求）只有解码器握得到，
+  # 它把判定结果写进 Meta 的 role（request / response / push），规则只读。
+  # 错误回包因此同时带 response + error 两个标签——它是"带着错误码的响应"，不是两种消息。
+  - id: lp.mark_request
+    when:
+      - { path: _meta.role, op: eq, value: request }
+    effect:
+      type: annotate
+      semantic: request
+  - id: lp.mark_response
+    when:
+      - { path: _meta.role, op: eq, value: response }
+    effect:
+      type: annotate
+      semantic: response
+  # 推送消息：命中 push rule（cmd 在 2000~2999 号段），标注为 notification。
+  - id: lp.mark_push
+    when:
+      - { path: cmd, op: gte, value: 2000 }
+      - { path: cmd, op: lt, value: 3000 }
+    effect:
+      type: annotate
+      semantic: notification
+  # 错误语义：error_code != 0（服务端给出的错误提示同时带 error_msg）。
+  - id: lp.mark_error
+    when:
+      - { path: error_code, op: neq, value: 0 }
+    effect:
+      type: annotate
+      semantic: error
+meta:
+  author: opencode
+  description: >-
+    Length-prefixed framing (LPF) template decoder for the examples/lp
+    client<->server traffic. Reassembles the per-flow TCP stream
+    (framing.ExtractL7 + Reassembler) and parses frames whose length field is
+    1/2 or 4 bytes wide and big or little endian, chosen per frame: the header
+    (magic/version/param/reserved) declares both, so the parser must never
+    assume a fixed width or byte order. The JSON envelope (cmd / seq /
+    error_code / error_msg / data) covers the five semantic formats: message id,
+    request/response role, seq correlation, push rule and error — the simulator
+    exercises them with a login → get-bag → use-item → gather-resource scenario,
+    where an illegal request (bad envelope, unknown cmd, missing login, unknown
+    or insufficient item, invalid param, insufficient resource) is answered with
+    an error_code + error_msg reply, and a successful item/resource change is
+    followed by server pushes. Direction is derived from the message identity
+    (odd cmd in 1000~1999 = request, everything else = response-side) because
+    the template protocol has distinct request/response command ids — a
+    template-specific decision, NOT a general rule. The same derivation is
+    published as Meta role so the annotate rules can label request / response
+    without re-reading a command table. Frame facts (version /
+    len_width / endian / length) go to the Meta channel while business fields
+    (cmd / seq / error_code / body_text) stay in the payload. The Analysis
+    channel projects _state_changes for both flow counters and the entity state
+    carried by server messages: item counts (lp_item) plus gold / diamond /
+    level / exp / online (lp_player), each with a before value taken from the
+    last observation on that flow (absent for the first one), skipped when the
+    value did not change, and never produced by an error reply.
+  game: lp-demo
+  transport: length-prefixed-json
+  decoded_directions: [client_to_server, server_to_client]

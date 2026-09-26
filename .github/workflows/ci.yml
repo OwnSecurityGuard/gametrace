@@ -1,0 +1,290 @@
+name: ci
+
+# PR 流水线（原 ci.yml.disabled 恢复并按多模块矩阵扩展）。
+#
+# 关键前提：本仓库不是单 go module——根 + ./sdk + 每个示例插件各自 go.mod。
+# 只跑根模块的 `go test ./...` 会让 SDK / 插件单独坏掉而 CI 全绿，因此
+# build/test 按模块拆开，SDK 与各插件必须各自通过。
+#
+# 与本地口径一致：所有 job 调用的都是 Makefile target / scripts（make vet、
+# make verify-plugin、make coverage-gate…），CI 挂了本地能原样复现。
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# 同一分支/PR 的新 push 取消旧 run。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CGO_ENABLED: "1"
+
+jobs:
+  # ============================================================================
+  # 根模块：build（无标签，release 交叉编译同款）→ vet → test（pcap 标签）。
+  # 测试套件里 cmd/gt-pipeline 的 TestSimulate 就是「registry 注册 → 真实解码
+  # 插件 gRPC 服务 → fake 探针流量 → 事件/状态变更落库」的全链路 e2e，
+  # 插件集成链路（P1 第 5 条）的门禁位就在这里。
+  # ============================================================================
+  root:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # pcap 采集层是 cgo 依赖（gopacket/gopacket/pcap），Linux 需要 libpcap 头文件。
+      - name: Install libpcap
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - name: Build (untagged, 与 release 矩阵同款)
+        run: go build ./...
+      - name: Vet
+        run: make vet
+      - name: Test
+        run: |
+          set +e
+          go test -tags pcap ./... > /tmp/test.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            MSG=$(grep -A4 -E '^(--- FAIL|panic)|signal: killed|out of memory' /tmp/test.log | head -40 | sed 's/"/\\"/g' | tr '\n' ';')
+            echo "::error title=go test failures::$MSG"
+            tail -100 /tmp/test.log
+            exit $code
+          fi
+
+  # ============================================================================
+  # SDK 子模块：独立 go.mod，必须单独编译/测试（根模块经 replace 消费它，
+  # 根绿不代表 SDK 自己绿——比如只被 SDK 内部引用的构建文件坏掉）。
+  # ============================================================================
+  sdk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sdk/go.mod
+      - name: Build + test
+        run: make sdk-test
+      - name: Vet (pcap-free, sdk 目录内独立跑)
+        run: cd sdk && go vet ./...
+
+  # ============================================================================
+  # 示例插件矩阵：每个插件模块都是"外部插件作者的消费方式"（独立 go.mod +
+  # replace ../../sdk）。编译成功 ≠ 契约成立：各模块 main_test.go 固定跑
+  # TestManifestContractCheck（声明期契约）与 emit/DecodeV2→CheckEvent
+  # （输出期契约），vet 兜底静态检查。
+  # ============================================================================
+  examples:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # http-stream-decoder 属于 sdk 模块（无自己的 go.mod），
+        # go-version-file 必须指向 sdk/go.mod，否则 setup-go 直接报错。
+        include:
+          - module: examples/http-decoder
+            go_version_file: examples/http-decoder/go.mod
+          - module: examples/lp-decoder
+            go_version_file: examples/lp-decoder/go.mod
+          - module: examples/ws-decoder
+            go_version_file: examples/ws-decoder/go.mod
+          - module: sdk/examples/http-stream-decoder
+            go_version_file: sdk/go.mod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.go_version_file }}
+      - name: Vet
+        run: (cd ${{ matrix.module }} && go vet ./...)
+      - name: Build + test（含插件契约校验）
+        run: (cd ${{ matrix.module }} && go build ./... && go test ./...)
+
+  # ============================================================================
+  # race：本项目是长期运行的并发服务（capture goroutine → 解码插件 → event
+  # store → MCP 查询；registry heartbeat / tunnel / session 生命周期 / 状态
+  # 投影），大量共享状态只有 -race 能兜住，普通 test 过了不代表安全。
+  # 注：Windows 开发机若因本机 ThreadSanitizer 环境问题跑不了 -race，以此
+  # job 为准（ubuntu runner 无此问题）。
+  # ============================================================================
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install libpcap
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - name: Race - root（全量，含 TestSimulate 全链路）
+        run: go test -race -tags pcap ./...
+      - name: Race - sdk
+        run: (cd sdk && go test -race ./...)
+      - name: Race - 示例插件（含 bufconn DecodeV2 集成测试）
+        run: |
+          for m in examples/http-decoder examples/lp-decoder examples/ws-decoder sdk/examples/http-stream-decoder; do
+            echo "==> $m"
+            (cd "$m" && go test -race ./...) || exit 1
+          done
+
+  # ============================================================================
+  # lint（golangci-lint v2，配置 .golangci.yml）：未处理 error / dead code /
+  # copylocks race 风险 / 低效代码。
+  # 存量策略：根模块背有历史 errcheck/nilerr/staticcheck 欠账，PR 只阻断
+  # **新增**问题（--new-from-merge-base），push 到分支时全量跑但降级为
+  # warning annotation（持续曝光、逐步还）。sdk/examples 已清零 → 全量阻断。
+  # ============================================================================
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # --new-from-merge-base 需要完整历史与 base ref。
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install libpcap（根模块含 cgo pcap 门控文件）
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+      # PR：根模块只阻断新增问题（对比 merge-base）。
+      - name: Lint root (PR: new issues only)
+        if: github.event_name == 'pull_request'
+        run: golangci-lint run ./... --new-from-merge-base=origin/"${{ github.base_ref }}" --timeout 10m
+      # push：根模块全量跑，但存量欠账降级为 warning（不挡合入，持续曝光）。
+      - name: Lint root (push: full, debt-tolerant)
+        if: github.event_name != 'pull_request'
+        run: |
+          golangci-lint run ./... --timeout 10m | tee /tmp/lint.txt
+          if grep -q "issues:" /tmp/lint.txt; then
+            echo "::warning title=lint debt::根模块存量 lint 问题 $(grep 'issues:' /tmp/lint.txt | tail -1)（新增问题会被 PR 门禁拦截）"
+          fi
+      # sdk 与各示例插件已清零 → 任何新问题都阻断。
+      - name: Lint sdk + examples (strict)
+        run: |
+          (cd sdk && golangci-lint run ./... --timeout 5m) || exit 1
+          for m in examples/http-decoder examples/lp-decoder examples/ws-decoder sdk/examples/http-stream-decoder; do
+            (cd "$m" && golangci-lint run ./... --timeout 5m) || exit 1
+          done
+
+  # ============================================================================
+  # verify-plugin：GameTrace 特有的 Plugin Contract CI。
+  # contract.yaml（SSOT）一改，所有消费者必须当场通过：sdk 的
+  # contract/rule/event 自校验 + 每个插件模块 go build + go test
+  # （manifest 声明期 / 事件输出期契约）。详见 Makefile 注释。
+  # ============================================================================
+  verify-plugin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sdk/go.mod
+      - name: make verify-plugin
+        run: make verify-plugin
+
+  # ============================================================================
+  # coverage：核心包覆盖率地板（sdk/rule、pkg/plugin、pkg/decode、pkg/spool、
+  # pkg/store、sdk/framing、sdk/contract + 示例插件可测性）。门槛表与欠账
+  # 清单在 scripts/coverage_gate.sh 头部，防"测试被悄悄删掉"。
+  # ============================================================================
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install libpcap
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - name: Coverage gate
+        run: make coverage-gate
+
+  # ============================================================================
+  # benchmark：跑解码热路径基准（parser / reassembler / 语义规则 / 落库写
+  # 路径），与 bench/baseline.txt 分布比对，超 +20% 报警。基线必须在同类
+  # 机器（ubuntu runner）上重录后才可视为硬门禁，当前先以 warning 起步
+  # （仓库内首版基线是 Windows 机器录的）。
+  # ============================================================================
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install libpcap
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - name: Install benchstat
+        run: |
+          go install golang.org/x/perf/cmd/benchstat@latest
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+      - name: Bench compare
+        id: cmp
+        continue-on-error: true
+        run: make bench-compare
+      - name: 回归提示（基线为异机采集时仅告警；Linux 重录后可去掉 continue-on-error）
+        if: steps.cmp.outcome == 'failure'
+        run: echo "::warning title=benchmark regression::基准回归或基线机器不匹配，见 bench 输出 artifact"
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench/current.txt
+
+  # ============================================================================
+  # windows-smoke：仓库主要在 Windows 上开发（winio 命名管道、路径/换行行为），
+  # ubuntu 全绿不代表 windows 编译没问题。这里只做编译级冒烟（跑测试由开发机
+  # 本地承担；本机 -race 有 TSan 环境问题见 race job 注释）。
+  # ============================================================================
+  windows-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build 根模块（windows 无标签）
+        run: go build ./...
+      - name: Build sdk
+        working-directory: sdk
+        run: go build ./...
+      - name: Build 示例插件
+        shell: bash
+        run: |
+          for m in examples/http-decoder examples/lp-decoder examples/ws-decoder sdk/examples/http-stream-decoder; do
+            echo "==> $m"
+            (cd "$m" && go build ./...) || exit 1
+          done
+
+  # ============================================================================
+  # docs-drift：钉死 docs/mcp-tools.md 工具表与 cmd/gt-mcp 的 AddTool 一致
+  # （gen_tool_table 只依赖标准库，无需 libpcap）。
+  # ============================================================================
+  docs-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Regenerate tool table
+        run: go run ./scripts/gen_tool_table
+      - name: No drift
+        run: git diff --exit-code docs/mcp-tools.md
