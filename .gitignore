@@ -117,3 +117,6 @@ qc
 # 基准生成物：current.txt 每次重跑覆盖；baseline.txt 是提交进仓库的对比基线
 bench/current.txt
 bench/compare.csv
+
+# Qoder local settings (may contain MCP tokens)
+.qoder/settings.local.json
