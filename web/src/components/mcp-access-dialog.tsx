@@ -328,7 +328,7 @@ GameTrace 是持续运行的抓包平台。
                 </Button>
               </div>
               {token && (
-                <p className="mt-1 flex gap-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+                <p className="mt-1 flex gap-1.5 text-micro text-warning">
                   <ShieldAlert className="mt-0.5 h-3 w-3 shrink-0" />
                   令牌等同于平台访问凭证，请勿把提示词发给不受信任的一方。
                 </p>
@@ -337,14 +337,14 @@ GameTrace 是持续运行的抓包平台。
 
             {/* 对外地址可信度提示 */}
             {data && data.addr_source !== "env" && (
-              <p className="flex gap-1.5 rounded-md border border-border bg-muted/40 px-3 py-2 text-[11px] text-amber-600 dark:text-amber-400">
+              <p className="flex gap-1.5 rounded-md border border-border bg-muted/40 px-3 py-2 text-micro text-warning">
                 <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                 服务端未配置 GT_PUBLIC_HOST，地址是按当前访问方式推测的。跨网络/公网给 AI 用时，请在服务端设置
                 GT_PUBLIC_HOST（必要时配 GT_PUBLIC_REGISTRY_PORT / GT_PUBLIC_INGEST_PORT），否则外部 AI 可能连不上。
               </p>
             )}
             {isLoopback && (
-              <p className="flex gap-1.5 rounded-md border border-border bg-muted/40 px-3 py-2 text-[11px] text-amber-600 dark:text-amber-400">
+              <p className="flex gap-1.5 rounded-md border border-border bg-muted/40 px-3 py-2 text-micro text-warning">
                 <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                 当前地址是回环地址（localhost），仅本机可用。远程 AI 需要可被其访问的公网地址——请在服务端配置
                 GT_PUBLIC_HOST。

@@ -29,7 +29,7 @@ interface DecodeErrorPanelProps {
 function kindBadgeClass(kind: string): string {
   switch (errorKindTone(kind)) {
     case "warn":
-      return "border-amber-300 text-amber-700";
+      return "border-warning/30 text-warning";
     case "error":
       return "border-destructive/40 text-destructive";
     default:
@@ -43,18 +43,18 @@ function GroupRow({ group }: { group: DecodeErrorGroup }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <Badge variant="outline" className={`text-[10px] ${kindBadgeClass(group.kind)}`}>
+            <Badge variant="outline" className={`text-2xs ${kindBadgeClass(group.kind)}`}>
               {describeErrorKind(group.kind)}
             </Badge>
             <span className="font-mono text-xs text-foreground break-all">{group.template}</span>
           </div>
           {group.sample && group.sample !== group.template && (
-            <p className="mt-1 font-mono text-[11px] text-muted-foreground break-all">
+            <p className="mt-1 font-mono text-micro text-muted-foreground break-all">
               样本：{group.sample}
             </p>
           )}
           {(group.sample_raw_packet_id || group.sample_src) && (
-            <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/80">
+            <p className="mt-0.5 font-mono text-2xs text-muted-foreground">
               代表包 {group.sample_raw_packet_id}
               {group.sample_src ? ` · ${group.sample_src} → ${group.sample_dst}` : ""}
             </p>

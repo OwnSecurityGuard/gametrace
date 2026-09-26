@@ -92,26 +92,26 @@ function AccountsSection() {
           {bootstrap.map((owner) => (
             <div key={owner} className="flex items-center gap-2 px-3 py-2 text-sm">
               <span className="font-mono">{owner}</span>
-              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">admin</span>
-              <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-micro text-primary">admin</span>
+              <span className="rounded bg-muted px-1.5 py-0.5 text-micro text-muted-foreground">
                 本机配置（GT_AUTH_TOKENS）
               </span>
-              <span className="ml-auto text-[11px] text-muted-foreground">不可撤销</span>
+              <span className="ml-auto text-micro text-muted-foreground">不可撤销</span>
             </div>
           ))}
           {users.map((u) => (
             <div key={u.owner} className="flex items-center gap-2 px-3 py-2 text-sm">
               <span className="font-mono">{u.owner}</span>
               {u.is_admin && (
-                <span className="flex items-center gap-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">
+                <span className="flex items-center gap-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-micro text-primary">
                   <ShieldCheck className="h-3 w-3" />
                   admin
                 </span>
               )}
-              <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+              <span className="rounded bg-muted px-1.5 py-0.5 text-micro text-muted-foreground">
                 {u.created_by ? `由 ${u.created_by} 添加` : "自助注册"}
               </span>
-              <span className="ml-auto text-[11px] text-muted-foreground">{formatTime(u.created_at)}</span>
+              <span className="ml-auto text-micro text-muted-foreground">{formatTime(u.created_at)}</span>
               {u.owner !== self && (
                 <Button
                   variant="outline"

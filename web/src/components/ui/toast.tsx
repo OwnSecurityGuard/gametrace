@@ -93,7 +93,7 @@ function ToastCard({ item, onDismiss }: { item: ToastItem; onDismiss: () => void
         type="button"
         aria-label="关闭通知"
         onClick={onDismiss}
-        className="-mr-1 -mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="-mr-1 -mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <X className="h-3.5 w-3.5" />
       </button>

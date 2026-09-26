@@ -54,14 +54,14 @@ function SingboxDownloadHint() {
             target="_blank"
             rel="noopener noreferrer"
             title={c.title}
-            className="inline-flex items-center gap-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="inline-flex items-center gap-0.5 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {c.label}
             <ExternalLink className="h-3 w-3" />
           </a>
         ))}
       </div>
-      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+      <p className="mt-1 text-micro leading-relaxed text-muted-foreground">
         用其他客户端（Clash 等）时，按上面的地址手动配置 HTTP 代理即可。
       </p>
     </div>
@@ -100,7 +100,7 @@ export function LeaseQrPanel({ lease, qrSize = 132 }: { lease: ProxyLease; qrSiz
             <QRCode value={value} size={qrSize} bgColor="#ffffff" fgColor="#0f172a" />
           ) : (
             <div
-              className="flex items-center justify-center px-2 text-center text-[11px] text-muted-foreground"
+              className="flex items-center justify-center px-2 text-center text-micro text-muted-foreground"
               style={{ width: qrSize, height: qrSize }}
             >
               未拿到局域网地址，无法生成二维码
@@ -114,7 +114,7 @@ export function LeaseQrPanel({ lease, qrSize = 132 }: { lease: ProxyLease; qrSiz
             手机扫码接入
             <span
               className={
-                "ml-auto rounded px-1.5 py-0.5 text-[10px] font-normal " +
+                "ml-auto rounded px-1.5 py-0.5 text-2xs font-normal " +
                 (connected ? "bg-success/15 text-success" : "bg-muted text-muted-foreground")
               }
             >
@@ -127,7 +127,7 @@ export function LeaseQrPanel({ lease, qrSize = 132 }: { lease: ProxyLease; qrSiz
             onClick={handleCopy}
             disabled={!value}
             title={singboxUri ? "复制 sing-box 导入链接" : "复制连接地址"}
-            className="flex w-full items-center gap-2 rounded-md border border-border bg-background px-2 py-1.5 text-left transition-colors hover:border-primary/40 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="flex w-full items-center gap-2 rounded-md border border-border bg-background px-2 py-1.5 text-left transition-colors hover:border-primary/40 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {copied ? (
               <CopyCheck className="h-3.5 w-3.5 shrink-0 text-success" />
@@ -138,19 +138,19 @@ export function LeaseQrPanel({ lease, qrSize = 132 }: { lease: ProxyLease; qrSiz
           </button>
 
           {singboxUri ? (
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
+            <p className="text-micro leading-relaxed text-muted-foreground">
               sing-box「添加配置 → 扫描二维码」导入，自动生成 TUN 配置并连到{" "}
               <code className="font-mono">{connectAddr || "本机"}</code>。
             </p>
           ) : (
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
+            <p className="text-micro leading-relaxed text-muted-foreground">
               手机代理软件添加 HTTP 代理，服务器填{" "}
               <code className="font-mono">{lease.lan_ip || "本机IP"}</code>，端口填{" "}
               <code className="font-mono">{publicPort}</code>。
             </p>
           )}
 
-          <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <p className="flex items-center gap-1 text-micro text-muted-foreground">
             <MonitorSmartphone className="h-3 w-3 shrink-0" />
             <span className="min-w-0 truncate">
               手机连上后上方会变成「已接入」，这时再点「开始抓包」才有数据。

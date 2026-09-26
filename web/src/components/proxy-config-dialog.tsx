@@ -25,6 +25,7 @@ import {
   Wifi,
   X,
 } from "lucide-react";
+import { Select } from "@/components/ui/select";
 
 interface ProxyConfigDialogProps {
   open: boolean;
@@ -68,7 +69,7 @@ function Collapse({ title, subtitle, defaultOpen = false, children }: CollapsePr
         type="button"
         onClick={() => setOpenState((o) => !o)}
         aria-expanded={openState}
-        className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <ChevronDown
           className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${openState ? "rotate-0" : "-rotate-90"}`}
@@ -100,21 +101,21 @@ function ConnectionSteps({ steps }: { steps: StepItem[] }) {
         <div key={s.key} className={`flex items-center ${i > 0 ? "flex-1" : ""}`}>
           {i > 0 && (
             <div
-              className={`mx-1 h-0.5 flex-1 rounded ${s.done ? "bg-emerald-500/60" : "bg-border"}`}
+              className={`mx-1 h-0.5 flex-1 rounded ${s.done ? "bg-success/60" : "bg-border"}`}
               aria-hidden
             />
           )}
           <div className="flex min-w-0 flex-col items-center gap-0.5">
             <div
               className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
-                s.done ? "bg-emerald-500 text-white" : "border-2 border-border bg-background text-muted-foreground"
+                s.done ? "bg-success text-white" : "border-2 border-border bg-background text-muted-foreground"
               }`}
               title={`${s.label}：${s.desc}`}
             >
               {s.done ? <Check className="h-3.5 w-3.5" /> : i + 1}
             </div>
             <span
-              className={`max-w-[64px] truncate text-center text-[11px] leading-tight ${
+              className={`max-w-[64px] truncate text-center text-micro leading-tight ${
                 s.done ? "text-foreground" : "text-muted-foreground"
               }`}
             >
@@ -295,9 +296,9 @@ export function ProxyConfigDialog({ open, onClose, onNavigateToSession }: ProxyC
             <label htmlFor="lease-plugin" className="text-sm font-medium">
               解码插件
             </label>
-            <select
+            <Select
               id="lease-plugin"
-              className="mt-1.5 h-9 w-full rounded-md border border-input bg-background px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+              size="default" className="mt-1.5 w-full"
               value={plugin}
               onChange={(e) => setPlugin(e.target.value)}
             >
@@ -308,7 +309,7 @@ export function ProxyConfigDialog({ open, onClose, onNavigateToSession }: ProxyC
                   {!p.online ? "（离线）" : ""}
                 </option>
               ))}
-            </select>
+            </Select>
             <p className="mt-1 text-xs text-muted-foreground">
               租约会话绑定该插件解码流量；分帧/重组由插件自身实现，空为仅抓原始包。
               离线插件不可选 —— 先在「插件」页面启动后再来选择。
@@ -408,7 +409,11 @@ export function ProxyConfigDialog({ open, onClose, onNavigateToSession }: ProxyC
                         : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:bg-muted/50"
                     }`}
                   >
-                    <span className={`h-1.5 w-1.5 rounded-full ${l.capture_running || l.session_running ? "bg-emerald-500" : "bg-muted-foreground"}`} />
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${l.capture_running || l.session_running ? "bg-success" : "bg-muted-foreground"}`}
+                    >
+                      <span className="sr-only">{l.capture_running || l.session_running ? "抓包中" : "空闲"}</span>
+                    </span>
                     <span className="max-w-[160px] truncate">{l.device || l.lease_id}</span>
                   </button>
                 );
@@ -549,13 +554,13 @@ function LeaseDetail({ lease, onNavigateToSession, onStart, onStop, onRelease }:
 
         {/* 实时活动明细 */}
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border pt-2.5 text-xs text-muted-foreground">
-          <span className={capturing ? "font-medium text-emerald-600" : ""}>
+          <span className={capturing ? "font-medium text-success" : ""}>
             当前会话 <span className="font-mono">{lease.session_id ? lease.session_id.slice(-12) : "idle"}</span>
           </span>
           <span>
             累计抓包 <span className="font-mono">{captureCount}</span> 次
           </span>
-          <span className={phoneConnected ? "font-medium text-emerald-600" : ""}>
+          <span className={phoneConnected ? "font-medium text-success" : ""}>
             活跃连接 <span className="font-mono">{activeConns}</span>
           </span>
           <span>

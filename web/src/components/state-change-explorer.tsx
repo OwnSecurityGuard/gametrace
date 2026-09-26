@@ -40,6 +40,7 @@ import type {
   SortBy,
   TimeBucket,
 } from "@/types/state-change";
+import { Select } from "@/components/ui/select";
 
 interface StateChangeExplorerProps {
   sessionId: string | null;
@@ -114,9 +115,9 @@ function parseList(v: string): string[] {
 }
 
 const KIND_STYLE: Record<string, string> = {
-  request: "bg-sky-50 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+  request: "bg-info/10 text-info dark:bg-info/15",
   response: "bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
-  push: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  push: "bg-warning/10 text-warning dark:bg-warning/15",
   unknown: "bg-muted text-muted-foreground",
 };
 
@@ -131,7 +132,7 @@ function KindBadge({ kind }: { kind: MessageKind | string }) {
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-medium",
+        "inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-2xs font-medium",
         KIND_STYLE[kind] ?? KIND_STYLE.unknown,
       )}
     >
@@ -155,7 +156,7 @@ function TimeLabel({
   const text = mode === "relative" ? relTime(offsetMs) : absTime(iso);
   return (
     <span
-      className={cn("font-mono text-[11px] tabular-nums", className)}
+      className={cn("font-mono text-micro tabular-nums", className)}
       title={mode === "relative" ? absTime(iso) : relTime(offsetMs)}
     >
       {text}
@@ -514,8 +515,8 @@ function QueryBar(p: QueryBarProps) {
         <Crosshair className="h-3.5 w-3.5" />
         锚点
       </span>
-      <select
-        className="h-7 rounded-md border border-border bg-background px-1.5 text-xs"
+      <Select
+        size="micro"
         value={p.anchorKind}
         onChange={(e) => p.onAnchorKind(e.target.value as AnchorKind)}
         aria-label="锚点类型"
@@ -524,11 +525,11 @@ function QueryBar(p: QueryBarProps) {
         <option value="operation">操作</option>
         <option value="entity">实体</option>
         <option value="event">事件</option>
-      </select>
+      </Select>
 
       {p.anchorKind === "operation" && p.catalog.ops.length > 0 && (
-        <select
-          className="h-7 max-w-[16rem] rounded-md border border-border bg-background px-1.5 text-xs"
+        <Select
+          size="micro" className="max-w-[16rem]"
           value={p.anchorId}
           onChange={(e) => p.onAnchorId(e.target.value)}
           aria-label="选择操作"
@@ -539,11 +540,11 @@ function QueryBar(p: QueryBarProps) {
               {o.label}
             </option>
           ))}
-        </select>
+        </Select>
       )}
       {p.anchorKind === "entity" && p.catalog.entities.length > 0 && (
-        <select
-          className="h-7 max-w-[16rem] rounded-md border border-border bg-background px-1.5 text-xs"
+        <Select
+          size="micro" className="max-w-[16rem]"
           value={p.anchorId}
           onChange={(e) => p.onAnchorId(e.target.value)}
           aria-label="选择实体"
@@ -554,7 +555,7 @@ function QueryBar(p: QueryBarProps) {
               {k}
             </option>
           ))}
-        </select>
+        </Select>
       )}
       {((p.anchorKind === "operation" && p.catalog.ops.length === 0) ||
         p.anchorKind === "event" ||
@@ -602,8 +603,8 @@ function QueryBar(p: QueryBarProps) {
       </label>
 
       <span className="ml-1 text-muted-foreground">排序</span>
-      <select
-        className="h-7 rounded-md border border-border bg-background px-1.5 text-xs"
+      <Select
+        size="micro"
         value={p.sortBy}
         onChange={(e) => p.onSortBy(e.target.value as SortBy)}
         aria-label="排序方式"
@@ -613,7 +614,7 @@ function QueryBar(p: QueryBarProps) {
             {s.label}
           </option>
         ))}
-      </select>
+      </Select>
 
       <span className="ml-1 text-muted-foreground">过滤</span>
       <input
@@ -703,8 +704,8 @@ function SummaryBar({ data }: { data: { summary: { change_count: number; entity_
           窗口 −{data.window.before_ms}ms / +{data.window.after_ms}ms
         </span>
       )}
-      {data.truncated && <span className="text-amber-600">结果已截断（提高 limit 查看全部）</span>}
-      {data.anchor?.note && <span className="text-amber-600">{data.anchor.note}</span>}
+      {data.truncated && <span className="text-warning">结果已截断（提高 limit 查看全部）</span>}
+      {data.anchor?.note && <span className="text-warning">{data.anchor.note}</span>}
     </div>
   );
 }
@@ -817,17 +818,17 @@ function EntityTypeSection({
         className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5 text-left hover:bg-muted/40"
       >
         {open ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         )}
         <span className="font-mono text-xs font-semibold">{title}</span>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-micro text-muted-foreground">
           {bucket.change_count} 次变化
           {!only && ` · ${bucket.entity_count} 个实体`} · {bucket.field_paths.length} 种字段
         </span>
         {bucket.field_paths.length > 0 && (
-          <span className="truncate font-mono text-[10px] text-muted-foreground/70" title={bucket.field_paths.join(", ")}>
+          <span className="truncate font-mono text-2xs text-muted-foreground" title={bucket.field_paths.join(", ")}>
             {preview.join(", ")}
             {restFields > 0 && ` +${restFields}`}
           </span>
@@ -877,7 +878,7 @@ function OperationView({
                 {lead ? `${lead.subject_type}:${lead.subject_id}` : g.label}
               </span>
               {lead && g.entity_count > 1 && (
-                <span className="text-[11px] text-muted-foreground">等 {g.entity_count} 个实体</span>
+                <span className="text-micro text-muted-foreground">等 {g.entity_count} 个实体</span>
               )}
               {lead && (
                 <span
@@ -885,11 +886,11 @@ function OperationView({
                   title="协议名：本次操作对应的协议消息（次要信息）"
                 >
                   <KindBadge kind={g.kind} />
-                  <span className="font-mono text-[10px] text-muted-foreground">{g.label}</span>
+                  <span className="font-mono text-2xs text-muted-foreground">{g.label}</span>
                 </span>
               )}
               <TimeLabel offsetMs={g.start_offset_ms} iso={g.anchor.timestamp} mode={timeMode} className="text-muted-foreground" />
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-micro text-muted-foreground">
                 {g.change_count} 次变化 · {g.field_count} 种字段
               </span>
               <div className="ml-auto flex items-center gap-1">
@@ -904,23 +905,23 @@ function OperationView({
 
             {chain.length > 0 && (
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                <span className="text-[10px] text-muted-foreground/70">同操作其余消息</span>
+                <span className="text-2xs text-muted-foreground">同操作其余消息</span>
                 {chain.map((m, i) => (
                   <span key={m.event_id} className="inline-flex items-center gap-1.5">
-                    {i > 0 && <ArrowRight className="h-3 w-3 text-muted-foreground/60" />}
+                    {i > 0 && <ArrowRight className="h-3 w-3 text-muted-foreground" />}
                     <button
                       type="button"
                       onClick={() => onDetail({ eventId: m.event_id })}
                       title={`${m.msg_name} · ${absTime(m.timestamp)} · ${m.event_id}`}
                       className={cn(
-                        "inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-[11px] hover:bg-muted/60",
-                        m.kind === "request" && "border-sky-300/60",
-                        m.kind === "push" && "border-amber-300/60",
+                        "inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-micro hover:bg-muted/60",
+                        m.kind === "request" && "border-info/60",
+                        m.kind === "push" && "border-warning/60",
                       )}
                     >
                       <KindBadge kind={m.kind} />
                       {m.msg_name}
-                      <TimeLabel offsetMs={m.offset_ms} iso={m.timestamp} mode={timeMode} className="text-muted-foreground/70" />
+                      <TimeLabel offsetMs={m.offset_ms} iso={m.timestamp} mode={timeMode} className="text-muted-foreground" />
                     </button>
                   </span>
                 ))}
@@ -1012,11 +1013,11 @@ function EntityCard({
     >
       <div className="flex flex-wrap items-center gap-2">
         <EntityChip entity={g} />
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-micro text-muted-foreground">
           {g.change_count} 次变化 · {g.field_count} 个字段
         </span>
         <TimeLabel offsetMs={g.first_offset_ms} iso={g.first_change} mode={timeMode} className="text-muted-foreground" />
-        <ArrowRight className="h-3 w-3 text-muted-foreground/60" />
+        <ArrowRight className="h-3 w-3 text-muted-foreground" />
         <TimeLabel offsetMs={g.last_offset_ms} iso={g.last_change} mode={timeMode} className="text-muted-foreground" />
         <div className="ml-auto flex items-center gap-1">
           <IconBtn title="以该实体为锚点" onClick={() => onAnchor(g.key)}>
@@ -1036,7 +1037,7 @@ function EntityCard({
               type="button"
               onClick={() => onDetail({ entity: g.key, path: p })}
               title={`查看字段 ${p} 的完整历史`}
-              className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+              className="rounded bg-muted px-1.5 py-0.5 font-mono text-2xs text-muted-foreground hover:text-foreground"
             >
               {p}
             </button>
@@ -1063,8 +1064,8 @@ function EntityCard({
 
 function EntityChip({ entity }: { entity: EntityGroup }) {
   return (
-    <span className="font-mono text-[11px]">
-      <span className="text-muted-foreground/70">{entity.subject_type}:</span>
+    <span className="font-mono text-micro">
+      <span className="text-muted-foreground">{entity.subject_type}:</span>
       <span className="font-semibold text-foreground">{entity.subject_id}</span>
     </span>
   );
@@ -1090,7 +1091,7 @@ function TimeView({
         <div key={b.index} className="rounded-lg border border-border bg-card p-2">
           <div className="flex items-center gap-2">
             <TimeLabel offsetMs={b.start_offset_ms} iso={b.start} mode={timeMode} className="font-semibold" />
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-micro text-muted-foreground">
               {b.change_count} 次变化 · {b.entity_count} 个实体
             </span>
             {/* 密度条：一眼看出变化高峰在哪个时间段 */}
@@ -1108,11 +1109,11 @@ function TimeView({
                   type="button"
                   onClick={() => onFocusOperation(op.key)}
                   title="跳到「按操作」视图"
-                  className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-[11px] hover:bg-muted/60"
+                  className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-micro hover:bg-muted/60"
                 >
                   <KindBadge kind={op.kind} />
                   {op.label}
-                  <TimeLabel offsetMs={op.offset_ms} mode={timeMode} className="text-muted-foreground/70" />
+                  <TimeLabel offsetMs={op.offset_ms} mode={timeMode} className="text-muted-foreground" />
                 </button>
                 {op.entities.map((e) => (
                   <button
@@ -1120,7 +1121,7 @@ function TimeView({
                     type="button"
                     onClick={() => onFocusEntity(e.key)}
                     title={`${e.field_paths.join(", ")} · 跳到「按实体」视图`}
-                    className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+                    className="rounded bg-muted px-1.5 py-0.5 font-mono text-2xs text-muted-foreground hover:text-foreground"
                   >
                     {e.subject_type}:{e.subject_id} ×{e.change_count}
                   </button>
@@ -1173,30 +1174,30 @@ function EntityRow({
   return (
     <div className={cn("rounded border border-border/70", focus.entity === entity.key && "border-primary/60")}>
       <div className="flex flex-wrap items-center gap-2 px-2 py-1">
-        <button type="button" onClick={() => setOpen((v) => !v)} className="text-muted-foreground/70" aria-label="展开">
+        <button type="button" onClick={() => setOpen((v) => !v)} className="text-muted-foreground" aria-label="展开">
           {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
         </button>
         <button type="button" onClick={onOpen} title="跳到「按实体」视图" className="hover:underline">
           <EntityChip entity={entity} />
         </button>
-        <span className="text-[11px] text-muted-foreground">×{entity.change_count}</span>
+        <span className="text-micro text-muted-foreground">×{entity.change_count}</span>
         {/* 折叠态就要能看到「变成什么」：只给字段名等于没给信息 */}
         {preview.length > 0 ? (
-          <span className="flex min-w-0 flex-wrap items-center gap-x-2.5 font-mono text-[10px]">
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2.5 font-mono text-2xs">
             {preview.map((c) => (
               <span key={c.id} className="inline-flex items-center gap-1">
                 <span className="text-muted-foreground">{c.path}</span>
-                <BeforeText change={c} className="text-[10px]" />
-                <ArrowRight className="h-2.5 w-2.5 shrink-0 text-muted-foreground/50" />
+                <BeforeText change={c} className="text-2xs" />
+                <ArrowRight className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
                 <span className="font-medium text-foreground" title="变更后">
                   {compactJson(c.after)}
                 </span>
               </span>
             ))}
-            {restCount > 0 && <span className="text-muted-foreground/60">+{restCount} 项</span>}
+            {restCount > 0 && <span className="text-muted-foreground">+{restCount} 项</span>}
           </span>
         ) : (
-          <span className="truncate font-mono text-[10px] text-muted-foreground/70">{entity.field_paths.join(", ")}</span>
+          <span className="truncate font-mono text-2xs text-muted-foreground">{entity.field_paths.join(", ")}</span>
         )}
         <IconBtn title="查看该实体完整历史" onClick={() => onDetail({ entity: entity.key })}>
           <History className="h-3 w-3" />
@@ -1232,14 +1233,14 @@ function OperationHitRow({
   return (
     <div className="rounded border border-border/70">
       <div className="flex flex-wrap items-center gap-2 px-2 py-1">
-        <button type="button" onClick={() => setOpen((v) => !v)} className="text-muted-foreground/70" aria-label="展开">
+        <button type="button" onClick={() => setOpen((v) => !v)} className="text-muted-foreground" aria-label="展开">
           {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
         </button>
         <button type="button" onClick={onOpen} title="跳到「按操作」视图" className="inline-flex items-center gap-1 hover:underline">
           <KindBadge kind={hit.kind} />
-          <span className="font-mono text-[11px]">{hit.label}</span>
+          <span className="font-mono text-micro">{hit.label}</span>
         </button>
-        <span className="text-[11px] text-muted-foreground">×{hit.change_count}</span>
+        <span className="text-micro text-muted-foreground">×{hit.change_count}</span>
         {/* 具体是哪条消息改的：请求 / 响应 / 推送 */}
         <span className="flex items-center gap-1">
           {hit.events?.map((m) => (
@@ -1248,17 +1249,17 @@ function OperationHitRow({
               type="button"
               onClick={() => onDetail({ eventId: m.event_id })}
               title={`${m.msg_name} · ${relTime(m.offset_ms)} · 查看协议链`}
-              className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+              className="rounded bg-muted px-1 py-0.5 font-mono text-2xs text-muted-foreground hover:text-foreground"
             >
               {KIND_LABEL[m.kind] ?? m.kind}
             </button>
           ))}
         </span>
-        <span className="truncate font-mono text-[10px] text-muted-foreground/70">{hit.field_paths.join(", ")}</span>
+        <span className="truncate font-mono text-2xs text-muted-foreground">{hit.field_paths.join(", ")}</span>
         <TimeLabel offsetMs={hit.offset_ms} iso={hit.timestamp} mode={timeMode} className="ml-auto text-muted-foreground" />
       </div>
       {open && (
-        <div className="border-t border-border/70 px-2 py-1 text-[11px] text-muted-foreground">
+        <div className="border-t border-border/70 px-2 py-1 text-micro text-muted-foreground">
           该操作对本实体共产生 {hit.change_count} 次变化，涉及字段 {hit.field_paths.join(", ")}；
           <button
             type="button"
@@ -1278,7 +1279,7 @@ function BeforeText({ change, className }: { change: Change; className?: string 
   const kind = beforeKind(change);
   if (kind === "resolved") {
     return (
-      <span className={cn("truncate text-muted-foreground/70 line-through", className)} title={compactJson(change.before)}>
+      <span className={cn("truncate text-muted-foreground line-through", className)} title={compactJson(change.before)}>
         {compactJson(change.before)}
       </span>
     );
@@ -1286,7 +1287,7 @@ function BeforeText({ change, className }: { change: Change; className?: string 
   if (kind === "first-seen") {
     return (
       <span
-        className={cn("shrink-0 text-muted-foreground/60", className)}
+        className={cn("shrink-0 text-muted-foreground", className)}
         title="平台此前未见过该字段：这是首次同步，不是一次真实变化"
       >
         首见
@@ -1295,7 +1296,7 @@ function BeforeText({ change, className }: { change: Change; className?: string 
   }
   return (
     <span
-      className={cn("truncate text-muted-foreground/50 underline decoration-dashed underline-offset-2", className)}
+      className={cn("truncate text-muted-foreground underline decoration-dashed underline-offset-2", className)}
       title={`插件声明的前值（平台未验证）：${compactJson(change.before)}`}
     >
       {compactJson(change.before)}
@@ -1316,7 +1317,7 @@ function ChangeRow({
   return (
     <div className="flex flex-wrap items-center gap-2 rounded px-1.5 py-1 hover:bg-muted/40">
       <span
-        className="w-8 shrink-0 font-mono text-[10px] text-muted-foreground/60"
+        className="w-8 shrink-0 font-mono text-2xs text-muted-foreground"
         title={`本视图第 ${change.seq} 条 · 来源消息内第 ${change.src_seq} 条`}
       >
         #{change.seq}
@@ -1326,16 +1327,16 @@ function ChangeRow({
         type="button"
         onClick={() => onDetail?.({ changeId: change.id })}
         title={`${change.source.msg_name} · ${change.event_id} · 点击查看详情`}
-        className="inline-flex items-center gap-1 font-mono text-[11px] hover:underline"
+        className="inline-flex items-center gap-1 font-mono text-micro hover:underline"
       >
         <KindBadge kind={change.source.kind} />
         {change.source.msg_name}
       </button>
-      <span className="font-mono text-[11px] text-foreground">{change.path}</span>
+      <span className="font-mono text-micro text-foreground">{change.path}</span>
       <OpBadge op={change.op} />
-      <span className="flex min-w-0 items-center gap-1 font-mono text-[11px]">
+      <span className="flex min-w-0 items-center gap-1 font-mono text-micro">
         <BeforeText change={change} />
-        <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+        <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
         <span className="truncate font-medium" title={compactJson(change.after)}>
           {compactJson(change.after)}
         </span>
@@ -1356,7 +1357,7 @@ function EventJump({ eventId, onOpen }: { eventId: string; onOpen: (id: string) 
       type="button"
       onClick={() => onOpen(eventId)}
       title="在协议事件视图查看这条消息"
-      className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+      className="inline-flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-2xs text-muted-foreground hover:bg-muted/60 hover:text-foreground"
     >
       <Table2 className="h-3 w-3" />
       查看该消息
@@ -1401,7 +1402,7 @@ function DetailDialog({
           <section>
             <h4 className="mb-1 text-xs font-semibold text-muted-foreground">这条变化</h4>
             <div className="rounded-lg border border-border p-2">
-              <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-micro text-muted-foreground">
                 <span className="font-mono text-foreground">
                   {data.change.subject_type}:{data.change.subject_id}
                 </span>
@@ -1415,11 +1416,11 @@ function DetailDialog({
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <div>
-                  <p className="mb-1 text-[11px] text-muted-foreground">变更前</p>
+                  <p className="mb-1 text-micro text-muted-foreground">变更前</p>
                   <HighlightedJson data={data.change.before} />
                 </div>
                 <div>
-                  <p className="mb-1 text-[11px] text-muted-foreground">变更后</p>
+                  <p className="mb-1 text-micro text-muted-foreground">变更后</p>
                   <HighlightedJson data={data.change.after} />
                 </div>
               </div>
@@ -1436,14 +1437,14 @@ function DetailDialog({
               {data.chain.steps.map((step, i) => (
                 <div key={step.message.event_id} className="rounded-lg border border-border p-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-[10px] text-muted-foreground/60">#{i + 1}</span>
+                    <span className="font-mono text-2xs text-muted-foreground">#{i + 1}</span>
                     <KindBadge kind={step.message.kind} />
                     <span className="font-mono text-xs font-semibold">{step.message.msg_name}</span>
                     <TimeLabel offsetMs={step.offset_ms} iso={step.message.timestamp} mode={timeMode} className="text-muted-foreground" />
                     {step.change_count > 0 ? (
-                      <span className="text-[11px] text-muted-foreground">{step.change_count} 次变化</span>
+                      <span className="text-micro text-muted-foreground">{step.change_count} 次变化</span>
                     ) : (
-                      <span className="text-[11px] text-muted-foreground/60">未产生状态变化</span>
+                      <span className="text-micro text-muted-foreground">未产生状态变化</span>
                     )}
                     {onOpenEvent && (
                       <span className="ml-auto">
@@ -1455,10 +1456,10 @@ function DetailDialog({
                     <div className="mt-1.5 space-y-1 pl-3">
                       {step.entities.map((e) => (
                         <div key={e.key}>
-                          <div className="flex items-center gap-2 text-[11px]">
-                            <span className="font-mono text-muted-foreground/70">{e.subject_type}:</span>
+                          <div className="flex items-center gap-2 text-micro">
+                            <span className="font-mono text-muted-foreground">{e.subject_type}:</span>
                             <span className="font-mono text-foreground">{e.subject_id}</span>
-                            <span className="text-muted-foreground/70">{e.field_paths.join(", ")}</span>
+                            <span className="text-muted-foreground">{e.field_paths.join(", ")}</span>
                           </div>
                           <div className="pl-2">
                             {e.changes?.map((c) => (
@@ -1483,11 +1484,11 @@ function DetailDialog({
             <div className="space-y-2">
               {data.history.fields?.map((f) => (
                 <div key={f.path} className="rounded-lg border border-border p-2">
-                  <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px]">
+                  <div className="mb-1 flex flex-wrap items-center gap-2 text-micro">
                     <span className="font-mono font-semibold">{f.path}</span>
                     <span className="text-muted-foreground">{f.change_count} 次变化</span>
-                    <span className="font-mono text-muted-foreground/70">{f.ops.join("/")}</span>
-                    <span className="font-mono text-muted-foreground/70">
+                    <span className="font-mono text-muted-foreground">{f.ops.join("/")}</span>
+                    <span className="font-mono text-muted-foreground">
                       {compactJson(f.first_value)} → {compactJson(f.last_value)}
                     </span>
                   </div>

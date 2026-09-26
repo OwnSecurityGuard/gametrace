@@ -56,11 +56,11 @@ function formatUnix(sec: number): string {
 function ProbeStatusLine({ p }: { p: ProbeInfo }) {
   const conn = p.connection_state === "online";
   return (
-    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+    <div className="flex flex-wrap items-center gap-1.5 text-micro">
       <span
         className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 ${
           conn
-            ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+            ? "bg-success/15 text-success"
             : "bg-muted text-muted-foreground"
         }`}
       >
@@ -81,7 +81,7 @@ function ProbeStatusLine({ p }: { p: ProbeInfo }) {
           : "从未抓到包"}
       </span>
       {p.dropped > 0 && (
-        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-700 dark:text-amber-300">
+        <span className="rounded bg-warning/15 px-1.5 py-0.5 text-warning">
           丢弃 {p.dropped}
         </span>
       )}
@@ -236,6 +236,8 @@ export function ProbeAdminDialog({ open, onClose, onImported }: ProbeAdminDialog
                     {renamingId === p.probe_id ? (
                       <div className="flex items-center gap-1.5">
                         <Input
+                          name="probe-rename"
+                          aria-label="探针名称"
                           value={renameValue}
                           onChange={(e) => setRenameValue(e.target.value)}
                           autoFocus
@@ -256,7 +258,7 @@ export function ProbeAdminDialog({ open, onClose, onImported }: ProbeAdminDialog
                       <>
                         <div className="flex items-center gap-2">
                           <span className="truncate text-sm font-medium">{p.name}</span>
-                          <span className="truncate font-mono text-[10px] text-muted-foreground">
+                          <span className="truncate font-mono text-2xs text-muted-foreground">
                             {p.hostname} · {p.os}/{p.arch} · v{p.version || "?"}
                           </span>
                         </div>
@@ -367,12 +369,16 @@ export function ProbeAdminDialog({ open, onClose, onImported }: ProbeAdminDialog
                     </div>
                     <div className="flex items-center gap-1.5">
                       <Input
+                        name="notify-title"
+                        aria-label="通知标题"
                         value={notifyTitle}
                         onChange={(e) => setNotifyTitle(e.target.value)}
                         placeholder="标题（可选）"
                         className="h-7 w-40 text-sm"
                       />
                       <Input
+                        name="notify-message"
+                        aria-label="通知内容"
                         value={notifyMessage}
                         onChange={(e) => setNotifyMessage(e.target.value)}
                         placeholder="通知内容"
@@ -428,7 +434,7 @@ export function ProbeAdminDialog({ open, onClose, onImported }: ProbeAdminDialog
                         {segments.map((s) => (
                           <div
                             key={s.seg_id}
-                            className="flex items-center gap-2 rounded bg-muted/50 px-2 py-1 font-mono text-[11px]"
+                            className="flex items-center gap-2 rounded bg-muted/50 px-2 py-1 font-mono text-micro"
                           >
                             <span className="truncate">{s.seg_id}</span>
                             <span className="ml-auto shrink-0 text-muted-foreground">

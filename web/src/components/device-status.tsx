@@ -1,10 +1,11 @@
 import { Laptop, Activity, CircleCheck, ChevronRight, Clock } from "lucide-react";
 import { useMyDevices } from "@/hooks/use-devices";
 import type { DeviceState, DeviceView } from "@/types/device";
+import { Badge } from "@/components/ui/badge";
 
 const STATE_META: Record<DeviceState, { label: string; text: string }> = {
-  connected: { label: "已连接", text: "text-blue-600 dark:text-blue-400" },
-  capturing: { label: "正在抓包", text: "text-emerald-600 dark:text-emerald-400" },
+  connected: { label: "已连接", text: "text-info" },
+  capturing: { label: "正在抓包", text: "text-success" },
   stopped: { label: "已停止", text: "text-muted-foreground" },
   offline: { label: "离线", text: "text-muted-foreground" },
 };
@@ -50,9 +51,9 @@ export function DeviceStatusList({ onSelectSession }: DeviceStatusListProps) {
   if (devices.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-border bg-card/40 px-4 py-5 text-center">
-        <Laptop className="mx-auto h-5 w-5 text-muted-foreground/60" />
+        <Laptop className="mx-auto h-5 w-5 text-muted-foreground" />
         <p className="mt-2 text-sm text-muted-foreground">还没有接入设备</p>
-        <p className="mt-0.5 text-xs text-muted-foreground/80">
+        <p className="mt-0.5 text-xs text-muted-foreground">
           点击「接入设备」下载探针并在目标电脑上运行，接入后这里会显示「已连接」。
         </p>
       </div>
@@ -94,15 +95,13 @@ function DeviceCard({
             {meta.label}
           </span>
           {device.platform && (
-            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-              {platformLabel(device.platform)}
-            </span>
+            <Badge variant="muted" size="micro">{platformLabel(device.platform)}</Badge>
           )}
         </div>
-        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+        <p className="mt-0.5 truncate text-micro text-muted-foreground">
           <span className="font-mono">{device.hostname || device.name || device.id}</span>
         </p>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">
+        <p className="mt-0.5 text-micro text-muted-foreground">
           {device.state === "capturing" ? (
             <>
               <span className="font-mono tabular-nums">{device.packets?.toLocaleString() ?? 0}</span> packets ·{" "}
@@ -110,7 +109,7 @@ function DeviceCard({
               {(device.decodeErrors ?? 0) > 0 ? (
                 <>
                   {" "}
-                  · <span className="text-red-600 dark:text-red-400">{device.decodeErrors} 解码错误</span>
+                  · <span className="text-destructive">{device.decodeErrors} 解码错误</span>
                 </>
               ) : (
                 ""

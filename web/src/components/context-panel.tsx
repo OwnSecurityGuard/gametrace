@@ -84,7 +84,7 @@ function Foot({ children }: { children: React.ReactNode }) {
 
 function ScopePill({ icon: Icon, children }: { icon: typeof Compass; children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+    <span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-micro font-medium text-muted-foreground">
       <Icon className="h-3 w-3" />
       {children}
     </span>
@@ -94,14 +94,14 @@ function ScopePill({ icon: Icon, children }: { icon: typeof Compass; children: R
 function Group({ label, count }: { label: string; count?: number }) {
   return (
     <div className="flex items-center gap-1.5 px-1.5 pb-1 pt-3 first:pt-1">
-      <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
-      {count != null && <span className="font-mono text-[11px] text-muted-foreground/70">{count}</span>}
+      <span className="text-micro font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
+      {count != null && <span className="font-mono text-micro text-muted-foreground">{count}</span>}
     </div>
   );
 }
 
 const ROW =
-  "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40";
+  "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 /** 项目行：名称 + 默认插件/端口 + 会话数。 */
 function ProjectRow({
@@ -120,15 +120,17 @@ function ProjectRow({
   return (
     <a href={projectHref(id)} className={cn(ROW, "group")}>
       {running ? (
-        <span className="gt-live-dot mt-1.5" />
+        <span className="gt-live-dot mt-1.5">
+          <span className="sr-only">运行中</span>
+        </span>
       ) : (
-        <Folder className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+        <Folder className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       )}
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm group-hover:underline">{name}</span>
-        {meta && <span className="block truncate text-[11px] text-muted-foreground">{meta}</span>}
+        {meta && <span className="block truncate text-micro text-muted-foreground">{meta}</span>}
       </span>
-      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{count}</span>
+      <span className="shrink-0 font-mono text-micro text-muted-foreground">{count}</span>
     </a>
   );
 }
@@ -155,7 +157,9 @@ function SessionRow({
           "mt-1.5 inline-block h-2 w-2 shrink-0 rounded-full",
           running ? "gt-live-dot" : session.status === "error" ? "bg-destructive" : "bg-muted-foreground/40",
         )}
-      />
+      >
+        <span className="sr-only">{running ? "运行中" : session.status === "error" ? "出错" : "已停止"}</span>
+      </span>
       <span className="min-w-0 flex-1">
         <span
           className={cn(
@@ -165,12 +169,12 @@ function SessionRow({
         >
           {session.session_id}
         </span>
-        <span className="block truncate text-[11px] text-muted-foreground">
+        <span className="block truncate text-micro text-muted-foreground">
           {fmtTime(session.started_at)}
           {projectName ? ` · ${projectName}` : ""}
         </span>
       </span>
-      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{fmtNum(session.events)}</span>
+      <span className="shrink-0 font-mono text-micro text-muted-foreground">{fmtNum(session.events)}</span>
     </a>
   );
 }
@@ -294,7 +298,7 @@ function WorkspacePanel({ selectedSessionId, onStartCapture, searchInputRef }: C
             ))}
             <a href={UNASSIGNED_HREF} className={cn(ROW, "items-center")}>
               <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-[11px] text-primary">
+              <span className="min-w-0 flex-1 truncate text-micro text-primary">
                 全部 {orphans.length} 个未归属会话（可批量删除）
               </span>
             </a>
@@ -337,7 +341,7 @@ function UnassignedPanel({ onStartCapture }: ContextPanelProps) {
       <Head>
         <ScopePill icon={Folder}>项目级作用域</ScopePill>
         <p className="mt-1.5 text-sm font-medium">未归属抓包</p>
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
+        <p className="text-micro leading-relaxed text-muted-foreground">
           开始抓包时没有选择归属的会话都在这里。
         </p>
       </Head>
@@ -372,7 +376,7 @@ function ScopedProjectPanel({
       <p className="mt-1.5 truncate text-sm font-medium" title={displayName}>
         {displayName}
       </p>
-      <p className="truncate text-[11px] text-muted-foreground">
+      <p className="truncate text-micro text-muted-foreground">
         {project
           ? project.owner
             ? `Owner ${project.owner}`
@@ -408,7 +412,7 @@ function ScopedProjectPanel({
                 )
               }
               className={cn(
-                "flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                "flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 on ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
               )}
             >
@@ -458,7 +462,7 @@ function ScopedProjectPanel({
                 <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate text-sm">{t.label}</span>
                 {counts[t.id] != null && (
-                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{counts[t.id]}</span>
+                  <span className="shrink-0 font-mono text-micro text-muted-foreground">{counts[t.id]}</span>
                 )}
               </a>
             );
@@ -530,7 +534,7 @@ function SessionPanel({ route, selectedSessionId, onStartCapture }: ContextPanel
         <p className="mt-2 truncate font-mono text-xs font-medium" title={session.session_id}>
           {session.session_id}
         </p>
-        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+        <p className="mt-0.5 truncate text-micro text-muted-foreground">
           {fmtTime(session.started_at)} · {session.plugin || "未设插件"}
         </p>
         <a

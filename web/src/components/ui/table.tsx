@@ -32,14 +32,40 @@ const TableBody = React.forwardRef<HTMLTableSectionElement, React.HTMLAttributes
 );
 TableBody.displayName = "TableBody";
 
+/**
+ * 可点击行原语：只要传了 onClick，TableRow 自动补齐键盘可达性——
+ * tabIndex=0、Enter/Space 触发、焦点环（inset，避免被相邻行裁掉）。
+ * 调用方无需（也不应）再手写 tabIndex/onKeyDown，修一次到处生效。
+ */
 const TableRow = React.forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTMLTableRowElement>>(
-  ({ className, ...props }, ref) => (
-    <tr
-      ref={ref}
-      className={cn("border-b transition-[background-color,color] hover:bg-muted/60 data-[state=selected]:bg-primary-muted", className)}
-      {...props}
-    />
-  ),
+  ({ className, onClick, ...props }, ref) => {
+    const interactive = !!onClick;
+    return (
+      <tr
+        ref={ref}
+        className={cn(
+          "border-b transition-[background-color,color] hover:bg-muted/60 data-[state=selected]:bg-primary-muted",
+          interactive &&
+            "cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          className,
+        )}
+        onClick={onClick}
+        onKeyDown={
+          interactive
+            ? (e) => {
+                if (e.target !== e.currentTarget) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onClick(e as unknown as React.MouseEvent<HTMLTableRowElement>);
+                }
+              }
+            : undefined
+        }
+        {...(interactive ? { tabIndex: 0 } : {})}
+        {...props}
+      />
+    );
+  },
 );
 TableRow.displayName = "TableRow";
 

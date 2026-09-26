@@ -279,7 +279,7 @@ export function AgentDownloadDialog({ open, onClose, onStartCapture }: AgentDown
                   />
                   {/* 未就绪平台的状态判定：编译中 → 可现场编译 → 需镜像预置 */}
                   {!p.available && !(os === p.os && arch === p.arch) && (
-                    <p className="mt-1 flex items-center justify-center text-[11px]">
+                    <p className="mt-1 flex items-center justify-center text-micro">
                       {p.building ? (
                         <span className="inline-flex items-center gap-1 text-muted-foreground">
                           <Loader2 className="h-3 w-3 animate-spin" />
@@ -338,13 +338,13 @@ export function AgentDownloadDialog({ open, onClose, onStartCapture }: AgentDown
               </div>
             )}
             {opts && opts.addr_source !== "env" && (
-              <p className="mt-1.5 flex gap-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+              <p className="mt-1.5 flex gap-1.5 text-micro text-warning">
                 <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                 服务端未配置 GT_PUBLIC_HOST，地址是按当前访问方式推测的。Docker / 公网部署请在服务端设置
                 GT_PUBLIC_HOST（必要时配 GT_PUBLIC_REGISTRY_PORT / GT_PUBLIC_INGEST_PORT），否则远端探针可能连不上。
               </p>
             )}
-            {opts?.message && <p className="mt-1.5 text-[11px] text-muted-foreground">{opts.message}</p>}
+            {opts?.message && <p className="mt-1.5 text-micro text-muted-foreground">{opts.message}</p>}
           </div>
         </div>
       )}
@@ -378,7 +378,7 @@ function PlatformOption({
         <span className="h-4 w-4 rounded-full border border-border" />
       )}
       <span className="truncate">{p.label}</span>
-      {p.exe ? <span className="ml-auto font-mono text-[10px] text-muted-foreground">.exe</span> : null}
+      {p.exe ? <span className="ml-auto font-mono text-2xs text-muted-foreground">.exe</span> : null}
     </button>
   );
 }
@@ -426,7 +426,7 @@ function AwaitingAgentPanel({ attached, probeName }: { attached: boolean; probeN
       </ol>
 
       {attached ? (
-        <div className="flex items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300">
+        <div className="flex items-center gap-2 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-xs text-success">
           <Radio className="h-3.5 w-3.5 shrink-0" />
           {probeName ?? "探针"} 已在线，点「开始抓包」指定端口与解析器。
         </div>

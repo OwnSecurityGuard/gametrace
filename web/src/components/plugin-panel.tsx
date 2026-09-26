@@ -18,6 +18,7 @@ import type { SessionInfo } from "@/types/session";
 import type { TestPluginResult, TestEventLite } from "@/types/plugin-test";
 import { useIdentity } from "@/hooks/use-auth";
 import { RAW_DEBUG_ENABLED } from "@/lib/env";
+import { Select } from "@/components/ui/select";
 
 // 稳定的空数组引用：避免在 data 未加载时每次渲染生成新的 [] 引用，
 // 否则以它为依赖的 useEffect 会无限重渲染（Maximum update depth exceeded）。
@@ -279,7 +280,7 @@ export function PluginPanel() {
           <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <FlaskConical className="h-3.5 w-3.5" />
             测试插件
-            <Badge variant="outline" className="text-emerald-600 border-emerald-300">
+            <Badge variant="outline" className="text-success border-success/30">
               <Lock className="h-3 w-3 mr-1" /> 不暴露原始包
             </Badge>
           </span>
@@ -292,8 +293,8 @@ export function PluginPanel() {
             <div className="grid grid-cols-2 gap-2">
               <label className="text-xs text-muted-foreground flex flex-col gap-1">
                 目标插件
-                <select
-                  className="h-8 rounded-md border bg-background px-2 text-xs"
+                <Select
+                  size="sm"
                   value={testPlugin}
                   onChange={(e) => setTestPlugin(e.target.value)}
                 >
@@ -307,12 +308,12 @@ export function PluginPanel() {
                       </option>
                     ))
                   )}
-                </select>
+                </Select>
               </label>
               <label className="text-xs text-muted-foreground flex flex-col gap-1">
                 来源会话（含运行中）
-                <select
-                  className="h-8 rounded-md border bg-background px-2 text-xs"
+                <Select
+                  size="sm"
                   value={testSession}
                   onChange={(e) => setTestSession(e.target.value)}
                 >
@@ -326,7 +327,7 @@ export function PluginPanel() {
                       </option>
                     ))
                   )}
-                </select>
+                </Select>
               </label>
               <label className="text-xs text-muted-foreground flex flex-col gap-1">
                 协议过滤（可选）
@@ -339,8 +340,8 @@ export function PluginPanel() {
               </label>
               <label className="text-xs text-muted-foreground flex flex-col gap-1">
                 测试包上限
-                <select
-                  className="h-8 rounded-md border bg-background px-2 text-xs"
+                <Select
+                  size="sm"
                   value={String(testLimit)}
                   onChange={(e) => setTestLimit(Number(e.target.value))}
                 >
@@ -348,7 +349,7 @@ export function PluginPanel() {
                   <option value="100">100</option>
                   <option value="500">500</option>
                   <option value="0">全部</option>
-                </select>
+                </Select>
               </label>
               <label className="text-xs text-muted-foreground flex flex-col gap-1">
                 源 IP 过滤（可选）
@@ -385,10 +386,10 @@ export function PluginPanel() {
             {result && (
               <div className="space-y-3 pt-1">
                 <div className="flex items-center gap-2 text-xs">
-                  <Badge variant="outline" className="text-emerald-600 border-emerald-300">
+                  <Badge variant="outline" className="text-success border-success/30">
                     成功 {result.decoded} / 失败 {result.decode_errors}（共 {result.total_raw} 包）
                   </Badge>
-                  <Badge variant="outline" className="text-emerald-600 border-emerald-300">
+                  <Badge variant="outline" className="text-success border-success/30">
                     <Lock className="h-3 w-3 mr-1" /> 原始包未传前端
                   </Badge>
                 </div>
@@ -455,7 +456,7 @@ export function PluginPanel() {
                   </details>
                 )}
 
-                <p className="text-xs text-muted-foreground/80">
+                <p className="text-xs text-muted-foreground">
                   本测试不修改会话真实解码数据（只读采样，不落库）。
                 </p>
               </div>
@@ -469,8 +470,8 @@ export function PluginPanel() {
         <div className="border-t p-3 space-y-2">
           <p className="text-xs font-medium text-muted-foreground">离线解码（插件调试）</p>
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              className="h-8 rounded-md border bg-background px-2 text-xs"
+            <Select
+              size="sm"
               value={decodeSession}
               onChange={(e) => setDecodeSession(e.target.value)}
             >
@@ -483,9 +484,9 @@ export function PluginPanel() {
                   </option>
                 ))
               )}
-            </select>
-            <select
-              className="h-8 rounded-md border bg-background px-2 text-xs"
+            </Select>
+            <Select
+              size="sm"
               value={decodePlugin}
               onChange={(e) => setDecodePlugin(e.target.value)}
               disabled={pluginNames.length === 0}
@@ -495,7 +496,7 @@ export function PluginPanel() {
               ) : (
                 pluginNames.map((name) => <option key={name} value={name}>{name}</option>)
               )}
-            </select>
+            </Select>
             <Button
               size="sm"
               onClick={() =>
@@ -627,12 +628,11 @@ function PluginCard({
           <Activity className="h-4 w-4 shrink-0 text-primary" />
           <span className="text-sm font-medium truncate">{plugin.name}</span>
           {ownerBadge && (
-            <span
-              className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
-              title={`注册者：${plugin.owner}`}
-            >
+            <Badge
+              variant="muted" size="micro" className="shrink-0" title={`注册者：${plugin.owner}`}
+              >
               {ownerBadge}
-            </span>
+</Badge>
           )}
           <Badge
             variant={plugin.online ? "outline" : "secondary"}
@@ -674,7 +674,7 @@ function PluginCard({
       <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
         {plugin.online ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
         <span className="truncate">{plugin.protocol || "—"}</span>
-        <span className="text-muted-foreground/50">·</span>
+        <span className="text-muted-foreground">·</span>
         <span className="font-mono truncate" title={plugin.instance_id}>
           {truncate(plugin.instance_id, 10)}
         </span>
@@ -683,7 +683,7 @@ function PluginCard({
       <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
         <span>心跳 {fmtRelative(plugin.last_heartbeat)}</span>
         {hotReloadAt && (
-          <Badge variant="outline" className="text-amber-600 border-amber-300">
+          <Badge variant="outline" className="text-warning border-warning/30">
             热更 {fmtClock(Math.floor(hotReloadAt / 1000))}
           </Badge>
         )}

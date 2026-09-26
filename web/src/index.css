@@ -21,6 +21,12 @@
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
 
+  /* 字号：11px 密集标注 / 10px 状态微 chip（替代散落的 text-[11px]、text-[10px]） */
+  --text-micro: 0.6875rem;
+  --text-micro--line-height: 1rem;
+  --text-2xs: 0.625rem;
+  --text-2xs--line-height: 0.875rem;
+
   /* —— 亮色主题 —— */
   --color-background: #f5f6f9;       /* 偏冷画布，非纯白 */
   --color-foreground: #15171e;       /* 墨色，非纯黑 */
@@ -36,21 +42,24 @@
   --color-secondary: #eef0f5;
   --color-secondary-foreground: #15171e;
   --color-muted: #eef0f5;
-  --color-muted-foreground: #6b7280;
+  /* 原 #6b7280 在白/浅灰底上仅 4.47:1，压深到 ~5.9:1 保证次级文本达标 */
+  --color-muted-foreground: #59606d;
 
   --color-accent: #eef2ff;
   --color-accent-foreground: #4338ca;
 
-  --color-destructive: #e11d48;
+  /* 语义色取 -700 档：这些 token 同时充当 chip/状态文字色，
+     -500/-600 档在白底小字号下不足 4.5:1（如 #059669 仅 3.8:1）。 */
+  --color-destructive: #be123c;
   --color-destructive-foreground: #ffffff;
 
-  --color-success: #059669;           /* 翠绿 · 在线/实时 */
+  --color-success: #047857;           /* 翠绿 · 在线/实时 */
   --color-success-foreground: #ffffff;
 
-  --color-warning: #d97706;
+  --color-warning: #b45309;
   --color-warning-foreground: #ffffff;
 
-  --color-info: #0284c7;
+  --color-info: #0369a1;
   --color-info-foreground: #ffffff;
 
   --color-border: #e4e7ee;

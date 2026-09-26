@@ -156,7 +156,7 @@ export function DirectionIcon({ direction }: { direction: string }) {
         className="shrink-0 rounded bg-muted px-1 py-px text-muted-foreground"
         title="客户端 → 服务端"
       >
-        <ArrowRight className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+        <ArrowRight className="h-3 w-3 text-info" />
       </span>
     );
   }
@@ -166,13 +166,13 @@ export function DirectionIcon({ direction }: { direction: string }) {
         className="shrink-0 rounded bg-muted px-1 py-px text-muted-foreground"
         title="服务端 → 客户端"
       >
-        <ArrowLeft className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+        <ArrowLeft className="h-3 w-3 text-success" />
       </span>
     );
   }
   return (
     <span className="shrink-0 rounded bg-muted px-1 py-px text-muted-foreground" title="方向未知">
-      <ArrowRight className="h-3 w-3 text-muted-foreground/50" />
+      <ArrowRight className="h-3 w-3 text-muted-foreground" />
     </span>
   );
 }
@@ -182,7 +182,7 @@ export function DirectionChip({ direction }: { direction: string }) {
   const text = directionText(direction);
   if (!text) {
     return (
-      <span className="shrink-0 rounded bg-muted px-1.5 py-px text-[10px] text-muted-foreground/60" title="方向未知">
+      <span className="shrink-0 rounded bg-muted px-1.5 py-px text-2xs text-muted-foreground" title="方向未知">
         方向未知
       </span>
     );
@@ -190,11 +190,11 @@ export function DirectionChip({ direction }: { direction: string }) {
   const label = direction === "client_to_server" ? "C→S" : "S→C";
   const color =
     direction === "client_to_server"
-      ? "text-blue-600 dark:text-blue-400"
-      : "text-emerald-600 dark:text-emerald-400";
+      ? "text-info"
+      : "text-success";
   return (
     <span
-      className={`shrink-0 rounded bg-muted px-1.5 py-px font-mono text-[10px] font-semibold whitespace-nowrap ${color}`}
+      className={`shrink-0 rounded bg-muted px-1.5 py-px font-mono text-2xs font-semibold whitespace-nowrap ${color}`}
       title={text}
     >
       {label}
@@ -205,16 +205,16 @@ export function DirectionChip({ direction }: { direction: string }) {
 // ─── 语义标签（annotate 规则产出） ───────────────────────────
 
 const SEMANTIC_STYLES: Record<string, string> = {
-  request: "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
-  response: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
-  notification: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-  error: "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300",
+  request: "bg-info/10 text-info dark:bg-info/15",
+  response: "bg-success/10 text-success dark:bg-success/15",
+  notification: "bg-warning/10 text-warning dark:bg-warning/15",
+  error: "bg-destructive/10 text-destructive dark:bg-destructive/15",
 };
 
 export function SemanticBadge({ label }: { label: string }) {
   return (
     <span
-      className={`shrink-0 rounded px-1 py-px text-[10px] font-medium ${
+      className={`shrink-0 rounded px-1 py-px text-2xs font-medium ${
         SEMANTIC_STYLES[label] ?? "bg-muted text-muted-foreground"
       }`}
     >
@@ -392,14 +392,14 @@ export function StructuredFields({ obj }: { obj: Record<string, unknown> }) {
 export function OpBadge({ op, className }: { op: string; className?: string }) {
   const style =
     op === "set"
-      ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+      ? "bg-success/10 text-success dark:bg-success/15"
       : op === "delete"
-        ? "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300"
+        ? "bg-destructive/10 text-destructive dark:bg-destructive/15"
         : op === "merge"
-          ? "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+          ? "bg-warning/10 text-warning dark:bg-warning/15"
           : "bg-muted text-muted-foreground";
   return (
-    <Badge variant="outline" className={cn(`font-mono text-[10px] ${style}`, className)}>
+    <Badge variant="outline" className={cn(`font-mono text-2xs ${style}`, className)}>
       {op || "-"}
     </Badge>
   );

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { X } from "lucide-react";
+import { useFocusTrap } from "@/hooks/use-focus-trap";
 
 interface DialogProps {
   open: boolean;
@@ -15,9 +16,6 @@ interface DialogProps {
   showClose?: boolean;
 }
 
-const FOCUSABLE =
-  'a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])';
-
 /** 通用对话框：无障碍（role/aria/ESC/焦点陷阱/滚动锁定）+ 入场动画 + overscroll 约束。 */
 export function Dialog({
   open,
@@ -30,67 +28,9 @@ export function Dialog({
   className,
   showClose = true,
 }: DialogProps) {
-  const panelRef = React.useRef<HTMLDivElement>(null);
-  const previouslyFocused = React.useRef<HTMLElement | null>(null);
   const titleId = React.useId();
   const descId = React.useId();
-
-  // onClose 走 ref：调用方每个渲染都可能新建闭包（如实名表单里 setState 触发重渲染），
-  // 若把它塞进 effect 依赖，会让下面的焦点逻辑在每次输入时重跑——
-  // cleanup 里的 `previouslyFocused.focus()` 会把焦点从正在输入的框夺走。故 effect 只依赖 open。
-  const onCloseRef = React.useRef(onClose);
-  onCloseRef.current = onClose;
-
-  // ESC 关闭 + 焦点陷阱 + 打开时锁定背景滚动并聚焦首个可聚焦元素
-  React.useEffect(() => {
-    if (!open) return;
-
-    previouslyFocused.current = document.activeElement as HTMLElement | null;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    // 延迟到挂载后聚焦，确保动画元素已渲染
-    const raf = requestAnimationFrame(() => {
-      const first = panelRef.current?.querySelector<HTMLElement>(FOCUSABLE);
-      (first ?? panelRef.current)?.focus();
-    });
-
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onCloseRef.current();
-        return;
-      }
-      if (e.key !== "Tab") return;
-      const panel = panelRef.current;
-      if (!panel) return;
-      const nodes = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
-        (el) => el.offsetParent !== null,
-      );
-      if (nodes.length === 0) {
-        e.preventDefault();
-        return;
-      }
-      const firstEl = nodes[0]!;
-      const lastEl = nodes[nodes.length - 1]!;
-      const active = document.activeElement as HTMLElement | null;
-      if (e.shiftKey && (active === firstEl || !panel.contains(active))) {
-        e.preventDefault();
-        lastEl.focus();
-      } else if (!e.shiftKey && active === lastEl) {
-        e.preventDefault();
-        firstEl.focus();
-      }
-    }
-
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      cancelAnimationFrame(raf);
-      document.removeEventListener("keydown", onKeyDown, true);
-      document.body.style.overflow = prevOverflow;
-      previouslyFocused.current?.focus?.();
-    };
-  }, [open]);
+  const panelRef = useFocusTrap(open, onClose);
 
   if (!open) return null;
 
@@ -142,7 +82,7 @@ export function Dialog({
                 type="button"
                 aria-label="关闭"
                 onClick={onClose}
-                className="-mr-1 -mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                className="-mr-1 -mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <X className="h-4 w-4" />
               </button>

@@ -51,7 +51,7 @@ export function SessionSubbar({
               title={v.hint}
               onClick={() => navigate(sessionHref(sessionId, v.id))}
               className={cn(
-                "inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                "inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 selected
                   ? "bg-card text-foreground shadow-sm ring-1 ring-border"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -60,7 +60,7 @@ export function SessionSubbar({
               <Icon className="h-3.5 w-3.5" />
               {v.label}
               {n != null && n > 0 && (
-                <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                <span className="font-mono text-micro tabular-nums text-muted-foreground">
                   {n.toLocaleString()}
                 </span>
               )}

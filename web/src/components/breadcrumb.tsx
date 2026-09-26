@@ -20,7 +20,7 @@ interface BreadcrumbProps {
 
 // min-w-0 是让长项目名/会话 id 省略号截断而不是把按钮挤成一列竖排文字的前提。
 const CRUMB =
-  "inline-flex h-7 max-w-[220px] min-w-0 items-center gap-1.5 rounded-md px-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40";
+  "inline-flex h-7 max-w-[220px] min-w-0 items-center gap-1.5 rounded-md px-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 export function Breadcrumb({
   route,
@@ -45,7 +45,7 @@ export function Breadcrumb({
 
       {space !== "workspace" && (
         <>
-          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/50" aria-hidden />
+          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
           <button
             type="button"
             title="项目 · 项目级"
@@ -61,7 +61,7 @@ export function Breadcrumb({
 
       {space === "session" && route.sessionId && (
         <>
-          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/50" aria-hidden />
+          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
           <button
             type="button"
             title="会话 · 会话级 · 点击切换会话"
@@ -71,7 +71,11 @@ export function Breadcrumb({
           >
             <Radio className="h-3.5 w-3.5 shrink-0" />
             <span className="truncate">{route.sessionId}</span>
-            {sessionRunning && <span className="gt-live-dot shrink-0" />}
+            {sessionRunning && (
+              <span className="gt-live-dot shrink-0">
+                <span className="sr-only">运行中</span>
+              </span>
+            )}
           </button>
         </>
       )}

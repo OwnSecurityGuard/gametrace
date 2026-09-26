@@ -32,6 +32,7 @@ import { toast } from "@/components/ui/toast";
 import { PhaseBadge, SessionPhaseTracker } from "@/components/session-phase-tracker";
 import { DecodeErrorPanel } from "@/components/decode-error-panel";
 import type { ConnectionSummary } from "@/types/connection";
+import { Select } from "@/components/ui/select";
 
 interface SessionOverviewPageProps {
   sessionId: string;
@@ -66,7 +67,7 @@ function fmtNum(n?: number): string {
 function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="rounded-xl border border-border bg-card/60 px-3 py-2.5">
-      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p className="text-micro text-muted-foreground">{label}</p>
       <p className="mt-0.5 truncate font-mono text-sm font-medium text-foreground" title={hint ?? value}>
         {value}
       </p>
@@ -90,16 +91,16 @@ function AssignProjectRow({ sessionId }: { sessionId: string }) {
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-border bg-card/40 px-3 py-2">
       <span className="text-xs text-muted-foreground">这次抓包还没有归属项目</span>
       {projects.length === 0 ? (
-        <span className="text-xs text-muted-foreground/70">
+        <span className="text-xs text-muted-foreground">
           你还没有项目 —— 在工作台新建一个后再回来归位。
         </span>
       ) : (
         <>
-          <select
+          <Select
             value={target}
             onChange={(e) => setTarget(e.target.value)}
             aria-label="选择要归入的项目"
-            className="h-7 max-w-[200px] rounded-md border border-input bg-background px-1.5 text-xs"
+            size="micro" className="max-w-[200px]"
           >
             <option value="">选择项目…</option>
             {projects.map((p) => (
@@ -107,7 +108,7 @@ function AssignProjectRow({ sessionId }: { sessionId: string }) {
                 {p.name}
               </option>
             ))}
-          </select>
+          </Select>
           <Button
             size="sm"
             className="h-7"
@@ -257,7 +258,7 @@ export function SessionOverviewPage({ sessionId, onSelectConn }: SessionOverview
                         <p className="truncate font-mono text-xs text-foreground">
                           {c.client} → {c.server}
                         </p>
-                        <p className="truncate text-[11px] text-muted-foreground">
+                        <p className="truncate text-micro text-muted-foreground">
                           {c.protocol} · {fmtTime(c.start_time)} · {fmtDuration(c.duration_sec)}
                         </p>
                       </div>
@@ -301,13 +302,13 @@ export function SessionOverviewPage({ sessionId, onSelectConn }: SessionOverview
                       onClick={() => navigate(sessionHref(sessionId, "events"))}
                       className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-muted/40"
                     >
-                      <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
+                      <Badge variant="outline" className="shrink-0 font-mono text-2xs">
                         {ev.protocol}
                       </Badge>
                       <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
                         {ev.id}
                       </span>
-                      <span className="shrink-0 text-[11px] text-muted-foreground">
+                      <span className="shrink-0 text-micro text-muted-foreground">
                         {fmtTime(ev.timestamp)}
                       </span>
                     </button>

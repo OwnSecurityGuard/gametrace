@@ -47,7 +47,7 @@ export function UnassignedPage({
               <button
                 type="button"
                 onClick={() => navigate(WORKSPACE_HREF)}
-                className="text-[11px] text-muted-foreground hover:text-foreground hover:underline"
+                className="text-micro text-muted-foreground hover:text-foreground hover:underline"
               >
                 回到工作台
               </button>

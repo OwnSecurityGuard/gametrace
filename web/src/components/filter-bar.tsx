@@ -15,6 +15,7 @@ import { Search } from "lucide-react";
 import { useConnections } from "@/hooks/use-mcp";
 import { type DirectionFilter, type SemanticFilter } from "@/lib/fuzzy";
 import type { ConnectionSummary } from "@/types/connection";
+import { Select } from "@/components/ui/select";
 
 interface FilterBarProps {
   sessionId: string | null;
@@ -97,13 +98,13 @@ export function FilterBar({
     <div className="flex flex-wrap items-center gap-2">
       {/* 连接过滤下拉：仅存在代理连接时显示，五个子视图共享 */}
       {connOptions.length > 0 && (
-        <select
+        <Select
           value={connFilter?.conn_id ?? ""}
           onChange={(e) => {
             const id = e.target.value;
             onConnFilterChange(connOptions.find((c) => c.conn_id === id) ?? null);
           }}
-          className="h-9 shrink-0 max-w-[40vw] rounded-md border border-input bg-background px-2 text-sm sm:max-w-56"
+          size="default" className="shrink-0 max-w-[40vw] sm:max-w-56"
           aria-label="连接过滤"
           title={connFilter ? `${connFilter.client || "-"} → ${connFilter.server || "-"}` : "全部连接"}
         >
@@ -113,12 +114,12 @@ export function FilterBar({
               {c.client || "-"} → {c.server || "-"}
             </option>
           ))}
-        </select>
+        </Select>
       )}
-      <select
+      <Select
         value={direction}
         onChange={(e) => onDirectionChange(e.target.value as DirectionFilter)}
-        className="h-9 shrink-0 rounded-md border border-input bg-background px-2 text-sm"
+        size="default" className="shrink-0"
         aria-label="消息方向过滤"
       >
         {DIRECTION_OPTIONS.map((opt) => (
@@ -126,7 +127,7 @@ export function FilterBar({
             {opt.label}
           </option>
         ))}
-      </select>
+      </Select>
       <SemanticSelect sessionId={sessionId} value={semantic} onChange={onSemanticChange} />
       <div className="relative w-full max-w-md min-w-40">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

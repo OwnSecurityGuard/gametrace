@@ -307,7 +307,7 @@ function Workbench() {
       <main className="flex min-w-0 flex-1 flex-col">
         {/* 401 横幅：服务器要求访问令牌而本地未配置/已失效 */}
         {authError && (
-          <div className="flex items-center gap-2 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+          <div className="flex items-center gap-2 border-b border-warning/30 bg-warning/10 px-4 py-2 text-sm text-warning dark:border-warning/40 dark:bg-warning/10">
             <KeyRound className="h-4 w-4 shrink-0" />
             <span className="flex-1">服务器开启了访问令牌校验，请在设置中填入访问令牌后重试。</span>
             <Button size="sm" variant="outline" className="h-7" onClick={() => setSettingsOpen(true)}>

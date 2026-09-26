@@ -7,6 +7,7 @@ import { Check, PauseCircle, Plus, PowerOff, Server, Settings2, Smartphone, Wifi
 import { SELECT_ACTIVE, SELECT_IDLE } from "@/components/capture-fields";
 import { LeaseQrPanel } from "@/components/proxy-lease-qr";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/toast";
 import { useCreateProxyLease, useReleaseProxyLease, useStopLeaseCapture } from "@/hooks/use-mcp";
@@ -28,31 +29,27 @@ export function leaseSelectable(l: ProxyLease): boolean {
 /** 探针三维度状态 chip（connection + capture 合并展示）。 */
 function ProbeStateChip({ p }: { p: ProbeInfo }) {
   if (p.connection_state !== "online") {
-    return <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">离线</span>;
+    return <Badge variant="secondary" size="micro">离线</Badge>;
   }
   switch (p.capture_state) {
     case "running":
       return (
-        <span className="inline-flex items-center gap-1 rounded bg-success/15 px-1.5 py-0.5 text-[10px] text-success">
+        <Badge variant="success" size="micro">
           <span className="gt-live-dot" />
           抓包中
-        </span>
+        </Badge>
       );
     case "starting":
-      return (
-        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
-          启动中
-        </span>
-      );
+      return <Badge variant="warning" size="micro">启动中</Badge>;
     case "failed":
-      return <span className="rounded bg-destructive/15 px-1.5 py-0.5 text-[10px] text-destructive">失败</span>;
+      return <Badge variant="danger" size="micro">失败</Badge>;
     default:
-      return <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">空闲</span>;
+      return <Badge variant="secondary" size="micro">空闲</Badge>;
   }
 }
 
 function DisabledHint({ children }: { children: ReactNode }) {
-  return <span className="shrink-0 text-[11px] text-muted-foreground">{children}</span>;
+  return <span className="shrink-0 text-micro text-muted-foreground">{children}</span>;
 }
 
 /** 探针机器选择 + 网卡多选。
@@ -103,7 +100,7 @@ export function ProbeChannelPicker({
                 <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium text-foreground">{p.name}</span>
-                  <span className="block truncate font-mono text-[10px]">
+                  <span className="block truncate font-mono text-2xs">
                     {p.hostname}
                     {p.connection_state === "online" && !p.capture_iface ? " · 待选网卡" : ""}
                   </span>
@@ -141,7 +138,7 @@ export function ProbeChannelPicker({
                       }
                       title={nic.ips?.length ? `${nic.name} · ${nic.ips.join(", ")}` : nic.name}
                       className={cn(
-                        "inline-flex items-center rounded-md border px-2 py-0.5 font-mono text-[11px] transition-all",
+                        "inline-flex items-center rounded-md border px-2 py-0.5 font-mono text-micro transition-all",
                         active
                           ? "border-primary/70 bg-primary/10 text-primary ring-1 ring-primary/40"
                           : "border-border bg-muted text-muted-foreground hover:border-primary/30 hover:text-foreground",
@@ -168,17 +165,17 @@ export function ProbeChannelPicker({
 
 function LeaseStateChip({ l }: { l: ProxyLease }) {
   if (!l.agent_running) {
-    return <span className="rounded bg-destructive/15 px-1.5 py-0.5 text-[10px] text-destructive">代理已停</span>;
+    return <Badge variant="danger" size="micro">代理已停</Badge>;
   }
   if (l.session_running) {
     return (
-      <span className="inline-flex items-center gap-1 rounded bg-success/15 px-1.5 py-0.5 text-[10px] text-success">
+      <Badge variant="success" size="micro">
         <span className="gt-live-dot" />
         抓包中
-      </span>
+      </Badge>
     );
   }
-  return <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">空闲</span>;
+  return <Badge variant="secondary" size="micro">空闲</Badge>;
 }
 
 /** 手机代理租约选择 + 就地创建 / 关停。
@@ -288,7 +285,7 @@ export function ProxyChannelPicker({
                   <span className="block truncate font-medium text-foreground">
                     {l.device || "未命名设备"}
                   </span>
-                  <span className="block truncate font-mono text-[10px]">{l.connect_addr || "未拿到局域网地址"}</span>
+                  <span className="block truncate font-mono text-2xs">{l.connect_addr || "未拿到局域网地址"}</span>
                 </span>
                 {active && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden />}
                 <LeaseStateChip l={l} />
@@ -328,7 +325,7 @@ export function ProxyChannelPicker({
               )}
             </Button>
           </div>
-          <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="mt-1.5 text-micro leading-relaxed text-muted-foreground">
             租约只是一个常驻的手机代理端口，创建后二维码长期有效；本次抓包用哪套筛选和解析器，
             以下面的表单为准。
             {createLease.isError && (
@@ -420,7 +417,7 @@ function LeaseActions({ lease, onReleased }: { lease: ProxyLease; onReleased: ()
       </Button>
       {/* 释放按钮永远排在这行末尾，所以提示语跟在它后面；窄弹窗里让它折到下一行，
           而不是截断——这句话正是"该停抓包还是该释放租约"的区分说明。 */}
-      <span className="min-w-[140px] flex-1 leading-snug text-[11px] text-muted-foreground">
+      <span className="min-w-[140px] flex-1 leading-snug text-micro text-muted-foreground">
         {capturing
           ? "该租约正在抓包，先停止才能开新一轮。"
           : lease.agent_running

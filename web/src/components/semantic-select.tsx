@@ -59,7 +59,7 @@ export function SemanticSelect({ sessionId, value, onChange }: SemanticSelectPro
         aria-label="语义标签过滤"
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-2 text-sm transition-colors hover:border-ring/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+          "inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-2 text-sm transition-colors hover:border-ring/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           value.length > 0 && "border-primary/50 bg-primary-muted text-primary",
         )}
       >
@@ -74,13 +74,13 @@ export function SemanticSelect({ sessionId, value, onChange }: SemanticSelectPro
           className="absolute left-0 top-[calc(100%+4px)] z-30 w-64 rounded-lg border border-border bg-popover p-1 shadow-lg gt-pop-in"
         >
           <div className="flex items-center justify-between gap-2 px-1.5 py-1">
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-micro text-muted-foreground">
               {isLoading ? "加载词表…" : `${labels.length} 个标签`}
             </span>
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                className="rounded px-1.5 py-0.5 text-[11px] text-primary hover:bg-accent disabled:opacity-40"
+                className="rounded px-1.5 py-0.5 text-micro text-primary hover:bg-accent disabled:opacity-40"
                 disabled={labels.length === 0}
                 onClick={() => onChange([...labels])}
               >
@@ -88,7 +88,7 @@ export function SemanticSelect({ sessionId, value, onChange }: SemanticSelectPro
               </button>
               <button
                 type="button"
-                className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted disabled:opacity-40"
+                className="rounded px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-muted disabled:opacity-40"
                 disabled={value.length === 0}
                 onClick={() => onChange([])}
               >
@@ -99,7 +99,7 @@ export function SemanticSelect({ sessionId, value, onChange }: SemanticSelectPro
 
           <div className="max-h-64 overflow-auto gt-scroll">
             {labels.length === 0 && !isLoading && (
-              <p className="px-1.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
+              <p className="px-1.5 py-2 text-micro leading-relaxed text-muted-foreground">
                 本次抓包的插件没有声明语义标签（annotate），因此无可选项。
               </p>
             )}
@@ -124,7 +124,7 @@ export function SemanticSelect({ sessionId, value, onChange }: SemanticSelectPro
                   </span>
                   <span className="min-w-0 flex-1 truncate font-mono text-xs">{label}</span>
                   {counts[label] != null && (
-                    <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                    <span className="shrink-0 font-mono text-micro text-muted-foreground">
                       {counts[label].toLocaleString()}
                     </span>
                   )}
@@ -133,7 +133,7 @@ export function SemanticSelect({ sessionId, value, onChange }: SemanticSelectPro
             })}
           </div>
 
-          <p className="border-t border-border px-1.5 pb-0.5 pt-1 text-[11px] text-muted-foreground">
+          <p className="border-t border-border px-1.5 pb-0.5 pt-1 text-micro text-muted-foreground">
             未选中即不过滤；选中多项按「或」合并。
           </p>
         </div>

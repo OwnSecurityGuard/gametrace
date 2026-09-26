@@ -26,6 +26,8 @@ import {
 import type { RawPacket } from "@/types/raw-packet";
 import { formatTimestamp } from "@/lib/event-display";
 import { hexDump, hexPreview, base64ToBytes } from "@/lib/hex";
+import { Select } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 
 interface RawPacketTableProps {
   sessionId: string | null;
@@ -74,9 +76,7 @@ function ExpandedHexRow({
             <ArrowRight className="mx-1 inline h-3 w-3 text-muted-foreground" />
             {pkt.dst}
           </span>
-          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            {pkt.protocol || "-"}
-          </span>
+          <Badge variant="muted" size="micro">{pkt.protocol || "-"}</Badge>
           <span className="text-xs text-muted-foreground tabular-nums">
             {pkt.payload_len} B
           </span>
@@ -132,7 +132,7 @@ const RawPacketRow = memo(function RawPacketRow({
         onClick={() => onToggle(pkt.id)}
         aria-expanded={isExpanded}
       >
-        <TableCell className="w-8 pl-2 pr-0 text-muted-foreground/60">
+        <TableCell className="w-8 pl-2 pr-0 text-muted-foreground">
           <ChevronRight
             className={`h-3.5 w-3.5 transition-transform ${isExpanded ? "rotate-90" : ""}`}
           />
@@ -372,8 +372,8 @@ export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
       {sessionId && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card p-2.5 shadow-sm">
           <span className="shrink-0 text-xs font-medium text-muted-foreground">解码插件</span>
-          <select
-            className="h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+          <Select
+            size="sm"
             value={selectedPlugin}
             onChange={(e) => setSelectedPlugin(e.target.value)}
             disabled={plugins.length === 0}
@@ -385,7 +385,7 @@ export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
                 <option key={p.name} value={p.name}>{p.name}</option>
               ))
             )}
-          </select>
+          </Select>
           <label className="flex cursor-pointer select-none items-center gap-1 text-xs text-muted-foreground">
             <input
               type="checkbox"
@@ -419,17 +419,17 @@ export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
           {expandedIds.size > 0 ? ` · 已展开 ${expandedIds.size} 行` : ""}
         </span>
         <span className="flex items-center gap-2">
-          <span className="text-[11px] text-muted-foreground/70">点击行展开完整 hex</span>
+          <span className="text-micro text-muted-foreground">点击行展开完整 hex</span>
           <label className="flex items-center gap-1">
-            <span className="text-[11px] text-muted-foreground/70">每页</span>
-            <select
+            <span className="text-micro text-muted-foreground">每页</span>
+            <Select
               value={pageSize}
               onChange={(e) => {
                 setPageSize(Number(e.target.value));
                 setPage(0);
                 setExpandedIds(new Set());
               }}
-              className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
+              size="micro"
               aria-label="每页条数"
             >
               {PAGE_SIZES.map((n) => (
@@ -437,7 +437,7 @@ export function RawPacketTable({ sessionId, onDecoded }: RawPacketTableProps) {
                   {n}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
         </span>
       </div>

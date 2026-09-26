@@ -4,6 +4,7 @@ import { CheckCircle2 } from "lucide-react";
 import { captureSourceName } from "@/lib/session-source";
 import { describeSessionPhase } from "@/lib/session-phase";
 import { SessionPhaseTracker } from "@/components/session-phase-tracker";
+import { Badge } from "@/components/ui/badge";
 
 /**
  * 「本次抓包」结果摘要：回答用户最关心的问题——这次抓包到底成功没有。
@@ -62,21 +63,19 @@ export function CaptureSummary({
     <div className="rounded-xl border border-border bg-card/60 px-4 py-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+          <CheckCircle2 className="h-4 w-4 text-success" />
           本次抓包
         </span>
         {session.port ? (
           <span className="text-xs text-muted-foreground">端口 {session.port}</span>
         ) : null}
         {session.plugin ? (
-          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            {session.plugin}
-          </span>
+          <Badge variant="muted" size="micro">{session.plugin}</Badge>
         ) : null}
         {/* 有数据：阶段标题直接说明"现在能干嘛"（抓包中 / 正在解析 / 可分析） */}
-        <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+        <Badge variant="success" size="micro">
           {phase.title}
-        </span>
+        </Badge>
       </div>
       <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5">
         {items.map((it) => (
@@ -84,7 +83,7 @@ export function CaptureSummary({
             <span className="text-xs text-muted-foreground">{it.label}</span>
             <span
               className={`font-mono text-sm tabular-nums ${
-                it.warn ? "text-red-600 dark:text-red-400" : "text-foreground"
+                it.warn ? "text-destructive" : "text-foreground"
               }`}
             >
               {it.value}

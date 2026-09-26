@@ -52,7 +52,7 @@ export function TopBar({
         aria-expanded={contextOpen}
         aria-label={contextOpen ? "收起侧栏" : "展开侧栏"}
         title={contextOpen ? "收起侧栏" : "展开侧栏"}
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <PanelLeft className="h-4 w-4" />
       </button>
@@ -104,7 +104,7 @@ export function TopBar({
         <KeyRound className="h-3.5 w-3.5" />
         <span className="truncate font-mono text-xs">{identity?.owner ?? "未登录"}</span>
         {identity?.isAdmin && (
-          <span className="rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary">admin</span>
+          <span className="rounded bg-primary/10 px-1 py-0.5 text-2xs text-primary">admin</span>
         )}
       </Button>
     </header>

@@ -20,7 +20,7 @@ interface SpaceRailProps {
 }
 
 const BTN =
-  "relative flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40";
+  "relative flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 export function SpaceRail({
   space,
@@ -54,7 +54,7 @@ export function SpaceRail({
       >
         <LayoutGrid className="h-[18px] w-[18px]" />
         {runningCount > 0 && (
-          <span className="absolute right-0.5 top-0.5 min-w-[16px] rounded-full bg-success px-1 text-center font-mono text-[10px] leading-[16px] text-success-foreground">
+          <span className="absolute right-0.5 top-0.5 min-w-[16px] rounded-full bg-success px-1 text-center font-mono text-2xs leading-[16px] text-success-foreground">
             {runningCount}
           </span>
         )}

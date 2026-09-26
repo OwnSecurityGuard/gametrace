@@ -58,6 +58,8 @@ import {
   type SemanticFilter,
 } from "@/lib/fuzzy";
 import { mergePartnerPool, pairGroupFilter, resolvePairGroup } from "@/lib/pair-group";
+import { Select } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 
 interface EventTableProps {
   sessionId: string | null;
@@ -123,8 +125,8 @@ function SummaryCell({ parts }: { parts: SummaryPart[] }) {
     <span className="block truncate text-[13px] leading-snug text-foreground" title={title}>
       {parts.map((p, i) => (
         <span key={i}>
-          {i > 0 && <span className="mx-1 text-muted-foreground/50">·</span>}
-          <span className="font-mono text-[11px] font-medium text-muted-foreground">{p.k}</span>
+          {i > 0 && <span className="mx-1 text-muted-foreground">·</span>}
+          <span className="font-mono text-micro font-medium text-muted-foreground">{p.k}</span>
           <span className="ml-1">{p.v}</span>
         </span>
       ))}
@@ -282,7 +284,7 @@ function Hl({ text, tokens }: { text: string; tokens: string[] }) {
     if (s < cur) continue; // 关键词重叠时跳过已被覆盖的片段
     if (s > cur) out.push(text.slice(cur, s));
     out.push(
-      <mark key={s} className="rounded bg-amber-200/70 px-0.5 text-foreground">
+      <mark key={s} className="rounded bg-warning/70 px-0.5 text-foreground">
         {text.slice(s, e)}
       </mark>,
     );
@@ -298,7 +300,7 @@ function EntityChangeBlock({ entity, tokens }: { entity: ScEntity; tokens: strin
     <div className="rounded-lg border border-border p-2.5">
       <div className="mb-1 flex flex-wrap items-center gap-2">
         <span className="font-mono text-sm">
-          <span className="text-muted-foreground/70">
+          <span className="text-muted-foreground">
             <Hl text={`${entity.subject_type}:`} tokens={tokens} />
           </span>
           <span className="font-semibold text-foreground">
@@ -311,13 +313,13 @@ function EntityChangeBlock({ entity, tokens }: { entity: ScEntity; tokens: strin
       <ul className="space-y-1 pl-1">
         {entity.changes.map((c) => (
           <li key={c.id} className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-sm">
-            <OpBadge op={c.op} className="text-[11px]" />
+            <OpBadge op={c.op} className="text-micro" />
             <span className="break-all font-mono text-foreground">
               <Hl text={c.path} tokens={tokens} />
             </span>
             <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1 gap-y-0.5 font-mono">
               <span
-                className="break-all text-muted-foreground/70 line-through"
+                className="break-all text-muted-foreground line-through"
                 title={fmtValue(c.before)}
               >
                 {c.before === null || c.before === undefined ? (
@@ -326,7 +328,7 @@ function EntityChangeBlock({ entity, tokens }: { entity: ScEntity; tokens: strin
                   <Hl text={fmtValue(c.before)} tokens={tokens} />
                 )}
               </span>
-              <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+              <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
               <span className="break-all font-medium" title={fmtValue(c.after)}>
                 {c.after === null || c.after === undefined ? (
                   fmtValue(c.after)
@@ -359,15 +361,15 @@ function TypeChangeBlock({ bucket, tokens }: { bucket: ScTypeBucket; tokens: str
         className="flex w-full flex-wrap items-center gap-x-2 px-2 py-1.5 text-left hover:bg-muted/40"
       >
         {open ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground/70" />
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
         ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" />
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
         )}
         <span className="font-mono text-sm font-semibold">
           {only ? (
             <>
               <Hl text={bucket.subject_type} tokens={tokens} />
-              <span className="text-muted-foreground/70">:</span>
+              <span className="text-muted-foreground">:</span>
               <Hl text={bucket.entities[0]?.subject_id ?? ""} tokens={tokens} />
             </>
           ) : (
@@ -453,7 +455,7 @@ function StateChangeDialog({
     >
       <div className="mb-2 flex items-center gap-2">
         <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/70" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -610,10 +612,10 @@ function PairDetail({
         <div className="mb-1.5 flex flex-wrap items-center gap-1.5 border-b border-border pb-1.5">
           <DirectionIcon direction={reqMeta.direction} />
           <MessageCell msgName={reqMeta.msgName} semantic={reqMeta.semantic} />
-          <span className="rounded bg-blue-50 px-1 py-px text-[10px] font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+          <Badge variant="info" size="micro">
             请求
-          </span>
-          <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
+          </Badge>
+          <span className="ml-auto shrink-0 font-mono text-micro text-muted-foreground">
             {formatTimestamp(request.timestamp)}
           </span>
         </div>
@@ -632,10 +634,10 @@ function PairDetail({
               <div className="mb-1.5 flex flex-wrap items-center gap-1.5 border-b border-border pb-1.5">
                 <DirectionIcon direction={meta.direction} />
                 <MessageCell msgName={meta.msgName} semantic={meta.semantic} />
-                <span className="rounded bg-emerald-50 px-1 py-px text-[10px] font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                <Badge variant="success" size="micro">
                   响应
-                </span>
-                <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
+                </Badge>
+                <span className="ml-auto shrink-0 font-mono text-micro text-muted-foreground">
                   {formatTimestamp(ev.timestamp)}
                 </span>
               </div>
@@ -837,14 +839,12 @@ function ExpandedHeader({
         {formatTimestamp(event.timestamp)}
       </span>
       {event.protocol && (
-        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-          {event.protocol}
-        </span>
+        <Badge variant="muted" size="micro">{event.protocol}</Badge>
       )}
       <span className="text-xs text-muted-foreground">{formatSize(event.raw_len)}</span>
       {event.capture && (
         <span
-          className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+          className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-2xs text-muted-foreground"
           title={`连接 ${event.capture.conn_id} · 流 ${event.capture.stream_id} · 来源 ${event.capture.source || ""}`}
         >
           {event.capture.captured_by || "Proxy"} · C#{String(event.capture.conn_seq).padStart(3, "0")} · S#
@@ -1013,7 +1013,7 @@ const EventRow = memo(function EventRow({
         aria-expanded={isExpanded}
       >
         {/* 展开指示：没有它用户看不出行是可点的 */}
-        <TableCell className="w-8 py-2 pl-2 pr-0 text-muted-foreground/60">
+        <TableCell className="w-8 py-2 pl-2 pr-0 text-muted-foreground">
           <ChevronRight
             className={`h-3.5 w-3.5 transition-transform ${isExpanded ? "rotate-90" : ""}`}
           />
@@ -1030,7 +1030,7 @@ const EventRow = memo(function EventRow({
             <DirectionChip direction={meta.direction} />
             <MessageCell msgName={meta.msgName} semantic={meta.semantic} />
             {partners.length > 0 && !isExpanded && (
-              <span className="ml-0.5 shrink-0 inline-flex items-center text-muted-foreground/70" title="已配对请求/响应">
+              <span className="ml-0.5 shrink-0 inline-flex items-center text-muted-foreground" title="已配对请求/响应">
                 <Link2 className="h-3 w-3" />
               </span>
             )}
@@ -1058,13 +1058,13 @@ const EventRow = memo(function EventRow({
               }}
               title={`查看这条消息产生的 ${changeCount} 条实体状态变化`}
               aria-label={`查看这条消息产生的 ${changeCount} 条实体状态变化`}
-              className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-primary hover:bg-primary/20"
+              className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-micro font-medium tabular-nums text-primary hover:bg-primary/20"
             >
               <Activity className="h-3 w-3" />
               {changeCount}
             </button>
           ) : (
-            <span className="text-[11px] text-muted-foreground/30" aria-hidden="true">
+            <span className="text-micro text-muted-foreground" aria-hidden="true">
               —
             </span>
           )}
@@ -1333,17 +1333,17 @@ export function EventTable({
         <span className="flex items-center gap-3">
           {!filtering && (
             <span className="flex items-center gap-2">
-              <span className="text-[11px] text-muted-foreground/70">点击行展开完整 JSON</span>
+              <span className="text-micro text-muted-foreground">点击行展开完整 JSON</span>
               <label className="flex items-center gap-1">
-                <span className="text-[11px] text-muted-foreground/70">每页</span>
-                <select
+                <span className="text-micro text-muted-foreground">每页</span>
+                <Select
                   value={pageSize}
                   onChange={(e) => {
                     setPageSize(Number(e.target.value));
                     setPage(0);
                     setExpandedIds(new Set());
                   }}
-                  className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
+                  size="micro"
                   aria-label="每页条数"
                 >
                   {PAGE_SIZES.map((n) => (
@@ -1351,7 +1351,7 @@ export function EventTable({
                       {n}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
             </span>
           )}

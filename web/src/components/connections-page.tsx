@@ -22,6 +22,7 @@ import {
 import { CaptureSummary } from "@/components/capture-summary";
 import { formatTimestamp } from "@/lib/event-display";
 import type { ConnectionSummary } from "@/types/connection";
+import { Select } from "@/components/ui/select";
 
 const PAGE_SIZES = [20, 50, 100];
 
@@ -163,16 +164,16 @@ export function ConnectionsPage({ sessionId, onSelectConn }: ConnectionsPageProp
           {isPlaceholderData ? " · 更新中…" : ""}
         </span>
         <span className="flex items-center gap-2">
-          <span className="text-[11px] text-muted-foreground/70">点击连接查看其事件</span>
+          <span className="text-micro text-muted-foreground">点击连接查看其事件</span>
           <label className="flex items-center gap-1">
-            <span className="text-[11px] text-muted-foreground/70">每页</span>
-            <select
+            <span className="text-micro text-muted-foreground">每页</span>
+            <Select
               value={pageSize}
               onChange={(e) => {
                 setPageSize(Number(e.target.value));
                 setPage(0);
               }}
-              className="h-7 rounded-md border border-input bg-background px-1.5 text-xs"
+              size="micro"
               aria-label="每页条数"
             >
               {PAGE_SIZES.map((n) => (
@@ -180,7 +181,7 @@ export function ConnectionsPage({ sessionId, onSelectConn }: ConnectionsPageProp
                   {n}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
         </span>
       </div>
@@ -259,10 +260,10 @@ export function ConnectionsPage({ sessionId, onSelectConn }: ConnectionsPageProp
 
                 {/* 解码产出量：0 事件说明这条连接只有原始帧、没解出协议 */}
                 <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                  <span className={conn.event_count > 0 ? "text-foreground" : "text-muted-foreground/60"}>
+                  <span className={conn.event_count > 0 ? "text-foreground" : "text-muted-foreground"}>
                     {conn.event_count} 事件
                   </span>
-                  <span className="text-muted-foreground/60"> · {conn.frame_count} 帧</span>
+                  <span className="text-muted-foreground"> · {conn.frame_count} 帧</span>
                 </TableCell>
 
                 {/* Duration */}

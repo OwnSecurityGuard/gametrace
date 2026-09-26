@@ -15,12 +15,12 @@ import {
 
 /** 阶段色调 → 徽标配色。 */
 const TONE_BADGE: Record<SessionPhaseView["tone"], string> = {
-  progress: "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300",
-  wait: "border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  live: "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  progress: "border-info/40 bg-info/10 text-info",
+  wait: "border-warning/50 bg-warning/10 text-warning",
+  live: "border-success/40 bg-success/10 text-success",
   done: "border-border bg-muted/50 text-foreground",
-  warn: "border-orange-500/50 bg-orange-500/10 text-orange-700 dark:text-orange-300",
-  error: "border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300",
+  warn: "border-warning/50 bg-warning/10 text-warning",
+  error: "border-destructive/50 bg-destructive/10 text-destructive",
 };
 
 function StepIcon({ state }: { state: PhaseStep["state"] }) {
@@ -33,12 +33,12 @@ function StepIcon({ state }: { state: PhaseStep["state"] }) {
 function StepDot({ step }: { step: PhaseStep }) {
   const tone =
     step.state === "done"
-      ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+      ? "border-success/60 bg-success/15 text-success"
       : step.state === "active"
         ? "border-primary bg-primary/15 text-primary"
         : step.state === "failed"
-          ? "border-red-500/60 bg-red-500/15 text-red-600 dark:text-red-400"
-          : "border-border bg-background text-muted-foreground/50";
+          ? "border-destructive/60 bg-destructive/15 text-destructive"
+          : "border-border bg-background text-muted-foreground";
   return (
     <span
       className={cn(
@@ -62,13 +62,13 @@ function Stepper({ steps }: { steps: PhaseStep[] }) {
             <StepDot step={s} />
             <span
               className={cn(
-                "text-[11px] whitespace-nowrap",
+                "text-micro whitespace-nowrap",
                 s.state === "pending"
-                  ? "text-muted-foreground/70"
+                  ? "text-muted-foreground"
                   : s.state === "active"
                     ? "font-medium text-foreground"
                     : s.state === "failed"
-                      ? "text-red-600 dark:text-red-400"
+                      ? "text-destructive"
                       : "text-muted-foreground",
               )}
             >
@@ -87,11 +87,11 @@ function FactList({ facts }: { facts: SessionPhaseView["facts"] }) {
     <dl className="flex flex-wrap gap-x-5 gap-y-1.5">
       {facts.map((f) => (
         <div key={f.label} className="flex items-baseline gap-1.5">
-          <dt className="text-[11px] text-muted-foreground">{f.label}</dt>
+          <dt className="text-micro text-muted-foreground">{f.label}</dt>
           <dd
             className={cn(
               "font-mono text-xs tabular-nums",
-              f.ok ? "text-emerald-600 dark:text-emerald-400" : "text-foreground",
+              f.ok ? "text-success" : "text-foreground",
             )}
           >
             {f.value}
@@ -107,7 +107,7 @@ function Guidance({ guidance }: { guidance: NonNullable<SessionPhaseView["guidan
   return (
     <div className="rounded-xl border border-border bg-muted/40 px-3 py-2.5">
       <p className="flex items-start gap-1.5 text-xs font-medium text-foreground">
-        <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+        <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
         {guidance.title}
       </p>
       <ol className="mt-1.5 space-y-1 pl-5">

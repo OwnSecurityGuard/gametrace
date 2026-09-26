@@ -39,6 +39,8 @@ import {
 } from "lucide-react";
 import type { SessionInfo } from "@/types/session";
 import type { SessionStatusResult } from "@/types/session-extra";
+import { Select } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 
 interface SessionListProps {
   /** 清单边界：string = 该项目；null = 未归属桶。服务端已按身份过滤，这里只收窄到当前空间。 */
@@ -208,7 +210,7 @@ function SessionItem({
         }
       }}
       className={cn(
-        "w-full text-left rounded-lg border p-3 transition-[border-color,box-shadow,background-color] hover:shadow-sm cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+        "w-full text-left rounded-lg border p-3 transition-[border-color,box-shadow,background-color] hover:shadow-sm cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring",
         isSelected
           ? "border-primary bg-primary-muted shadow-sm"
           : "border-border bg-card hover:border-primary/40",
@@ -232,17 +234,18 @@ function SessionItem({
               "inline-block h-2 w-2 rounded-full shrink-0",
               isRunning ? "gt-live-dot" : "bg-muted-foreground/50",
             )}
-          />
+          >
+            <span className="sr-only">{isRunning ? "运行中" : "未运行"}</span>
+          </span>
           <span className="text-sm font-medium truncate font-mono">
             {formatTime(session.started_at)}
           </span>
           {ownerBadge && (
-            <span
-              className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
-              title={`归属：${session.owner}`}
-            >
+            <Badge
+              variant="muted" size="micro" className="shrink-0" title={`归属：${session.owner}`}
+              >
               {ownerBadge}
-            </span>
+</Badge>
           )}
         </div>
         <PhaseBadge input={phaseInput} short className="shrink-0" />
@@ -266,7 +269,7 @@ function SessionItem({
         {!isAgent && session.port > 0 && <span className="font-mono">:{session.port}</span>}
         {session.plugin && (
           <>
-            <span className="text-muted-foreground/50">·</span>
+            <span className="text-muted-foreground">·</span>
             <Activity className="h-3 w-3 shrink-0" />
             <span className="truncate">{session.plugin}</span>
           </>
@@ -278,7 +281,7 @@ function SessionItem({
         <div className="mt-1.5 flex items-center gap-2 text-xs text-muted-foreground">
           <span className="font-mono">→ {stoppedDisplay}</span>
           {session.duration_sec > 0 && (
-            <span className="text-muted-foreground/80">
+            <span className="text-muted-foreground">
               ({formatDuration(session.duration_sec)})
             </span>
           )}
@@ -294,13 +297,13 @@ function SessionItem({
             {formatNumber(liveErrors)} errors
           </span>
         )}
-        {liveStatus && <span className="text-[11px] text-info">· 实时</span>}
+        {liveStatus && <span className="text-micro text-info">· 实时</span>}
       </div>
 
       {/* 需要用户动手时给一行提示（"已连接但零流量"之类），否则列表里全是噪音 */}
       {phase.guidance && (
         <p
-          className="mt-1.5 truncate text-[11px] text-amber-600 dark:text-amber-400"
+          className="mt-1.5 truncate text-micro text-warning"
           title={phase.guidance.title}
         >
           {phase.guidance.title}
@@ -508,6 +511,7 @@ export function SessionList({
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               ref={searchInputRef}
+              name="session-search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               aria-label="搜索会话"
@@ -546,6 +550,7 @@ export function SessionList({
           <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
             <input
               type="checkbox"
+              name="select-all-visible"
               checked={allVisibleSelected}
               onChange={toggleSelectAll}
               disabled={filteredSessions.length === 0}
@@ -726,9 +731,11 @@ function SwitchPluginDialog({
           {session.session_id}
         </div>
         <div>
-          <label className="text-sm font-medium">解码插件</label>
-          <select
-            className="mt-1.5 h-8 w-full rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+          <label htmlFor="session-decode-plugin" className="text-sm font-medium">解码插件</label>
+          <Select
+            id="session-decode-plugin"
+            name="decode-plugin"
+            size="sm" className="mt-1.5 w-full"
             value={plugin}
             onChange={(e) => setPluginName(e.target.value)}
           >
@@ -742,7 +749,7 @@ function SwitchPluginDialog({
                 </option>
               ))
             )}
-          </select>
+          </Select>
           <p className="mt-1 text-xs text-muted-foreground">
             切换立即生效，下一个包即由新插件解码，无需停止抓包。离线插件不可选。
           </p>

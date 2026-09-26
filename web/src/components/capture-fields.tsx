@@ -63,7 +63,7 @@ export function ChannelSwitch({
             <meta.icon className={cn("mt-0.5 h-4 w-4 shrink-0", active ? "text-primary" : "")} />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium text-foreground">{meta.label}</span>
-              <span className="block truncate text-[11px] text-muted-foreground">
+              <span className="block truncate text-micro text-muted-foreground">
                 {counts[id] > 0 ? `${counts[id]} ${meta.unit}` : meta.empty}
               </span>
             </span>
@@ -198,7 +198,7 @@ export function ParserPicker({ value, onChange }: { value: string; onChange: (v:
                   } ${opt.online ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}
                 >
                   <span className="flex min-w-0 flex-1 items-center gap-2">
-                    <span className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] uppercase">
+                    <span className="rounded bg-muted px-1 py-0.5 font-mono text-2xs uppercase">
                       {GROUP_LABEL[g] ?? g}
                     </span>
                     <span className="truncate">{opt.label}</span>
@@ -301,7 +301,7 @@ export function AttributionPicker({
             >
               <FolderInput className="h-3.5 w-3.5 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">{p.name}</span>
-              <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+              <span className="shrink-0 font-mono text-2xs text-muted-foreground">
                 {p.default_port ? `:${p.default_port}` : ""}
                 {p.default_plugin ? ` ${p.default_plugin}` : ""}
               </span>
@@ -309,7 +309,7 @@ export function AttributionPicker({
             </button>
           ))}
           {projects.length === 0 && (
-            <p className="px-1.5 py-2 text-[11px] text-muted-foreground">
+            <p className="px-1.5 py-2 text-micro text-muted-foreground">
               还没有项目。可以先不归属，之后在会话概览里归位。
             </p>
           )}

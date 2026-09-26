@@ -18,6 +18,7 @@ import {
   Check,
   Folder,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { DeviceStatusList } from "@/components/device-status";
 import { useSessions, useProjects, useCreateProject, useDeleteProject } from "@/hooks/use-mcp";
 import { useMyDevices } from "@/hooks/use-devices";
@@ -150,7 +151,7 @@ export function WorkspacePage({
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-medium text-foreground">我的项目</h2>
               {projects.length > 0 && (
-                <span className="text-[11px] text-muted-foreground">{projects.length} 个项目</span>
+                <span className="text-micro text-muted-foreground">{projects.length} 个项目</span>
               )}
             </div>
             <div className="mt-3 grid items-start gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -317,7 +318,7 @@ function OnboardingStep({
       }`}
     >
       <span
-        className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-[11px] ${
+        className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-micro ${
           done
             ? "rounded-full bg-success/15 text-success"
             : "rounded-full border border-border text-muted-foreground"
@@ -328,7 +329,7 @@ function OnboardingStep({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p className="text-sm font-medium">{title}</p>
-          {done && <span className="text-[11px] text-success">已完成</span>}
+          {done && <span className="text-micro text-success">已完成</span>}
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground">{desc}</p>
         {!done && children && <div className="mt-2 flex flex-wrap items-start gap-2">{children}</div>}
@@ -350,7 +351,9 @@ function ProjectCreateForm({
   const [port, setPort] = useState("");
   return (
     <div className="rounded-xl border border-primary/40 bg-card/60 p-3">
-      <input
+      <Input
+        name="project-name"
+        aria-label="项目名称"
         autoFocus
         value={name}
         onChange={(e) => setName(e.target.value)}
@@ -358,9 +361,11 @@ function ProjectCreateForm({
           if (e.key === "Enter" && name.trim()) onCreate(name, port);
         }}
         placeholder="项目名称，如 Godot Game"
-        className="h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
       />
-      <input
+      <Input
+        name="project-default-port"
+        aria-label="默认端口"
+        className="mt-2 font-mono"
         value={port}
         onChange={(e) => setPort(e.target.value)}
         onKeyDown={(e) => {
@@ -368,7 +373,6 @@ function ProjectCreateForm({
         }}
         placeholder="默认端口（可选）"
         inputMode="numeric"
-        className="mt-2 h-9 w-full rounded-md border border-input bg-background px-2.5 font-mono text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
       />
       <div className="mt-2 flex gap-2">
         <button
@@ -427,14 +431,16 @@ function ProjectCard({
             running ? "bg-success" : "bg-muted-foreground/40"
           }`}
           title={running ? "抓包中" : "未抓包"}
-        />
+        >
+          <span className="sr-only">{running ? "抓包中" : "未抓包"}</span>
+        </span>
         <button type="button" onClick={onOpen} title="进入项目" className="min-w-0 flex-1 text-left">
           <span className="flex items-center gap-1">
             <span className="truncate text-sm font-medium group-hover:underline">{project.name}</span>
             <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           </span>
-          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{meta}</span>
-          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+          <span className="mt-0.5 block truncate text-micro text-muted-foreground">{meta}</span>
+          <span className="mt-0.5 block truncate text-micro text-muted-foreground">
             {running
               ? "抓包中"
               : latest
@@ -492,7 +498,7 @@ function ProjectCard({
               <span className="min-w-0 flex-1 truncate text-xs">
                 {fmtTime(s.started_at)} · {s.plugin || "未设插件"}
               </span>
-              <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+              <span className="shrink-0 font-mono text-micro text-muted-foreground">
                 {s.events?.toLocaleString() ?? 0}
               </span>
             </button>
@@ -501,7 +507,7 @@ function ProjectCard({
             <button
               type="button"
               onClick={onOpen}
-              className="w-full rounded-md px-2 py-1 text-left text-[11px] text-primary hover:underline"
+              className="w-full rounded-md px-2 py-1 text-left text-micro text-primary hover:underline"
             >
               全部 {sessions.length} 个会话
             </button>
@@ -519,9 +525,9 @@ function OrphanCard({ count, onOpen, onStart }: { count: number; onOpen: () => v
       <div className="flex items-center gap-2">
         <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <span className="truncate text-sm font-medium">未归属抓包</span>
-        <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">{count}</span>
+        <span className="ml-auto shrink-0 font-mono text-micro text-muted-foreground">{count}</span>
       </div>
-      <p className="mt-1 text-[11px] text-muted-foreground">
+      <p className="mt-1 text-micro text-muted-foreground">
         没有归进任何项目的会话，在这里统一查看与批量清理。
       </p>
       <div className="mt-3 flex gap-2">
